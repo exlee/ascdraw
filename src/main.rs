@@ -1,7 +1,12 @@
+use std::env;
+use std::ffi::{OsStr, OsString};
+use std::io::{self, Write};
+use std::process::ExitCode;
+use std::process::Command;
 use std::rc::Rc;
 
-use anyhow::{Result, anyhow};
-use clap::Parser;
+use anyhow::{Context, Result, anyhow};
+use clap::{CommandFactory, Parser};
 use softbuffer::{Context as SoftContext, Surface};
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, Ime, WindowEvent};
@@ -53,8 +58,24 @@ fn apply_platform_window_attributes(
     attrs
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("{error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_main() -> Result<ExitCode> {
+    let raw_args: Vec<OsString> = env::args_os().collect();
+    if should_show_combined_help(&raw_args) {
+        print_combined_help(&extract_kak_bin(&raw_args))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let args = Args::parse_from(raw_args);
+
     let config = load_config()?;
     let user_keys = UserKeys::from_config(&config.keys)?;
 
@@ -189,5 +210,110 @@ fn main() -> Result<()> {
         }
     })?;
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
+}
+
+fn should_show_combined_help(raw_args: &[OsString]) -> bool {
+    let args: Vec<&OsString> = raw_args.iter().skip(1).collect();
+    let split_at = args
+        .iter()
+        .position(|arg| arg.as_os_str() == OsStr::new("--"))
+        .unwrap_or(args.len());
+
+    if args[..split_at]
+        .iter()
+        .any(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
+    {
+        return true;
+    }
+
+    matches!(
+        args.get(split_at + 1..),
+        Some([arg]) if matches!(arg.to_str(), Some("--help" | "-help"))
+    )
+}
+
+fn extract_kak_bin(raw_args: &[OsString]) -> OsString {
+    let mut args = raw_args.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg.as_os_str() == OsStr::new("--") {
+            break;
+        }
+        if arg.as_os_str() == OsStr::new("--kak-bin") {
+            if let Some(value) = args.next() {
+                return value.clone();
+            }
+        }
+    }
+
+    OsString::from("kak")
+}
+
+fn print_combined_help(kak_bin: &OsStr) -> Result<()> {
+    let mut command = Args::command();
+    command.print_help()?;
+    println!();
+    println!();
+    println!("Kakoune help:");
+    println!();
+
+    let output = Command::new(kak_bin)
+        .arg("--help")
+        .output()
+        .with_context(|| format!("failed to run {} --help", kak_bin.to_string_lossy()))?;
+
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("{} --help exited with {}", kak_bin.to_string_lossy(), output.status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::{extract_kak_bin, should_show_combined_help};
+
+    #[test]
+    fn top_level_help_triggers_combined_help() {
+        assert!(should_show_combined_help(&[
+            OsString::from("kakvide"),
+            OsString::from("--help"),
+        ]));
+    }
+
+    #[test]
+    fn forwarded_help_after_double_dash_does_not_trigger_combined_help() {
+        assert!(should_show_combined_help(&[
+            OsString::from("kakvide"),
+            OsString::from("--"),
+            OsString::from("--help"),
+        ]));
+    }
+
+    #[test]
+    fn forwarded_non_help_after_double_dash_does_not_trigger_combined_help() {
+        assert!(!should_show_combined_help(&[
+            OsString::from("kakvide"),
+            OsString::from("--"),
+            OsString::from("file.txt"),
+        ]));
+    }
+
+    #[test]
+    fn custom_kak_bin_is_extracted_for_help() {
+        assert_eq!(
+            extract_kak_bin(&[
+                OsString::from("kakvide"),
+                OsString::from("--kak-bin"),
+                OsString::from("/tmp/kak"),
+                OsString::from("--help"),
+            ]),
+            OsString::from("/tmp/kak")
+        );
+    }
 }

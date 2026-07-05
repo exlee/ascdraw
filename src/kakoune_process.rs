@@ -10,11 +10,7 @@ use crate::app::{AppEvent, Args};
 use crate::kakoune_messages::parse_notification;
 
 pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Child> {
-    let mut command = Command::new(&args.kak_bin);
-    command.arg("-ui").arg("json");
-    if let Some(file) = &args.file {
-        command.arg(file);
-    }
+    let mut command = build_kakoune_command(args);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -61,6 +57,13 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
     Ok(child)
 }
 
+fn build_kakoune_command(args: &Args) -> Command {
+    let mut command = Command::new(&args.kak_bin);
+    command.arg("-ui").arg("json");
+    command.args(&args.kak_args);
+    command
+}
+
 pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
     let stdin = child.stdin.take().context("missing kakoune stdin pipe")?;
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
@@ -81,4 +84,40 @@ pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
     });
 
     Ok(tx)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::build_kakoune_command;
+    use crate::app::Args;
+
+    #[test]
+    fn build_kakoune_command_includes_json_ui_before_forwarded_args() {
+        let args = Args {
+            kak_bin: "kak".to_string(),
+            kak_args: vec![
+                OsString::from("-d"),
+                OsString::from("-e"),
+                OsString::from("echo hi"),
+                OsString::from("file.txt"),
+            ],
+        };
+
+        let command = build_kakoune_command(&args);
+        let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
+
+        assert_eq!(
+            actual_args,
+            vec![
+                OsString::from("-ui"),
+                OsString::from("json"),
+                OsString::from("-d"),
+                OsString::from("-e"),
+                OsString::from("echo hi"),
+                OsString::from("file.txt"),
+            ]
+        );
+    }
 }

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 
 use anyhow::{Context, Result};
@@ -11,10 +12,12 @@ use crate::kakoune_messages::{
 use crate::user_keys::UserKeysConfig;
 
 #[derive(Parser, Debug)]
+#[command(trailing_var_arg = true)]
 pub struct Args {
-    pub file: Option<String>,
     #[arg(long, default_value = "kak")]
     pub kak_bin: String,
+    #[arg(value_name = "KAK_ARG")]
+    pub kak_args: Vec<OsString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -264,6 +267,70 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    use clap::Parser;
+
+    #[test]
+    fn parses_without_forwarded_args() {
+        let args = Args::try_parse_from(["kakvide"]).expect("args should parse");
+
+        assert_eq!(args.kak_bin, "kak");
+        assert!(args.kak_args.is_empty());
+    }
+
+    #[test]
+    fn forwards_single_positional_arg() {
+        let args = Args::try_parse_from(["kakvide", "file.txt"]).expect("args should parse");
+
+        assert_eq!(args.kak_args, vec![OsString::from("file.txt")]);
+    }
+
+    #[test]
+    fn forwards_multiple_positional_args() {
+        let args =
+            Args::try_parse_from(["kakvide", "file.txt", "other.txt"]).expect("args should parse");
+
+        assert_eq!(
+            args.kak_args,
+            vec![OsString::from("file.txt"), OsString::from("other.txt")]
+        );
+    }
+
+    #[test]
+    fn parses_kakvide_flag_before_forwarded_positionals() {
+        let args = Args::try_parse_from(["kakvide", "--kak-bin", "/tmp/kak", "file.txt"])
+            .expect("args should parse");
+
+        assert_eq!(args.kak_bin, "/tmp/kak");
+        assert_eq!(args.kak_args, vec![OsString::from("file.txt")]);
+    }
+
+    #[test]
+    fn forwards_option_args_after_double_dash() {
+        let args = Args::try_parse_from([
+            "kakvide",
+            "--kak-bin",
+            "/tmp/kak",
+            "--",
+            "-d",
+            "-e",
+            "echo hi",
+            "file.txt",
+        ])
+        .expect("args should parse");
+
+        assert_eq!(args.kak_bin, "/tmp/kak");
+        assert_eq!(
+            args.kak_args,
+            vec![
+                OsString::from("-d"),
+                OsString::from("-e"),
+                OsString::from("echo hi"),
+                OsString::from("file.txt")
+            ]
+        );
+    }
 
     #[test]
     fn config_defaults_match_kakvide_toml_shape() {
