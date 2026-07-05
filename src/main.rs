@@ -1,8 +1,8 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
-use std::process::ExitCode;
 use std::process::Command;
+use std::process::ExitCode;
 use std::rc::Rc;
 
 use anyhow::{Context, Result, anyhow};
@@ -35,7 +35,7 @@ use input::{
 use kakoune_messages::{Coord, KakouneNotification};
 use kakoune_process::{spawn_kakoune, spawn_stdin_writer};
 use render::{load_renderer, render, resize_surface};
-use user_keys::{UserAction, UserKeys};
+use user_keys::{FontSizeAction, UserKeys};
 
 #[cfg(target_os = "macos")]
 fn apply_platform_window_attributes(
@@ -130,7 +130,7 @@ fn try_main() -> Result<ExitCode> {
             Event::UserEvent(AppEvent::Rpc(notification)) => {
                 let should_force_resize =
                     matches!(notification.as_ref(), KakouneNotification::Draw { .. })
-                    && !did_force_startup_resize;
+                        && !did_force_startup_resize;
                 apply_notification(&mut state, *notification);
                 if should_force_resize {
                     send_resize(&command_tx, &window, &renderer, &config);
@@ -176,9 +176,9 @@ fn try_main() -> Result<ExitCode> {
                     if event.state == ElementState::Pressed {
                         if let Some(action) = user_keys.action_for_event(&event, modifiers) {
                             let changed = match action {
-                                UserAction::Up => renderer.adjust_font_size(1.0),
-                                UserAction::Down => renderer.adjust_font_size(-1.0),
-                                UserAction::Reset => renderer.reset_font_size(),
+                                FontSizeAction::Increase => renderer.adjust_font_size(1.0),
+                                FontSizeAction::Decrease => renderer.adjust_font_size(-1.0),
+                                FontSizeAction::Reset => renderer.reset_font_size(),
                             };
                             if changed {
                                 send_resize(&command_tx, &window, &renderer, &config);
@@ -282,7 +282,11 @@ fn print_combined_help(kak_bin: &OsStr) -> Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        anyhow::bail!("{} --help exited with {}", kak_bin.to_string_lossy(), output.status)
+        anyhow::bail!(
+            "{} --help exited with {}",
+            kak_bin.to_string_lossy(),
+            output.status
+        )
     }
 }
 

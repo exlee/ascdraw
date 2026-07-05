@@ -7,9 +7,9 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use crate::app::bundled_default_keys;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum UserAction {
-    Up,
-    Down,
+pub enum FontSizeAction {
+    Increase,
+    Decrease,
     Reset,
 }
 
@@ -29,7 +29,7 @@ impl Default for UserKeysConfig {
 
 #[derive(Debug, Clone)]
 pub struct UserKeys {
-    bindings: Vec<(Binding, UserAction)>,
+    bindings: Vec<(Binding, FontSizeAction)>,
 }
 
 impl UserKeys {
@@ -38,15 +38,15 @@ impl UserKeys {
             bindings: vec![
                 (
                     Binding::parse(&config.font_scale_up)?,
-                    UserAction::Up,
+                    FontSizeAction::Increase,
                 ),
                 (
                     Binding::parse(&config.font_scale_down)?,
-                    UserAction::Down,
+                    FontSizeAction::Decrease,
                 ),
                 (
                     Binding::parse(&config.font_scale_reset)?,
-                    UserAction::Reset,
+                    FontSizeAction::Reset,
                 ),
             ],
         })
@@ -56,7 +56,7 @@ impl UserKeys {
         &self,
         event: &KeyEvent,
         modifiers: ModifiersState,
-    ) -> Option<UserAction> {
+    ) -> Option<FontSizeAction> {
         let key = event.key_without_modifiers();
         self.bindings
             .iter()
@@ -217,18 +217,13 @@ mod tests {
 
     #[test]
     fn parses_plain_minus_binding() {
-        assert_eq!(
-            split_binding("-").unwrap(),
-            ("", "-")
-        );
+        assert_eq!(split_binding("-").unwrap(), ("", "-"));
     }
 
     #[test]
     fn matches_default_reset_binding() {
         let binding = Binding::parse("Cmd-0").unwrap();
 
-        assert!(
-            binding.matches(&Key::Character("0".into()), ModifiersState::SUPER)
-        );
+        assert!(binding.matches(&Key::Character("0".into()), ModifiersState::SUPER));
     }
 }

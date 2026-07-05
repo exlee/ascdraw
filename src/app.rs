@@ -340,7 +340,7 @@ mod tests {
     fn config_defaults_match_kakvide_toml_shape() {
         let config = AppConfig::default();
         assert_eq!(config.font_family, "SF Mono");
-        assert_eq!(config.font_size, 15.0);
+        assert_eq!(config.font_size, 12.0);
         assert_eq!(config.mouse_scroll_rate, 0.25);
         assert!(config.transparent_menubar);
         assert_eq!(config.keys, UserKeysConfig::default());

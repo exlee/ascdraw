@@ -150,19 +150,8 @@ fn modified_character_key_to_kak(key: &Key, modifiers: ModifiersState) -> Option
         return None;
     }
 
-    let mut result = String::from("<");
-    if modifiers.shift_key() {
-        result.push_str("s-");
-    }
-    if modifiers.alt_key() {
-        result.push_str("a-");
-    }
-    if modifiers.control_key() {
-        result.push_str("c-");
-    }
-    result.push(ch.to_ascii_lowercase());
-    result.push('>');
-    Some(result)
+    let base = ch.to_ascii_lowercase().to_string();
+    Some(format_modified_key(modifiers, &base))
 }
 
 fn named_key_to_kak(key: NamedKey, modifiers: ModifiersState) -> Option<String> {
@@ -188,6 +177,10 @@ fn named_key_to_kak(key: NamedKey, modifiers: ModifiersState) -> Option<String> 
         return Some(format!("<{base}>"));
     }
 
+    Some(format_modified_key(modifiers, base))
+}
+
+fn format_modified_key(modifiers: ModifiersState, base: &str) -> String {
     let mut result = String::from("<");
     if modifiers.shift_key() {
         result.push_str("s-");
@@ -200,7 +193,7 @@ fn named_key_to_kak(key: NamedKey, modifiers: ModifiersState) -> Option<String> 
     }
     result.push_str(base);
     result.push('>');
-    Some(result)
+    result
 }
 
 #[cfg(test)]
