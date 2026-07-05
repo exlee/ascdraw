@@ -1,7 +1,8 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
-use std::process::Command;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
 
@@ -33,7 +34,7 @@ use input::{
     send_mouse_button, send_mouse_move, send_resize, send_scroll,
 };
 use kakoune_messages::{Coord, KakouneNotification};
-use kakoune_process::{spawn_kakoune, spawn_stdin_writer};
+use kakoune_process::{build_kakoune_help_command, spawn_kakoune, spawn_stdin_writer};
 use render::{load_renderer, render, resize_surface};
 use user_keys::{FontSizeAction, UserKeys};
 
@@ -59,8 +60,32 @@ fn apply_platform_window_attributes(
     attrs
 }
 
+fn default_launch_directory(current_dir: &Path, home: Option<OsString>) -> Option<PathBuf> {
+    if current_dir == Path::new("/") {
+        home.map(PathBuf::from)
+    } else {
+        None
+    }
+}
+
+fn apply_launch_directory() {
+    let Ok(current_dir) = env::current_dir() else {
+        return;
+    };
+    let Some(home) = default_launch_directory(&current_dir, env::var_os("HOME")) else {
+        return;
+    };
+    if let Err(error) = env::set_current_dir(&home) {
+        eprintln!(
+            "failed to set launch directory to {}: {error:#}",
+            home.display()
+        );
+    }
+}
+
 fn main() -> ExitCode {
-    match try_main() {
+    let raw_args: Vec<OsString> = env::args_os().collect();
+    match try_main(raw_args) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("{error:#}");
@@ -70,13 +95,13 @@ fn main() -> ExitCode {
 }
 
 #[allow(deprecated)]
-fn try_main() -> Result<ExitCode> {
-    let raw_args: Vec<OsString> = env::args_os().collect();
+fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     if should_show_combined_help(&raw_args) {
         print_combined_help(&extract_kak_bin(&raw_args))?;
         return Ok(ExitCode::SUCCESS);
     }
     let args = Args::parse_from(raw_args);
+    apply_launch_directory();
 
     let config = load_config()?;
     let user_keys = UserKeys::from_config(&config.keys)?;
@@ -271,8 +296,8 @@ fn print_combined_help(kak_bin: &OsStr) -> Result<()> {
     println!("Kakoune help:");
     println!();
 
-    let output = Command::new(kak_bin)
-        .arg("--help")
+    let mut help_command = build_kakoune_help_command(kak_bin);
+    let output = help_command
         .output()
         .with_context(|| format!("failed to run {} --help", kak_bin.to_string_lossy()))?;
 
@@ -293,8 +318,10 @@ fn print_combined_help(kak_bin: &OsStr) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::path::Path;
+    use std::path::PathBuf;
 
-    use super::{extract_kak_bin, should_show_combined_help};
+    use super::{default_launch_directory, extract_kak_bin, should_show_combined_help};
 
     #[test]
     fn top_level_help_triggers_combined_help() {
@@ -333,5 +360,29 @@ mod tests {
             ]),
             OsString::from("/tmp/kak")
         );
+    }
+
+    #[test]
+    fn launch_directory_defaults_to_home_when_started_at_root() {
+        assert_eq!(
+            default_launch_directory(Path::new("/"), Some(OsString::from("/Users/example"))),
+            Some(PathBuf::from("/Users/example"))
+        );
+    }
+
+    #[test]
+    fn launch_directory_preserves_non_root_current_directory() {
+        assert_eq!(
+            default_launch_directory(
+                Path::new("/Users/example/project"),
+                Some(OsString::from("/Users/example")),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn launch_directory_ignores_missing_home() {
+        assert_eq!(default_launch_directory(Path::new("/"), None), None);
     }
 }

@@ -11,6 +11,7 @@ version = "0.1.0"
 resources = []
 category = "Developer Tool"
 short_description = "A Neovide-inspired GUI for Kakoune."
+osx_info_plist_exts = ["assets/macos-document-types.plist"]
 
 [dependencies]
 anyhow = "=1.0.100"

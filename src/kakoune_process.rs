@@ -1,7 +1,14 @@
+use std::env;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
@@ -58,10 +65,161 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
 }
 
 fn build_kakoune_command(args: &Args) -> Command {
+    platform_kakoune_command(args)
+}
+
+pub fn build_kakoune_help_command(kak_bin: &OsStr) -> Command {
+    platform_kakoune_help_command(kak_bin)
+}
+
+#[cfg(unix)]
+fn platform_kakoune_command(args: &Args) -> Command {
+    if let Some(shell) = user_shell() {
+        let mut command = shell_command(shell, OsStr::new(&args.kak_bin));
+        command.arg("-ui").arg("json").args(&args.kak_args);
+        command
+    } else {
+        let (program, constrained_path) = constrained_app_program(OsStr::new(&args.kak_bin));
+        let mut command = Command::new(program);
+        apply_constrained_app_path(&mut command, constrained_path);
+        command.arg("-ui").arg("json").args(&args.kak_args);
+        command
+    }
+}
+
+#[cfg(unix)]
+fn platform_kakoune_help_command(kak_bin: &OsStr) -> Command {
+    if let Some(shell) = user_shell() {
+        let mut command = shell_command(shell, kak_bin);
+        command.arg("--help");
+        command
+    } else {
+        let (program, constrained_path) = constrained_app_program(kak_bin);
+        let mut command = Command::new(program);
+        apply_constrained_app_path(&mut command, constrained_path);
+        command.arg("--help");
+        command
+    }
+}
+
+#[cfg(windows)]
+fn platform_kakoune_command(args: &Args) -> Command {
     let mut command = Command::new(&args.kak_bin);
     command.arg("-ui").arg("json");
     command.args(&args.kak_args);
     command
+}
+
+#[cfg(windows)]
+fn platform_kakoune_help_command(kak_bin: &OsStr) -> Command {
+    let mut command = Command::new(kak_bin);
+    command.arg("--help");
+    command
+}
+
+#[cfg(unix)]
+fn user_shell() -> Option<OsString> {
+    env::var_os("SHELL").filter(|shell| !shell.is_empty())
+}
+
+#[cfg(unix)]
+fn shell_command(shell: OsString, kak_bin: &OsStr) -> Command {
+    let mut command = Command::new(shell);
+    command
+        .arg("-lc")
+        .arg("exec \"$@\"")
+        .arg("kakvide-kak")
+        .arg(kak_bin);
+    command
+}
+
+#[cfg(unix)]
+fn constrained_app_program(program: &OsStr) -> (OsString, Option<OsString>) {
+    let path = constrained_app_path(env::var_os("PATH"));
+    let resolved = resolve_from_path(program, &path).unwrap_or_else(|| program.to_os_string());
+    (resolved, Some(path))
+}
+
+#[cfg(unix)]
+fn apply_constrained_app_path(command: &mut Command, constrained_path: Option<OsString>) {
+    let Some(path) = constrained_path else {
+        return;
+    };
+
+    command.env("PATH", path);
+}
+
+#[cfg(unix)]
+fn constrained_app_path(path: Option<OsString>) -> OsString {
+    let mut paths = vec![
+        OsString::from("/usr/local/bin/"),
+        OsString::from("/opt/homebrew/bin"),
+        OsString::from("~/.local/bin"),
+    ];
+    if let Some(path) = path
+        && !path.is_empty()
+    {
+        paths.push(path);
+    }
+
+    join_unix_paths(paths)
+}
+
+#[cfg(unix)]
+fn join_unix_paths(paths: Vec<OsString>) -> OsString {
+    let mut joined = OsString::new();
+    for (index, path) in paths.into_iter().enumerate() {
+        if index > 0 {
+            joined.push(":");
+        }
+        joined.push(path);
+    }
+    joined
+}
+
+#[cfg(unix)]
+fn resolve_from_path(program: &OsStr, path: &OsStr) -> Option<OsString> {
+    if program.as_bytes().contains(&b'/') {
+        return None;
+    }
+
+    for dir in split_unix_path(path) {
+        let candidate = expand_home_dir(&dir).join(program);
+        if candidate.is_file() {
+            return Some(candidate.into_os_string());
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn split_unix_path(path: &OsStr) -> Vec<OsString> {
+    path.as_bytes()
+        .split(|byte| *byte == b':')
+        .map(|part| OsString::from_vec(part.to_vec()))
+        .collect()
+}
+
+#[cfg(unix)]
+fn expand_home_dir(path: &OsStr) -> PathBuf {
+    expand_home_dir_with_home(path, env::var_os("HOME"))
+}
+
+#[cfg(unix)]
+fn expand_home_dir_with_home(path: &OsStr, home: Option<OsString>) -> PathBuf {
+    if path == "~"
+        && let Some(home) = home.as_ref()
+    {
+        return PathBuf::from(home);
+    }
+
+    if let Some(rest) = path.to_str().and_then(|path| path.strip_prefix("~/"))
+        && let Some(home) = home
+    {
+        return PathBuf::from(home).join(rest);
+    }
+
+    PathBuf::from(path)
 }
 
 pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
@@ -88,11 +246,15 @@ pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
+    use std::fs;
 
+    #[cfg(windows)]
     use super::build_kakoune_command;
+    #[cfg(windows)]
     use crate::app::Args;
 
+    #[cfg(windows)]
     #[test]
     fn build_kakoune_command_includes_json_ui_before_forwarded_args() {
         let args = Args {
@@ -119,5 +281,88 @@ mod tests {
                 OsString::from("file.txt"),
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_shell_command_runs_kak_through_shell_lc() {
+        let mut command = super::shell_command(OsString::from("/bin/sh"), OsStr::new("kak"));
+        command.arg("-ui").arg("json").arg("file.txt");
+        let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
+
+        assert_eq!(
+            actual_args,
+            vec![
+                OsString::from("-lc"),
+                OsString::from("exec \"$@\""),
+                OsString::from("kakvide-kak"),
+                OsString::from("kak"),
+                OsString::from("-ui"),
+                OsString::from("json"),
+                OsString::from("file.txt"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_shell_help_command_runs_kak_through_shell_lc() {
+        let mut command = super::shell_command(OsString::from("/bin/sh"), OsStr::new("kak"));
+        command.arg("--help");
+        let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
+
+        assert_eq!(
+            actual_args,
+            vec![
+                OsString::from("-lc"),
+                OsString::from("exec \"$@\""),
+                OsString::from("kakvide-kak"),
+                OsString::from("kak"),
+                OsString::from("--help"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn constrained_app_path_prepends_search_paths() {
+        assert_eq!(
+            super::constrained_app_path(Some(OsString::from("/usr/bin:/bin"))),
+            OsString::from("/usr/local/bin/:/opt/homebrew/bin:~/.local/bin:/usr/bin:/bin")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn constrained_app_path_uses_only_search_paths_without_existing_path() {
+        assert_eq!(
+            super::constrained_app_path(None),
+            OsString::from("/usr/local/bin/:/opt/homebrew/bin:~/.local/bin")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolves_program_from_constrained_path_with_expanded_home() {
+        let base =
+            std::env::temp_dir().join(format!("kakvide-kak-bin-test-{}", std::process::id()));
+        let home_bin = base.join("home/.local/bin");
+        fs::create_dir_all(&home_bin).expect("test bin dir should be created");
+        let kak = home_bin.join("kak");
+        fs::write(&kak, "").expect("test kak file should be created");
+
+        assert_eq!(
+            super::expand_home_dir_with_home(
+                OsStr::new("~/.local/bin"),
+                Some(base.join("home").into_os_string())
+            ),
+            home_bin
+        );
+
+        assert_eq!(
+            super::resolve_from_path(OsStr::new("kak"), home_bin.as_os_str()),
+            Some(kak.into_os_string())
+        );
+        let _ = fs::remove_dir_all(base);
     }
 }
