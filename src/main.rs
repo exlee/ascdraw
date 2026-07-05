@@ -658,7 +658,7 @@ fn key_event_to_kak(key: &Key, modifiers: ModifiersState) -> Option<String> {
                 prefix.push('>');
                 Some(prefix)
             } else {
-                None
+                Some(text.to_string())
             }
         }
         _ => None,
