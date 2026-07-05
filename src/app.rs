@@ -266,7 +266,9 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
             let _ = force;
         }
         KakouneNotification::SetUiOptions { options } => {
-            state.window_title = window_title_from_ui_options(&options);
+            if let Some(window_title) = window_title_from_ui_options(&options) {
+                state.window_title = window_title;
+            }
         }
         KakouneNotification::MenuShow {
             items,
@@ -313,24 +315,26 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
     }
 }
 
-fn window_title_from_ui_options(options: &serde_json::Map<String, serde_json::Value>) -> String {
-    let Some(title) = options
+fn window_title_from_ui_options(
+    options: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    let title = options
         .get(WINDOW_TITLE_UI_OPTION)
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-    else {
-        return DEFAULT_WINDOW_TITLE.to_string();
-    };
+        .map(str::trim)?;
+
+    if title.is_empty() {
+        return Some(DEFAULT_WINDOW_TITLE.to_string());
+    }
 
     if let Some((pwd, client)) = title.rsplit_once(" - ") {
-        format!(
+        Some(format!(
             "{DEFAULT_WINDOW_TITLE} - {} - {}",
             pwd.trim(),
             display_client_name(client.trim())
-        )
+        ))
     } else {
-        format!("{DEFAULT_WINDOW_TITLE} - {title}")
+        Some(format!("{DEFAULT_WINDOW_TITLE} - {title}"))
     }
 }
 
@@ -453,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn set_ui_options_uses_default_window_title_for_missing_title() {
+    fn set_ui_options_preserves_window_title_for_missing_title() {
         let mut state = AppState {
             window_title: "kakvide - /tmp/project - Client 0".to_string(),
             ..AppState::default()
@@ -466,7 +470,7 @@ mod tests {
             },
         );
 
-        assert_eq!(state.window_title, DEFAULT_WINDOW_TITLE);
+        assert_eq!(state.window_title, "kakvide - /tmp/project - Client 0");
     }
 
     #[test]

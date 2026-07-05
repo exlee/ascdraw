@@ -57,6 +57,7 @@ fn apply_platform_window_attributes(
     if config.transparent_menubar {
         attrs
             .with_titlebar_transparent(true)
+            .with_title_hidden(true)
             .with_fullsize_content_view(true)
     } else {
         attrs
@@ -83,6 +84,28 @@ fn native_window_title<'a>(config: &AppConfig, title: &'a str) -> &'a str {
 #[cfg(not(target_os = "macos"))]
 fn native_window_title<'a>(_config: &AppConfig, title: &'a str) -> &'a str {
     title
+}
+
+#[cfg(target_os = "macos")]
+fn should_update_native_window_title(config: &AppConfig) -> bool {
+    !config.transparent_menubar
+}
+
+#[cfg(not(target_os = "macos"))]
+fn should_update_native_window_title(_config: &AppConfig) -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn set_native_window_title(window: &Window, config: &AppConfig, title: &str) {
+    if should_update_native_window_title(config) {
+        window.set_title(title);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_window_title(window: &Window, _config: &AppConfig, title: &str) {
+    window.set_title(title);
 }
 
 fn default_launch_directory(current_dir: &Path, home: Option<OsString>) -> Option<PathBuf> {
@@ -481,9 +504,11 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                     }
                     apply_notification(&mut client.state, *notification);
                     if client.state.window_title != old_window_title {
-                        client
-                            .window
-                            .set_title(native_window_title(&config, &client.state.window_title));
+                        set_native_window_title(
+                            &client.window,
+                            &config,
+                            &client.state.window_title,
+                        );
                     }
                     if should_force_resize {
                         client.send_resize(&config);
@@ -754,7 +779,9 @@ mod tests {
     use super::{
         client_name_from_ui_options, connected_kakoune_args, default_launch_directory,
         extract_kak_bin, resolve_kakoune_session, should_show_combined_help,
+        should_update_native_window_title,
     };
+    use crate::app::AppConfig;
 
     #[test]
     fn top_level_help_triggers_combined_help() {
@@ -831,6 +858,24 @@ mod tests {
             client_name_from_ui_options(&options),
             Some("client0".to_string())
         );
+    }
+
+    #[test]
+    fn transparent_menubar_skips_native_window_title_updates_on_macos() {
+        let transparent_config = AppConfig {
+            transparent_menubar: true,
+            ..AppConfig::default()
+        };
+        let standard_config = AppConfig {
+            transparent_menubar: false,
+            ..AppConfig::default()
+        };
+
+        assert_eq!(
+            should_update_native_window_title(&transparent_config),
+            !cfg!(target_os = "macos")
+        );
+        assert!(should_update_native_window_title(&standard_config));
     }
 
     #[test]
