@@ -17,9 +17,11 @@ use skia_safe::{
 use softbuffer::{Context as SoftContext, Surface};
 use unicode_width::UnicodeWidthChar;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, Event, Ime, WindowEvent};
+use winit::event::{ElementState, Event, Ime, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::window::WindowLevel;
 use winit::window::{Window, WindowAttributes};
 
 const PADDING: usize = 12;
@@ -178,6 +180,7 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let attrs = WindowAttributes::default()
         .with_title("kakvide")
+        .with_window_level(WindowLevel::Normal)
         .with_inner_size(LogicalSize::new(1200.0, 800.0));
     let window = Rc::new(event_loop.create_window(attrs)?);
     let renderer = load_renderer();
@@ -199,6 +202,10 @@ fn main() -> Result<()> {
         elwt.set_control_flow(ControlFlow::Wait);
 
         match event {
+            Event::Resumed => {
+                send_resize(&command_tx, &window, &renderer);
+                window.request_redraw();
+            }
             Event::UserEvent(AppEvent::Rpc(notification)) => {
                 apply_notification(&mut state, notification);
                 window.request_redraw();
@@ -229,16 +236,24 @@ fn main() -> Result<()> {
                     modifiers = new_modifiers.state();
                 }
                 WindowEvent::Ime(Ime::Commit(text)) => {
-                    if !text.is_empty() && !modifiers.control_key() && !modifiers.super_key() {
+                    if !text.is_empty()
+                        && !modifiers.control_key()
+                        && !modifiers.alt_key()
+                        && !modifiers.super_key()
+                    {
                         send_keys(&command_tx, &[text.to_string()]);
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state == ElementState::Pressed {
-                        if let Some(keys) = key_event_to_kak(&event.logical_key, modifiers) {
+                        if let Some(keys) = key_event_to_kak(&event, modifiers) {
                             send_keys(&command_tx, &[keys]);
                         }
                     }
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    send_resize(&command_tx, &window, &renderer);
+                    window.request_redraw();
                 }
                 _ => {}
             },
@@ -651,32 +666,44 @@ fn send_rpc(tx: &Sender<String>, method: &str, params: Value) {
     let _ = tx.send(message.to_string());
 }
 
-fn key_event_to_kak(key: &Key, modifiers: ModifiersState) -> Option<String> {
-    match key {
+fn key_event_to_kak(event: &KeyEvent, modifiers: ModifiersState) -> Option<String> {
+    match &event.logical_key {
         Key::Named(named) => named_key_to_kak(*named, modifiers),
         Key::Character(text) => {
             if modifiers.control_key() || modifiers.alt_key() {
-                let mut chars = text.chars();
-                let ch = chars.next()?;
-                if chars.next().is_some() {
-                    return None;
-                }
-                let mut prefix = String::from("<");
-                if modifiers.control_key() {
-                    prefix.push_str("c-");
-                }
-                if modifiers.alt_key() {
-                    prefix.push_str("a-");
-                }
-                prefix.push(ch);
-                prefix.push('>');
-                Some(prefix)
+                modified_character_key_to_kak(&event.key_without_modifiers(), modifiers)
             } else {
                 Some(text.to_string())
             }
         }
         _ => None,
     }
+}
+
+fn modified_character_key_to_kak(key: &Key, modifiers: ModifiersState) -> Option<String> {
+    let Key::Character(text) = key else {
+        return None;
+    };
+
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    let mut result = String::from("<");
+    if modifiers.shift_key() {
+        result.push_str("s-");
+    }
+    if modifiers.alt_key() {
+        result.push_str("a-");
+    }
+    if modifiers.control_key() {
+        result.push_str("c-");
+    }
+    result.push(ch.to_ascii_lowercase());
+    result.push('>');
+    Some(result)
 }
 
 fn named_key_to_kak(key: NamedKey, modifiers: ModifiersState) -> Option<String> {
@@ -840,4 +867,29 @@ fn resize_surface(
     surface
         .resize(width, height)
         .map_err(|error| anyhow!(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_alt_shift_character_keys_from_unmodified_character() {
+        let modifiers = ModifiersState::ALT | ModifiersState::SHIFT;
+        let key = Key::Character(";".into());
+        assert_eq!(
+            modified_character_key_to_kak(&key, modifiers).as_deref(),
+            Some("<s-a-;>")
+        );
+    }
+
+    #[test]
+    fn formats_ctrl_shift_letter_keys_with_explicit_shift_modifier() {
+        let modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let key = Key::Character("p".into());
+        assert_eq!(
+            modified_character_key_to_kak(&key, modifiers).as_deref(),
+            Some("<s-c-p>")
+        );
+    }
 }
