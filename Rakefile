@@ -22,6 +22,10 @@ task :build_release do
   sh "cargo build --release"
 end
 
+task :register do
+  sh "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Kakvide.app"
+end
+
 task :icon do
   source = "assets/kakvide.png"
   output = ENV.fetch("ICON_OUTPUT", "target/generated/kakvide.icns")
