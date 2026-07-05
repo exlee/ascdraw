@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::num::NonZeroU32;
 use std::process::{Child, Command, Stdio};
@@ -33,6 +34,22 @@ struct Args {
     file: Option<String>,
     #[arg(long, default_value = "kak")]
     kak_bin: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct AppConfig {
+    font_family: String,
+    font_size: f32,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            font_family: "SF Mono".to_string(),
+            font_size: 15.0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -141,6 +158,7 @@ struct AppState {
 #[derive(Clone)]
 struct Renderer {
     font_mgr: FontMgr,
+    preferred_font_family: String,
     logical_font_size: f32,
     metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
 }
@@ -174,8 +192,19 @@ fn default_color() -> String {
     "default".to_string()
 }
 
+fn load_config() -> Result<AppConfig> {
+    let path = "kakvide.toml";
+    match fs::read_to_string(path) {
+        Ok(contents) => toml::from_str(&contents)
+            .with_context(|| format!("failed to parse {path}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
+        Err(error) => Err(error).with_context(|| format!("failed to read {path}")),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
+    let config = load_config()?;
 
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let attrs = WindowAttributes::default()
@@ -183,7 +212,7 @@ fn main() -> Result<()> {
         .with_window_level(WindowLevel::Normal)
         .with_inner_size(LogicalSize::new(1200.0, 800.0));
     let window = Rc::new(event_loop.create_window(attrs)?);
-    let renderer = load_renderer();
+    let renderer = load_renderer(&config);
     let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
     let mut surface =
         Surface::new(&context, window.clone()).map_err(|error| anyhow!(error.to_string()))?;
@@ -888,7 +917,7 @@ fn resolve_color(color: &str, fallback: Rgb) -> Rgb {
         return fallback;
     }
 
-    if let Some(rgb) = parse_hex_color(color.strip_prefix("rgb:").unwrap_or(color)) {
+    if let Some(rgb) = parse_prefixed_color(color) {
         return rgb;
     }
 
@@ -905,6 +934,16 @@ fn resolve_color(color: &str, fallback: Rgb) -> Rgb {
     }
 }
 
+fn parse_prefixed_color(value: &str) -> Option<Rgb> {
+    if let Some(rgb) = value.strip_prefix("rgb:").and_then(parse_hex_color) {
+        return Some(rgb);
+    }
+    if let Some(rgb) = value.strip_prefix("rgba:").and_then(parse_rgba_color) {
+        return Some(rgb);
+    }
+    parse_hex_color(value)
+}
+
 fn parse_hex_color(value: &str) -> Option<Rgb> {
     let hex = value.strip_prefix('#').unwrap_or(value);
     if hex.len() != 6 {
@@ -917,10 +956,23 @@ fn parse_hex_color(value: &str) -> Option<Rgb> {
     Some(Rgb::new(r, g, b))
 }
 
-fn load_renderer() -> Renderer {
+fn parse_rgba_color(value: &str) -> Option<Rgb> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 8 {
+        return None;
+    }
+
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Rgb::new(r, g, b))
+}
+
+fn load_renderer(config: &AppConfig) -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
-        logical_font_size: 15.0,
+        preferred_font_family: config.font_family.clone(),
+        logical_font_size: config.font_size,
         metrics_cache: RefCell::new(None),
     }
 }
@@ -935,7 +987,7 @@ impl Renderer {
         }
 
         let physical_font_size = (self.logical_font_size as f64 * scale_factor) as f32;
-        let typeface = preferred_typeface(&self.font_mgr).unwrap_or_else(|| {
+        let typeface = preferred_typeface(&self.font_mgr, &self.preferred_font_family).unwrap_or_else(|| {
             self.font_mgr
                 .match_family_style("", FontStyle::normal())
                 .expect("expected a fallback system typeface")
@@ -968,8 +1020,9 @@ impl Renderer {
     }
 }
 
-fn preferred_typeface(font_mgr: &FontMgr) -> Option<skia_safe::Typeface> {
+fn preferred_typeface(font_mgr: &FontMgr, configured_family: &str) -> Option<skia_safe::Typeface> {
     [
+        configured_family,
         "SF Mono",
         "Menlo",
         "Monaco",
@@ -1080,5 +1133,20 @@ mod tests {
 
         assert_eq!(atom_display_width(&line[1].contents), 0);
         assert_eq!(line_display_width(&line), 9);
+    }
+
+    #[test]
+    fn parses_rgba_colors_by_ignoring_alpha() {
+        assert_eq!(
+            parse_prefixed_color("rgba:ffffff80"),
+            Some(Rgb::new(0xff, 0xff, 0xff))
+        );
+    }
+
+    #[test]
+    fn config_defaults_match_kakvide_toml_shape() {
+        let config = AppConfig::default();
+        assert_eq!(config.font_family, "SF Mono");
+        assert_eq!(config.font_size, 15.0);
     }
 }

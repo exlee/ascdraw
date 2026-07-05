@@ -10,5 +10,6 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 skia-safe = { version = "=0.97.2", features = ["textlayout"] }
 softbuffer = "=0.4.8"
+toml = "=0.9.7"
 unicode-width = "0.2.2"
 winit = "=0.30.12"
