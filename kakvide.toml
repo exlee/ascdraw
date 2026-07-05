@@ -1,5 +1,6 @@
 font-family = "SF Mono"
 font-size = 15.0
+mouse-scroll-rate = 0.25
 transparent-menubar = true
 
 [keys]

@@ -10,6 +10,11 @@ use crate::kakoune_messages::{Coord, KakouneRequest, MouseButtonName};
 use crate::layout::{PADDING, content_top_padding, layout_metrics};
 use crate::render::Renderer;
 
+#[derive(Debug, Default)]
+pub struct ScrollState {
+    pending_amount: f64,
+}
+
 pub fn send_resize(tx: &Sender<String>, window: &Window, renderer: &Renderer, config: &AppConfig) {
     let size = window.inner_size();
     let scale_factor = window.scale_factor();
@@ -88,24 +93,36 @@ fn mouse_button_to_kak(button: MouseButton) -> Option<MouseButtonName> {
     }
 }
 
-pub fn scroll_delta_to_kak(delta: MouseScrollDelta) -> Option<i32> {
-    let amount = match delta {
+pub fn scroll_delta_to_kak(
+    delta: MouseScrollDelta,
+    scroll_rate: f64,
+    state: &mut ScrollState,
+) -> Option<i32> {
+    let raw_amount = match delta {
         MouseScrollDelta::LineDelta(x, y) => dominant_scroll_component(x as f64, y as f64),
         MouseScrollDelta::PixelDelta(position) => dominant_scroll_component(position.x, position.y),
     };
+    if raw_amount == 0.0 || scroll_rate <= 0.0 {
+        return None;
+    }
 
-    if amount == 0 { None } else { Some(amount) }
+    state.pending_amount += raw_amount * scroll_rate;
+    let amount = if state.pending_amount > 0.0 {
+        state.pending_amount.floor()
+    } else {
+        state.pending_amount.ceil()
+    };
+    if amount == 0.0 {
+        return None;
+    }
+
+    state.pending_amount -= amount;
+    Some(amount as i32)
 }
 
-fn dominant_scroll_component(x: f64, y: f64) -> i32 {
+fn dominant_scroll_component(x: f64, y: f64) -> f64 {
     let dominant = if y.abs() >= x.abs() { y } else { x };
-    if dominant > 0.0 {
-        -dominant.abs().ceil() as i32
-    } else if dominant < 0.0 {
-        dominant.abs().ceil() as i32
-    } else {
-        0
-    }
+    -dominant
 }
 
 pub fn key_event_to_kak(event: &KeyEvent, modifiers: ModifiersState) -> Option<String> {
@@ -212,13 +229,27 @@ mod tests {
 
     #[test]
     fn scroll_delta_maps_wheel_up_to_negative_kak_scroll() {
+        let mut state = ScrollState::default();
         assert_eq!(
-            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0, &mut state),
             Some(-1)
         );
         assert_eq!(
-            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, -2.0)),
+            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, -2.0), 1.0, &mut state),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn scroll_rate_accumulates_fractional_line_scroll() {
+        let mut state = ScrollState::default();
+        assert_eq!(
+            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, 1.0), 0.5, &mut state),
+            None
+        );
+        assert_eq!(
+            scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, 1.0), 0.5, &mut state),
+            Some(-1)
         );
     }
 }

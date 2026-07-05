@@ -22,7 +22,7 @@ mod user_keys;
 
 use app::{AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
 use input::{
-    key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys,
+    ScrollState, key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys,
     send_mouse_button, send_mouse_move, send_resize, send_scroll,
 };
 use kakoune_messages::{Coord, KakouneNotification};
@@ -77,6 +77,7 @@ fn main() -> Result<()> {
 
     let mut modifiers = ModifiersState::empty();
     let mut mouse_cell = Coord { line: 0, column: 0 };
+    let mut scroll_state = ScrollState::default();
     let mut did_force_startup_resize = false;
     let mut state = AppState::default();
 
@@ -169,7 +170,11 @@ fn main() -> Result<()> {
                     }
                 },
                 WindowEvent::MouseWheel { delta, .. } => {
-                    if let Some(amount) = scroll_delta_to_kak(delta) {
+                    if let Some(amount) = scroll_delta_to_kak(
+                        delta,
+                        config.mouse_scroll_rate.max(0.0) as f64,
+                        &mut scroll_state,
+                    ) {
                         send_scroll(&command_tx, amount, mouse_cell);
                     }
                 }

@@ -22,6 +22,7 @@ pub struct Args {
 pub struct AppConfig {
     pub font_family: String,
     pub font_size: f32,
+    pub mouse_scroll_rate: f32,
     pub transparent_menubar: bool,
     pub keys: UserKeysConfig,
 }
@@ -132,6 +133,11 @@ fn bundled_default_config() -> AppConfig {
             .get("font-size")
             .and_then(Value::as_float)
             .expect("bundled kakvide.toml should set font-size") as f32,
+        mouse_scroll_rate: value
+            .get("mouse-scroll-rate")
+            .and_then(Value::as_float)
+            .expect("bundled kakvide.toml should set mouse-scroll-rate")
+            as f32,
         transparent_menubar: value
             .get("transparent-menubar")
             .and_then(Value::as_bool)
@@ -264,6 +270,7 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(config.font_family, "SF Mono");
         assert_eq!(config.font_size, 15.0);
+        assert_eq!(config.mouse_scroll_rate, 0.5);
         assert!(config.transparent_menubar);
         assert_eq!(config.keys, UserKeysConfig::default());
     }
