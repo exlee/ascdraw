@@ -1,0 +1,109 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binary:
+    name: Build ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact_name: kakvide-macos
+          - os: ubuntu-latest
+            artifact_name: kakvide-linux
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.artifact_name }}.tar.gz" -C target/release kakvide
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}.tar.gz
+          if-no-files-found: error
+
+  build-macos-dmg:
+    name: Build macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install packaging tools
+        run: |
+          brew install imagemagick create-dmg
+          cargo install cargo-bundle --locked
+
+      - name: Generate macOS icon
+        run: rake icon
+
+      - name: Build macOS app bundle
+        run: rake bundle
+
+      - name: Create DMG
+        run: |
+          mkdir -p dist
+          create-dmg \
+            --volname "Kakvide" \
+            --window-pos 200 120 \
+            --window-size 640 420 \
+            --icon-size 96 \
+            --icon "Kakvide.app" 180 170 \
+            --app-drop-link 460 170 \
+            "dist/Kakvide.dmg" \
+            "target/release/bundle/osx/Kakvide.app"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: kakvide-macos-dmg
+          path: dist/Kakvide.dmg
+          if-no-files-found: error
