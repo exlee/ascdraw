@@ -863,12 +863,17 @@ fn info_rect(
             }
         }
         InfoStyle::Modal => centered_rect(cols, rows, width, height),
-        InfoStyle::Prompt => CellRect {
-            row: rows.saturating_sub(height),
-            column: cols.saturating_sub(width),
-            width,
-            height,
-        },
+        InfoStyle::Prompt => {
+            let row = menu_rect
+                .map(|menu| menu.row.saturating_sub(height))
+                .unwrap_or_else(|| rows.saturating_sub(height));
+            CellRect {
+                row,
+                column: cols.saturating_sub(width),
+                width,
+                height,
+            }
+        }
     }
 }
 
@@ -1653,6 +1658,27 @@ mod tests {
         let layout = menu_layout(&menu, 20, 8).expect("search layout");
         assert!(layout.single_row);
         assert_eq!(layout.first_visible_column, 2);
+    }
+
+    #[test]
+    fn prompt_info_is_placed_above_prompt_menu() {
+        let info = InfoState {
+            title: Vec::new(),
+            content: vec![menu_item("help")],
+            anchor: Coord { line: 0, column: 0 },
+            face: Face::default(),
+            style: InfoStyle::Prompt,
+        };
+        let menu = CellRect {
+            row: 8,
+            column: 0,
+            width: 30,
+            height: 2,
+        };
+
+        let rect = info_rect(&info, Some(menu), 30, 10, 8, 3);
+        assert_eq!(rect.row, 5);
+        assert_eq!(rect.column, 22);
     }
 
     fn menu_item(text: &str) -> Vec<Atom> {
