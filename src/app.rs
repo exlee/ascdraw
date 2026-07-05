@@ -11,8 +11,9 @@ use crate::kakoune_messages::{
     Atom, Coord, Face, InfoStyle, KakouneNotification, MenuStyle, StatusStyle,
 };
 use crate::user_keys::UserKeysConfig;
+use winit::window::WindowId;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(trailing_var_arg = true)]
 pub struct Args {
     #[arg(long, default_value = "kak")]
@@ -39,8 +40,8 @@ impl Default for AppConfig {
 
 #[derive(Debug)]
 pub enum AppEvent {
-    Rpc(Box<KakouneNotification>),
-    KakouneExited,
+    Rpc(WindowId, Box<KakouneNotification>),
+    KakouneExited(WindowId),
     OpenFiles(Vec<PathBuf>),
 }
 

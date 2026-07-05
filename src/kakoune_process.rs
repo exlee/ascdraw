@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::env;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -12,12 +13,17 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
+use winit::window::WindowId;
 
 use crate::app::{AppEvent, Args};
 use crate::diagnostics::log_error;
 use crate::kakoune_messages::parse_notification;
 
-pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Child> {
+pub fn spawn_kakoune(
+    args: &Args,
+    proxy: EventLoopProxy<AppEvent>,
+    window_id: WindowId,
+) -> Result<Child> {
     let mut command = build_kakoune_command(args);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
@@ -31,24 +37,38 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
     let stderr = child.stderr.take().context("missing kakoune stderr pipe")?;
 
     thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => match parse_notification(&line) {
-                    Ok(notification) => {
-                        let _ = proxy.send_event(AppEvent::Rpc(Box::new(notification)));
+        let mut reader = BufReader::new(stdout);
+        let mut raw_line = Vec::new();
+        loop {
+            raw_line.clear();
+            match reader.read_until(b'\n', &mut raw_line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = decode_json_ui_line(&raw_line);
+                    if let Some(error) = line.utf8_error {
+                        log_error(format!(
+                            "json ui stdout contained invalid utf-8: {error}; decoded {} bytes lossily",
+                            line.byte_len
+                        ));
                     }
-                    Err(error) => {
-                        log_error(format!("json ui parse error: {error:#}\nline: {line}"))
+                    match parse_notification(&line.text) {
+                        Ok(notification) => {
+                            let _ =
+                                proxy.send_event(AppEvent::Rpc(window_id, Box::new(notification)));
+                        }
+                        Err(error) => log_error(format!(
+                            "json ui parse error: {error:#}\nline: {}",
+                            line.text
+                        )),
                     }
-                },
+                }
                 Err(error) => {
                     log_error(format!("stdout read error: {error:#}"));
                     break;
                 }
             }
         }
-        let _ = proxy.send_event(AppEvent::KakouneExited);
+        let _ = proxy.send_event(AppEvent::KakouneExited(window_id));
     });
 
     thread::spawn(move || {
@@ -65,6 +85,33 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
     });
 
     Ok(child)
+}
+
+struct JsonUiLine<'a> {
+    text: Cow<'a, str>,
+    utf8_error: Option<std::str::Utf8Error>,
+    byte_len: usize,
+}
+
+fn decode_json_ui_line(raw_line: &[u8]) -> JsonUiLine<'_> {
+    let line = trim_line_ending(raw_line);
+    match std::str::from_utf8(line) {
+        Ok(text) => JsonUiLine {
+            text: Cow::Borrowed(text),
+            utf8_error: None,
+            byte_len: line.len(),
+        },
+        Err(error) => JsonUiLine {
+            text: String::from_utf8_lossy(line),
+            utf8_error: Some(error),
+            byte_len: line.len(),
+        },
+    }
+}
+
+fn trim_line_ending(line: &[u8]) -> &[u8] {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    line.strip_suffix(b"\r").unwrap_or(line)
 }
 
 fn build_kakoune_command(args: &Args) -> Command {
@@ -252,10 +299,50 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::fs;
 
+    use crate::kakoune_messages::KakouneNotification;
+
     #[cfg(windows)]
     use super::build_kakoune_command;
     #[cfg(windows)]
     use crate::app::Args;
+
+    #[test]
+    fn json_ui_line_decoder_accepts_valid_utf8_line() {
+        let decoded = super::decode_json_ui_line(b"{\"jsonrpc\":\"2.0\"}\n");
+
+        assert_eq!(decoded.text, "{\"jsonrpc\":\"2.0\"}");
+        assert!(decoded.utf8_error.is_none());
+        assert_eq!(decoded.byte_len, 17);
+    }
+
+    #[test]
+    fn json_ui_line_decoder_trims_crlf() {
+        let decoded = super::decode_json_ui_line(b"{\"jsonrpc\":\"2.0\"}\r\n");
+
+        assert_eq!(decoded.text, "{\"jsonrpc\":\"2.0\"}");
+        assert!(decoded.utf8_error.is_none());
+        assert_eq!(decoded.byte_len, 17);
+    }
+
+    #[test]
+    fn json_ui_line_decoder_replaces_invalid_utf8_in_atom_contents() {
+        let mut raw = br#"{"jsonrpc":"2.0","method":"draw","params":[[[{"face":{"fg":"default","bg":"default","underline":"default","attributes":[]},"contents":"a"#.to_vec();
+        raw.push(0xff);
+        raw.extend_from_slice(
+            br#"b"}]],{"line":0,"column":0},{"fg":"default","bg":"default","underline":"default","attributes":[]},{"fg":"blue","bg":"default","underline":"default","attributes":[]},0]}"#,
+        );
+        raw.push(b'\n');
+
+        let decoded = super::decode_json_ui_line(&raw);
+
+        assert!(decoded.utf8_error.is_some());
+        match crate::kakoune_messages::parse_notification(&decoded.text).unwrap() {
+            KakouneNotification::Draw { lines, .. } => {
+                assert_eq!(lines[0][0].contents, "a\u{fffd}b");
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
 
     #[cfg(windows)]
     #[test]

@@ -1,22 +1,24 @@
+use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Child, ExitCode};
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser};
 use softbuffer::{Context as SoftContext, Surface};
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, Ime, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 #[cfg(target_os = "macos")]
 use winit::platform::macos::WindowAttributesExtMacOS;
-use winit::window::WindowAttributes;
 use winit::window::WindowLevel;
+use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 mod app;
 mod diagnostics;
@@ -39,7 +41,7 @@ use input::{
 };
 use kakoune_messages::{Coord, KakouneNotification};
 use kakoune_process::{build_kakoune_help_command, spawn_kakoune, spawn_stdin_writer};
-use render::{load_renderer, render, resize_surface};
+use render::{Renderer, load_renderer, render, resize_surface};
 use user_keys::{FontSizeAction, UserKeys};
 
 #[cfg(target_os = "macos")]
@@ -87,6 +89,101 @@ fn apply_launch_directory() {
     }
 }
 
+struct ClientWindow {
+    window: Rc<Window>,
+    surface: Surface<Rc<Window>, Rc<Window>>,
+    child: Child,
+    command_tx: Sender<String>,
+    modifiers: ModifiersState,
+    mouse_cell: Coord,
+    mouse_motion_state: MouseMotionState,
+    scroll_state: ScrollState,
+    did_force_startup_resize: bool,
+    state: AppState,
+    renderer: Renderer,
+}
+
+impl ClientWindow {
+    fn window_id(&self) -> WindowId {
+        self.window.id()
+    }
+
+    fn send_resize(&self, config: &AppConfig) {
+        send_resize(&self.command_tx, &self.window, &self.renderer, config);
+    }
+
+    fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+}
+
+fn window_attributes(config: &AppConfig, window_icon: Option<Icon>) -> WindowAttributes {
+    apply_platform_window_attributes(
+        WindowAttributes::default()
+            .with_title("kakvide")
+            .with_window_level(WindowLevel::Normal)
+            .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            .with_window_icon(window_icon),
+        config,
+    )
+}
+
+fn create_client_window(
+    window: Rc<Window>,
+    args: &Args,
+    proxy: EventLoopProxy<AppEvent>,
+    config: &AppConfig,
+) -> Result<ClientWindow> {
+    let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
+    let mut surface =
+        Surface::new(&context, window.clone()).map_err(|error| anyhow!(error.to_string()))?;
+    resize_surface(&mut surface, window.inner_size())?;
+
+    let renderer = load_renderer(config);
+    let mut child = spawn_kakoune(args, proxy, window.id())?;
+    let command_tx = spawn_stdin_writer(&mut child)?;
+
+    let client = ClientWindow {
+        window,
+        surface,
+        child,
+        command_tx,
+        modifiers: ModifiersState::empty(),
+        mouse_cell: Coord { line: 0, column: 0 },
+        mouse_motion_state: MouseMotionState::default(),
+        scroll_state: ScrollState::default(),
+        did_force_startup_resize: false,
+        state: AppState::default(),
+        renderer,
+    };
+    client.send_resize(config);
+    client.request_redraw();
+    Ok(client)
+}
+
+#[allow(deprecated)]
+fn create_initial_client_window(
+    event_loop: &EventLoop<AppEvent>,
+    args: &Args,
+    proxy: EventLoopProxy<AppEvent>,
+    config: &AppConfig,
+    window_icon: Option<Icon>,
+) -> Result<ClientWindow> {
+    let window = Rc::new(event_loop.create_window(window_attributes(config, window_icon))?);
+    create_client_window(window, args, proxy, config)
+}
+
+fn create_active_client_window(
+    elwt: &ActiveEventLoop,
+    args: &Args,
+    proxy: EventLoopProxy<AppEvent>,
+    config: &AppConfig,
+    window_icon: Option<Icon>,
+) -> Result<ClientWindow> {
+    let window = Rc::new(elwt.create_window(window_attributes(config, window_icon))?);
+    create_client_window(window, args, proxy, config)
+}
+
 fn main() -> ExitCode {
     if let Err(error) = diagnostics::init() {
         eprintln!("diagnostics setup failed: {error:#}");
@@ -126,151 +223,191 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     };
 
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
     #[cfg(target_os = "macos")]
-    if let Err(error) = macos_open_files::register_open_file_handler(event_loop.create_proxy()) {
+    if let Err(error) = macos_open_files::register_open_file_handler(proxy.clone()) {
         log_error(format!("open file handler setup failed: {error:#}"));
     }
-    let attrs = apply_platform_window_attributes(
-        WindowAttributes::default()
-            .with_title("kakvide")
-            .with_window_level(WindowLevel::Normal)
-            .with_inner_size(LogicalSize::new(1200.0, 800.0))
-            .with_window_icon(window_icon),
+
+    let initial_client = create_initial_client_window(
+        &event_loop,
+        &args,
+        proxy.clone(),
         &config,
-    );
-    let window = Rc::new(event_loop.create_window(attrs)?);
-    let renderer = load_renderer(&config);
-    let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
-    let mut surface =
-        Surface::new(&context, window.clone()).map_err(|error| anyhow!(error.to_string()))?;
-    resize_surface(&mut surface, window.inner_size())?;
-
-    let mut child = spawn_kakoune(&args, event_loop.create_proxy())?;
-    let command_tx = spawn_stdin_writer(&mut child)?;
-
-    let mut modifiers = ModifiersState::empty();
-    let mut mouse_cell = Coord { line: 0, column: 0 };
-    let mut mouse_motion_state = MouseMotionState::default();
-    let mut scroll_state = ScrollState::default();
-    let mut did_force_startup_resize = false;
-    let mut state = AppState::default();
-
-    send_resize(&command_tx, &window, &renderer, &config);
-    window.request_redraw();
+        window_icon.clone(),
+    )?;
+    let kakoune_session = resolve_kakoune_session(&args.kak_args, initial_client.child.id());
+    let kak_bin = args.kak_bin.clone();
+    let mut clients = HashMap::new();
+    clients.insert(initial_client.window_id(), initial_client);
 
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
 
         match event {
             Event::Resumed => {
-                send_resize(&command_tx, &window, &renderer, &config);
-                window.request_redraw();
-            }
-            Event::UserEvent(AppEvent::Rpc(notification)) => {
-                let should_force_resize =
-                    matches!(notification.as_ref(), KakouneNotification::Draw { .. })
-                        && !did_force_startup_resize;
-                apply_notification(&mut state, *notification);
-                if should_force_resize {
-                    send_resize(&command_tx, &window, &renderer, &config);
-                    did_force_startup_resize = true;
-                }
-                window.request_redraw();
-            }
-            Event::UserEvent(AppEvent::KakouneExited) => {
-                elwt.exit();
-            }
-            Event::UserEvent(AppEvent::OpenFiles(paths)) => {
-                for path in paths {
-                    send_keys(&command_tx, &[edit_file_keys(&path)]);
+                for client in clients.values() {
+                    client.send_resize(&config);
+                    client.request_redraw();
                 }
             }
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => {
-                    let _ = child.kill();
+            Event::UserEvent(AppEvent::Rpc(window_id, notification)) => {
+                if let Some(client) = clients.get_mut(&window_id) {
+                    let should_force_resize =
+                        matches!(notification.as_ref(), KakouneNotification::Draw { .. })
+                            && !client.did_force_startup_resize;
+                    apply_notification(&mut client.state, *notification);
+                    if should_force_resize {
+                        client.send_resize(&config);
+                        client.did_force_startup_resize = true;
+                    }
+                    client.request_redraw();
+                }
+            }
+            Event::UserEvent(AppEvent::KakouneExited(window_id)) => {
+                clients.remove(&window_id);
+                if clients.is_empty() {
                     elwt.exit();
                 }
-                WindowEvent::Resized(size) => {
-                    if let Err(error) = resize_surface(&mut surface, size) {
-                        log_error(format!("surface resize failed: {error:#}"));
+            }
+            Event::UserEvent(AppEvent::OpenFiles(paths)) => {
+                let open_args = connected_kakoune_args(&kak_bin, &kakoune_session, &paths);
+                match create_active_client_window(
+                    elwt,
+                    &open_args,
+                    proxy.clone(),
+                    &config,
+                    window_icon.clone(),
+                ) {
+                    Ok(client) => {
+                        clients.insert(client.window_id(), client);
                     }
-                    send_resize(&command_tx, &window, &renderer, &config);
-                    window.request_redraw();
+                    Err(error) => log_error(format!("open file window creation failed: {error:#}")),
                 }
-                WindowEvent::RedrawRequested => {
-                    if let Err(error) = render(&window, &mut surface, &state, &renderer, &config) {
-                        log_error(format!("render failed: {error:#}"));
-                        let _ = child.kill();
+            }
+            Event::WindowEvent { window_id, event } => {
+                let mut remove_client = false;
+                if let Some(client) = clients.get_mut(&window_id) {
+                    match event {
+                        WindowEvent::CloseRequested => {
+                            let _ = client.child.kill();
+                            remove_client = true;
+                        }
+                        WindowEvent::Resized(size) => {
+                            if let Err(error) = resize_surface(&mut client.surface, size) {
+                                log_error(format!("surface resize failed: {error:#}"));
+                            }
+                            client.send_resize(&config);
+                            client.request_redraw();
+                        }
+                        WindowEvent::RedrawRequested => {
+                            if let Err(error) = render(
+                                &client.window,
+                                &mut client.surface,
+                                &client.state,
+                                &client.renderer,
+                                &config,
+                            ) {
+                                log_error(format!("render failed: {error:#}"));
+                                let _ = client.child.kill();
+                                remove_client = true;
+                            }
+                        }
+                        WindowEvent::ModifiersChanged(new_modifiers) => {
+                            client.modifiers = new_modifiers.state();
+                        }
+                        WindowEvent::Ime(Ime::Commit(text)) => {
+                            if !text.is_empty()
+                                && !client.modifiers.control_key()
+                                && !client.modifiers.alt_key()
+                                && !client.modifiers.super_key()
+                            {
+                                send_keys(&client.command_tx, &[text.to_string()]);
+                            }
+                        }
+                        WindowEvent::KeyboardInput { event, .. } => {
+                            if event.state == ElementState::Pressed {
+                                if let Some(action) =
+                                    user_keys.action_for_event(&event, client.modifiers)
+                                {
+                                    let changed = match action {
+                                        FontSizeAction::Increase => {
+                                            client.renderer.adjust_font_size(1.0)
+                                        }
+                                        FontSizeAction::Decrease => {
+                                            client.renderer.adjust_font_size(-1.0)
+                                        }
+                                        FontSizeAction::Reset => client.renderer.reset_font_size(),
+                                    };
+                                    if changed {
+                                        client.send_resize(&config);
+                                        client.request_redraw();
+                                    }
+                                    return;
+                                }
+                                if let Some(keys) = key_event_to_kak(&event, client.modifiers) {
+                                    send_keys(&client.command_tx, &[keys]);
+                                }
+                            }
+                        }
+                        WindowEvent::CursorMoved { position, .. } => {
+                            client.mouse_cell = pointer_position_to_coord(
+                                position.x,
+                                position.y,
+                                &client.renderer,
+                                &client.window,
+                                &config,
+                            );
+                            if client.mouse_motion_state.should_send_move() {
+                                send_mouse_move(&client.command_tx, client.mouse_cell);
+                            }
+                        }
+                        WindowEvent::MouseInput { state, button, .. } => match state {
+                            ElementState::Pressed => {
+                                client.mouse_motion_state.set_button(button, true);
+                                send_mouse_button(
+                                    &client.command_tx,
+                                    true,
+                                    button,
+                                    client.mouse_cell,
+                                )
+                            }
+                            ElementState::Released => {
+                                send_mouse_button(
+                                    &client.command_tx,
+                                    false,
+                                    button,
+                                    client.mouse_cell,
+                                );
+                                client.mouse_motion_state.set_button(button, false);
+                            }
+                        },
+                        WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
+                            client.mouse_motion_state.reset();
+                        }
+                        WindowEvent::MouseWheel { delta, .. } => {
+                            if let Some(amount) = scroll_delta_to_kak(
+                                delta,
+                                config.mouse_scroll_rate.max(0.0) as f64,
+                                &mut client.scroll_state,
+                            ) {
+                                send_scroll(&client.command_tx, amount, client.mouse_cell);
+                            }
+                        }
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            client.send_resize(&config);
+                            client.request_redraw();
+                        }
+                        _ => {}
+                    }
+                }
+                if remove_client {
+                    clients.remove(&window_id);
+                    if clients.is_empty() {
                         elwt.exit();
                     }
                 }
-                WindowEvent::ModifiersChanged(new_modifiers) => {
-                    modifiers = new_modifiers.state();
-                }
-                WindowEvent::Ime(Ime::Commit(text)) => {
-                    if !text.is_empty()
-                        && !modifiers.control_key()
-                        && !modifiers.alt_key()
-                        && !modifiers.super_key()
-                    {
-                        send_keys(&command_tx, &[text.to_string()]);
-                    }
-                }
-                WindowEvent::KeyboardInput { event, .. } => {
-                    if event.state == ElementState::Pressed {
-                        if let Some(action) = user_keys.action_for_event(&event, modifiers) {
-                            let changed = match action {
-                                FontSizeAction::Increase => renderer.adjust_font_size(1.0),
-                                FontSizeAction::Decrease => renderer.adjust_font_size(-1.0),
-                                FontSizeAction::Reset => renderer.reset_font_size(),
-                            };
-                            if changed {
-                                send_resize(&command_tx, &window, &renderer, &config);
-                                window.request_redraw();
-                            }
-                            return;
-                        }
-                        if let Some(keys) = key_event_to_kak(&event, modifiers) {
-                            send_keys(&command_tx, &[keys]);
-                        }
-                    }
-                }
-                WindowEvent::CursorMoved { position, .. } => {
-                    mouse_cell = pointer_position_to_coord(
-                        position.x, position.y, &renderer, &window, &config,
-                    );
-                    if mouse_motion_state.should_send_move() {
-                        send_mouse_move(&command_tx, mouse_cell);
-                    }
-                }
-                WindowEvent::MouseInput { state, button, .. } => match state {
-                    ElementState::Pressed => {
-                        mouse_motion_state.set_button(button, true);
-                        send_mouse_button(&command_tx, true, button, mouse_cell)
-                    }
-                    ElementState::Released => {
-                        send_mouse_button(&command_tx, false, button, mouse_cell);
-                        mouse_motion_state.set_button(button, false);
-                    }
-                },
-                WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
-                    mouse_motion_state.reset();
-                }
-                WindowEvent::MouseWheel { delta, .. } => {
-                    if let Some(amount) = scroll_delta_to_kak(
-                        delta,
-                        config.mouse_scroll_rate.max(0.0) as f64,
-                        &mut scroll_state,
-                    ) {
-                        send_scroll(&command_tx, amount, mouse_cell);
-                    }
-                }
-                WindowEvent::ScaleFactorChanged { .. } => {
-                    send_resize(&command_tx, &window, &renderer, &config);
-                    window.request_redraw();
-                }
-                _ => {}
-            },
+            }
             _ => {}
         }
     })?;
@@ -341,13 +478,28 @@ fn print_combined_help(kak_bin: &OsStr) -> Result<()> {
     }
 }
 
-fn edit_file_keys(path: &Path) -> String {
-    format!(":edit {}<ret>", kakoune_single_quote(path))
+fn resolve_kakoune_session(kak_args: &[OsString], child_id: u32) -> OsString {
+    explicit_kakoune_session(kak_args).unwrap_or_else(|| OsString::from(child_id.to_string()))
 }
 
-fn kakoune_single_quote(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    format!("'{}'", path.replace('\'', "''"))
+fn explicit_kakoune_session(kak_args: &[OsString]) -> Option<OsString> {
+    let mut args = kak_args.iter();
+    while let Some(arg) = args.next() {
+        if matches!(arg.to_str(), Some("-c" | "-C" | "-s")) {
+            return args.next().cloned();
+        }
+    }
+
+    None
+}
+
+fn connected_kakoune_args(kak_bin: &str, kakoune_session: &OsStr, paths: &[PathBuf]) -> Args {
+    let mut kak_args = vec![OsString::from("-c"), kakoune_session.to_os_string()];
+    kak_args.extend(paths.iter().map(|path| path.as_os_str().to_os_string()));
+    Args {
+        kak_bin: kak_bin.to_string(),
+        kak_args,
+    }
 }
 
 #[cfg(test)]
@@ -357,7 +509,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        default_launch_directory, edit_file_keys, extract_kak_bin, kakoune_single_quote,
+        connected_kakoune_args, default_launch_directory, extract_kak_bin, resolve_kakoune_session,
         should_show_combined_help,
     };
 
@@ -425,26 +577,73 @@ mod tests {
     }
 
     #[test]
-    fn kakoune_quote_preserves_spaces() {
+    fn session_resolution_uses_child_id_without_explicit_session() {
         assert_eq!(
-            kakoune_single_quote(Path::new("/tmp/file with spaces.md")),
-            "'/tmp/file with spaces.md'"
+            resolve_kakoune_session(&[OsString::from("file.txt")], 12345),
+            OsString::from("12345")
         );
     }
 
     #[test]
-    fn kakoune_quote_escapes_single_quotes() {
+    fn session_resolution_uses_explicit_server_session() {
         assert_eq!(
-            kakoune_single_quote(Path::new("/tmp/alice's note.md")),
-            "'/tmp/alice''s note.md'"
+            resolve_kakoune_session(
+                &[
+                    OsString::from("-s"),
+                    OsString::from("work"),
+                    OsString::from("file.txt"),
+                ],
+                12345,
+            ),
+            OsString::from("work")
         );
     }
 
     #[test]
-    fn edit_file_keys_opens_quoted_path() {
+    fn session_resolution_uses_explicit_client_session() {
         assert_eq!(
-            edit_file_keys(Path::new("/tmp/alice's note.md")),
-            ":edit '/tmp/alice''s note.md'<ret>"
+            resolve_kakoune_session(
+                &[
+                    OsString::from("-c"),
+                    OsString::from("work"),
+                    OsString::from("file.txt"),
+                ],
+                12345,
+            ),
+            OsString::from("work")
+        );
+
+        assert_eq!(
+            resolve_kakoune_session(
+                &[
+                    OsString::from("-C"),
+                    OsString::from("maybe-work"),
+                    OsString::from("file.txt"),
+                ],
+                12345,
+            ),
+            OsString::from("maybe-work")
+        );
+    }
+
+    #[test]
+    fn connected_kakoune_args_connect_to_session_and_append_paths() {
+        let paths = vec![
+            PathBuf::from("/tmp/file with spaces.md"),
+            PathBuf::from("/tmp/alice's note.md"),
+        ];
+
+        let args = connected_kakoune_args("custom-kak", OsString::from("work").as_os_str(), &paths);
+
+        assert_eq!(args.kak_bin, "custom-kak");
+        assert_eq!(
+            args.kak_args,
+            vec![
+                OsString::from("-c"),
+                OsString::from("work"),
+                OsString::from("/tmp/file with spaces.md"),
+                OsString::from("/tmp/alice's note.md"),
+            ]
         );
     }
 }
