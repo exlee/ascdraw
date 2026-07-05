@@ -19,6 +19,7 @@ use winit::window::WindowLevel;
 
 mod app;
 mod face_resolution;
+mod icon;
 mod input;
 mod kakoune_messages;
 mod kakoune_process;
@@ -79,13 +80,24 @@ fn try_main() -> Result<ExitCode> {
 
     let config = load_config()?;
     let user_keys = UserKeys::from_config(&config.keys)?;
+    if let Err(error) = icon::apply_app_icon() {
+        eprintln!("app icon setup failed: {error:#}");
+    }
+    let window_icon = match icon::load_window_icon() {
+        Ok(icon) => Some(icon),
+        Err(error) => {
+            eprintln!("window icon setup failed: {error:#}");
+            None
+        }
+    };
 
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let attrs = apply_platform_window_attributes(
         WindowAttributes::default()
             .with_title("kakvide")
             .with_window_level(WindowLevel::Normal)
-            .with_inner_size(LogicalSize::new(1200.0, 800.0)),
+            .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            .with_window_icon(window_icon),
         &config,
     );
     let window = Rc::new(event_loop.create_window(attrs)?);
