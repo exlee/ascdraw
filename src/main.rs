@@ -21,8 +21,8 @@ mod render;
 
 use app::{AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
 use input::{
-    key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys, send_mouse_button,
-    send_mouse_move, send_resize, send_scroll,
+    font_size_delta, key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys,
+    send_mouse_button, send_mouse_move, send_resize, send_scroll,
 };
 use kakoune_messages::{Coord, KakouneNotification};
 use kakoune_process::{spawn_kakoune, spawn_stdin_writer};
@@ -134,6 +134,13 @@ fn main() -> Result<()> {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state == ElementState::Pressed {
+                        if let Some(delta) = font_size_delta(&event, modifiers) {
+                            if renderer.adjust_font_size(delta) {
+                                send_resize(&command_tx, &window, &renderer, &config);
+                                window.request_redraw();
+                            }
+                            return;
+                        }
                         if let Some(keys) = key_event_to_kak(&event, modifiers) {
                             send_keys(&command_tx, &[keys]);
                         }

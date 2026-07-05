@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
@@ -22,7 +22,7 @@ const FALLBACK_FG: Rgb = Rgb::new(0xdd, 0xdd, 0xdd);
 pub struct Renderer {
     font_mgr: FontMgr,
     preferred_font_family: String,
-    logical_font_size: f32,
+    logical_font_size: Cell<f32>,
     metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
 }
 
@@ -1284,12 +1284,25 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
         preferred_font_family: config.font_family.clone(),
-        logical_font_size: config.font_size,
+        logical_font_size: Cell::new(config.font_size),
         metrics_cache: RefCell::new(None),
     }
 }
 
 impl Renderer {
+    pub fn adjust_font_size(&self, delta: f32) -> bool {
+        const MIN_FONT_SIZE: f32 = 6.0;
+
+        let next = (self.logical_font_size.get() + delta).max(MIN_FONT_SIZE);
+        if (next - self.logical_font_size.get()).abs() < f32::EPSILON {
+            return false;
+        }
+
+        self.logical_font_size.set(next);
+        self.metrics_cache.borrow_mut().take();
+        true
+    }
+
     pub fn metrics(&self, scale_factor: f64) -> CellMetrics {
         let cache_key = scale_factor.to_bits();
         if let Some((cached_key, metrics)) = self.metrics_cache.borrow().as_ref() {
@@ -1298,7 +1311,7 @@ impl Renderer {
             }
         }
 
-        let physical_font_size = (self.logical_font_size as f64 * scale_factor) as f32;
+        let physical_font_size = (self.logical_font_size.get() as f64 * scale_factor) as f32;
         let typeface = preferred_typeface(&self.font_mgr, &self.preferred_font_family)
             .unwrap_or_else(|| {
                 self.font_mgr
