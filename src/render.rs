@@ -62,6 +62,14 @@ struct MenuLayout {
     first_visible_column: usize,
     single_row: bool,
 }
+
+#[derive(Clone, Copy)]
+struct LineRenderPosition {
+    row: usize,
+    start_column: usize,
+    max_columns: usize,
+}
+
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
@@ -202,11 +210,13 @@ fn render_status(
     if !prompt_line.is_empty() {
         render_line_at(
             canvas,
-            row,
-            0,
+            LineRenderPosition {
+                row,
+                start_column: 0,
+                max_columns: prompt_limit,
+            },
             &prompt_line,
             &status.default_face,
-            prompt_limit,
             metrics,
             top_padding,
         );
@@ -215,11 +225,13 @@ fn render_status(
     if !status.mode_line.is_empty() {
         render_line_at(
             canvas,
-            row,
-            right_start,
+            LineRenderPosition {
+                row,
+                start_column: right_start,
+                max_columns: cols,
+            },
             &status.mode_line,
             &status.default_face,
-            cols,
             metrics,
             top_padding,
         );
@@ -417,11 +429,13 @@ fn render_single_column_menu(
         );
         render_line_at(
             canvas,
-            layout.rect.row + index,
-            layout.rect.column,
+            LineRenderPosition {
+                row: layout.rect.row + index,
+                start_column: layout.rect.column,
+                max_columns: layout.rect.column + layout.rect.width,
+            },
             item,
             face,
-            layout.rect.column + layout.rect.width,
             metrics,
             top_padding,
         );
@@ -469,11 +483,13 @@ fn render_single_row_menu(
         };
         render_line_at(
             canvas,
-            row,
-            column,
+            LineRenderPosition {
+                row,
+                start_column: column,
+                max_columns: end_column,
+            },
             &truncated,
             face,
-            end_column,
             metrics,
             top_padding,
         );
@@ -574,11 +590,13 @@ fn render_multi_column_menu(
                 let truncated = truncate_atoms(item, layout.column_width.saturating_sub(1));
                 render_line_at(
                     canvas,
-                    row,
-                    start_column,
+                    LineRenderPosition {
+                        row,
+                        start_column,
+                        max_columns: start_column + layout.column_width,
+                    },
                     &truncated,
                     face,
-                    start_column + layout.column_width,
                     metrics,
                     top_padding,
                 );
@@ -641,11 +659,13 @@ fn render_info(
         for (index, line) in info.content.iter().take(rect.height).enumerate() {
             render_line_at(
                 canvas,
-                rect.row + index,
-                rect.column,
+                LineRenderPosition {
+                    row: rect.row + index,
+                    start_column: rect.column,
+                    max_columns: rect.column + rect.width,
+                },
                 line,
                 &info.face,
-                rect.column + rect.width,
                 metrics,
                 top_padding,
             );
@@ -685,11 +705,13 @@ fn render_framed_info(
         );
         render_line_at(
             canvas,
-            rect.row,
-            rect.column + top.chars().count(),
+            LineRenderPosition {
+                row: rect.row,
+                start_column: rect.column + top.chars().count(),
+                max_columns: rect.column + rect.width,
+            },
             &title,
             &info.face,
-            rect.column + rect.width,
             metrics,
             top_padding,
         );
@@ -743,11 +765,13 @@ fn render_framed_info_body(
             );
             render_line_at(
                 canvas,
-                row,
-                rect.column + 2,
+                LineRenderPosition {
+                    row,
+                    start_column: rect.column + 2,
+                    max_columns: rect.column + 2 + inner_width,
+                },
                 line,
                 &info.face,
-                rect.column + 2 + inner_width,
                 metrics,
                 top_padding,
             );
@@ -873,11 +897,13 @@ fn render_line(
 ) {
     render_line_at(
         canvas,
-        row,
-        0,
+        LineRenderPosition {
+            row,
+            start_column: 0,
+            max_columns,
+        },
         line,
         default_face,
-        max_columns,
         metrics,
         top_padding,
     );
@@ -885,16 +911,14 @@ fn render_line(
 
 fn render_line_at(
     canvas: &Canvas,
-    row: usize,
-    start_column: usize,
+    position: LineRenderPosition,
     line: &[Atom],
     default_face: &Face,
-    max_columns: usize,
     metrics: &CellMetrics,
     top_padding: usize,
 ) {
-    let top = top_padding + row * metrics.cell_height;
-    let mut column = start_column;
+    let top = top_padding + position.row * metrics.cell_height;
+    let mut column = position.start_column;
     let mut bg_paint = Paint::default();
     bg_paint.set_anti_alias(false);
     let mut fg_paint = Paint::default();
@@ -907,7 +931,7 @@ fn render_line_at(
         }
 
         let atom_start = column;
-        let atom_width = atom_width.min(max_columns.saturating_sub(atom_start));
+        let atom_width = atom_width.min(position.max_columns.saturating_sub(atom_start));
         if atom_width == 0 {
             return;
         }
@@ -925,7 +949,7 @@ fn render_line_at(
             let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
             draw_glyph(canvas, column, top, ch, &font, metrics, &fg_paint);
             column += span;
-            if column >= max_columns {
+            if column >= position.max_columns {
                 draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
                 return;
             }
@@ -1143,11 +1167,13 @@ fn render_string_line(
     }];
     render_line_at(
         canvas,
-        row,
-        column,
+        LineRenderPosition {
+            row,
+            start_column: column,
+            max_columns: column + atom_display_width(text),
+        },
         &atoms,
         default_face,
-        column + atom_display_width(text),
         metrics,
         top_padding,
     );
@@ -1303,10 +1329,10 @@ impl Renderer {
 
     pub fn metrics(&self, scale_factor: f64) -> CellMetrics {
         let cache_key = scale_factor.to_bits();
-        if let Some((cached_key, metrics)) = self.metrics_cache.borrow().as_ref() {
-            if *cached_key == cache_key {
-                return metrics.clone();
-            }
+        if let Some((cached_key, metrics)) = self.metrics_cache.borrow().as_ref()
+            && *cached_key == cache_key
+        {
+            return metrics.clone();
         }
 
         let physical_font_size = (self.logical_font_size.get() as f64 * scale_factor) as f32;

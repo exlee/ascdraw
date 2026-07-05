@@ -8,9 +8,9 @@ use crate::app::bundled_default_keys;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UserAction {
-    FontScaleUp,
-    FontScaleDown,
-    FontScaleReset,
+    Up,
+    Down,
+    Reset,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -38,15 +38,15 @@ impl UserKeys {
             bindings: vec![
                 (
                     Binding::parse(&config.font_scale_up)?,
-                    UserAction::FontScaleUp,
+                    UserAction::Up,
                 ),
                 (
                     Binding::parse(&config.font_scale_down)?,
-                    UserAction::FontScaleDown,
+                    UserAction::Down,
                 ),
                 (
                     Binding::parse(&config.font_scale_reset)?,
-                    UserAction::FontScaleReset,
+                    UserAction::Reset,
                 ),
             ],
         })

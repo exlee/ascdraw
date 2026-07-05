@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[allow(dead_code)]
 pub const NOTIFICATION_METHODS: &[&str] = &[
     "draw",
     "draw_status",
@@ -14,6 +15,7 @@ pub const NOTIFICATION_METHODS: &[&str] = &[
     "refresh",
 ];
 
+#[allow(dead_code)]
 pub const REQUEST_METHODS: &[&str] = &[
     "keys",
     "paste",
@@ -130,6 +132,7 @@ pub enum MouseButtonName {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum KakouneRequest {
     Keys {
         keys: Vec<String>,

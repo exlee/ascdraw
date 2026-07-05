@@ -68,6 +68,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[allow(deprecated)]
 fn try_main() -> Result<ExitCode> {
     let raw_args: Vec<OsString> = env::args_os().collect();
     if should_show_combined_help(&raw_args) {
@@ -115,9 +116,10 @@ fn try_main() -> Result<ExitCode> {
                 window.request_redraw();
             }
             Event::UserEvent(AppEvent::Rpc(notification)) => {
-                let should_force_resize = matches!(notification, KakouneNotification::Draw { .. })
+                let should_force_resize =
+                    matches!(notification.as_ref(), KakouneNotification::Draw { .. })
                     && !did_force_startup_resize;
-                apply_notification(&mut state, notification);
+                apply_notification(&mut state, *notification);
                 if should_force_resize {
                     send_resize(&command_tx, &window, &renderer, &config);
                     did_force_startup_resize = true;
@@ -162,9 +164,9 @@ fn try_main() -> Result<ExitCode> {
                     if event.state == ElementState::Pressed {
                         if let Some(action) = user_keys.action_for_event(&event, modifiers) {
                             let changed = match action {
-                                UserAction::FontScaleUp => renderer.adjust_font_size(1.0),
-                                UserAction::FontScaleDown => renderer.adjust_font_size(-1.0),
-                                UserAction::FontScaleReset => renderer.reset_font_size(),
+                                UserAction::Up => renderer.adjust_font_size(1.0),
+                                UserAction::Down => renderer.adjust_font_size(-1.0),
+                                UserAction::Reset => renderer.reset_font_size(),
                             };
                             if changed {
                                 send_resize(&command_tx, &window, &renderer, &config);
@@ -239,10 +241,10 @@ fn extract_kak_bin(raw_args: &[OsString]) -> OsString {
         if arg.as_os_str() == OsStr::new("--") {
             break;
         }
-        if arg.as_os_str() == OsStr::new("--kak-bin") {
-            if let Some(value) = args.next() {
-                return value.clone();
-            }
+        if arg.as_os_str() == OsStr::new("--kak-bin")
+            && let Some(value) = args.next()
+        {
+            return value.clone();
         }
     }
 

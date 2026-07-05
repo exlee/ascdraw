@@ -38,7 +38,7 @@ impl Default for AppConfig {
 
 #[derive(Debug)]
 pub enum AppEvent {
-    Rpc(KakouneNotification),
+    Rpc(Box<KakouneNotification>),
     KakouneExited,
 }
 
@@ -47,7 +47,9 @@ pub struct GridState {
     pub lines: Vec<Vec<Atom>>,
     pub cursor_pos: Coord,
     pub default_face: Face,
+    #[allow(dead_code)]
     pub padding_face: Face,
+    #[allow(dead_code)]
     pub widget_columns: usize,
 }
 
@@ -67,9 +69,11 @@ impl Default for GridState {
 pub struct StatusState {
     pub prompt: Vec<Atom>,
     pub content: Vec<Atom>,
+    #[allow(dead_code)]
     pub cursor_pos: isize,
     pub mode_line: Vec<Atom>,
     pub default_face: Face,
+    #[allow(dead_code)]
     pub style: StatusStyle,
 }
 

@@ -28,7 +28,7 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
             match line {
                 Ok(line) => match parse_notification(&line) {
                     Ok(notification) => {
-                        let _ = proxy.send_event(AppEvent::Rpc(notification));
+                        let _ = proxy.send_event(AppEvent::Rpc(Box::new(notification)));
                     }
                     Err(error) => eprintln!("json ui parse error: {error:#}\nline: {line}"),
                 },
