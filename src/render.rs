@@ -65,6 +65,16 @@ struct CursorCell {
     ch: Option<char>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MenuLayout {
+    rect: CellRect,
+    visible_columns: usize,
+    total_columns: usize,
+    rows_per_column: usize,
+    column_width: usize,
+    first_visible_column: usize,
+    single_row: bool,
+}
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
@@ -241,39 +251,169 @@ fn render_menu(
         return None;
     }
 
-    let width = menu
+    let layout = menu_layout(menu, cols, rows)?;
+    fill_rect(canvas, layout.rect, &menu.menu_face, metrics, top_padding);
+
+    if layout.single_row {
+        render_single_row_menu(canvas, menu, layout, metrics, top_padding);
+    } else if layout.visible_columns == 1 {
+        render_single_column_menu(canvas, menu, layout, metrics, top_padding);
+    } else {
+        render_multi_column_menu(canvas, menu, layout, metrics, top_padding);
+    }
+
+    Some(layout.rect)
+}
+
+fn menu_layout(menu: &MenuState, cols: usize, rows: usize) -> Option<MenuLayout> {
+    let item_count = menu.items.len();
+    let longest = menu
         .items
         .iter()
         .map(|line| line_display_width(line))
         .max()
         .unwrap_or(1)
-        .max(1)
-        .saturating_add(1)
-        .min(cols);
-    let height = menu.items.len().max(1).min(rows);
-    if width == 0 || height == 0 {
-        return None;
+        .max(1);
+    let anchor_line = match menu.style {
+        MenuStyle::Inline => menu.anchor.line,
+        MenuStyle::Prompt | MenuStyle::Search => rows,
+    };
+
+    match menu.style {
+        MenuStyle::Inline => {
+            let width = longest.saturating_add(1).min(cols);
+            let height = item_count.max(1).min(rows).min(10);
+            if width == 0 || height == 0 {
+                return None;
+            }
+
+            Some(MenuLayout {
+                rect: CellRect {
+                    row: inline_popup_row(anchor_line, height, rows),
+                    column: menu.anchor.column.min(cols.saturating_sub(width)),
+                    width,
+                    height,
+                },
+                visible_columns: 1,
+                total_columns: item_count.div_ceil(height.max(1)),
+                rows_per_column: height,
+                column_width: width,
+                first_visible_column: 0,
+                single_row: false,
+            })
+        }
+        MenuStyle::Search => {
+            let width = cols - cols / 2;
+            if width < 4 {
+                return None;
+            }
+
+            Some(MenuLayout {
+                rect: CellRect {
+                    row: rows.saturating_sub(1),
+                    column: cols / 2,
+                    width,
+                    height: 1,
+                },
+                visible_columns: 0,
+                total_columns: item_count,
+                rows_per_column: 1,
+                column_width: width.saturating_sub(3),
+                first_visible_column: menu_first_search_item(menu, width.saturating_sub(3)),
+                single_row: true,
+            })
+        }
+        MenuStyle::Prompt => {
+            if cols <= 1 {
+                return None;
+            }
+
+            let max_width = cols.saturating_sub(1);
+            let visible_columns = (max_width / longest.saturating_add(1)).max(1);
+            let max_height = rows
+                .min(10)
+                .min(anchor_line.max(rows.saturating_sub(anchor_line).saturating_sub(1)));
+            let height = item_count.div_ceil(visible_columns).min(max_height);
+            if height == 0 {
+                return None;
+            }
+
+            let total_columns = item_count.div_ceil(height);
+            let first_visible_column =
+                menu_first_visible_column(menu, height, visible_columns, total_columns);
+
+            Some(MenuLayout {
+                rect: CellRect {
+                    row: rows.saturating_sub(height),
+                    column: 0,
+                    width: cols,
+                    height,
+                },
+                visible_columns,
+                total_columns,
+                rows_per_column: height,
+                column_width: (cols.saturating_sub(1) / visible_columns).max(1),
+                first_visible_column,
+                single_row: false,
+            })
+        }
+    }
+}
+
+fn menu_first_visible_column(
+    menu: &MenuState,
+    rows_per_column: usize,
+    visible_columns: usize,
+    total_columns: usize,
+) -> usize {
+    let Some(selected) = menu.selected else {
+        return 0;
+    };
+    if rows_per_column == 0 || visible_columns >= total_columns {
+        return 0;
     }
 
-    let row = match menu.style {
-        MenuStyle::Inline => inline_popup_row(menu.anchor.line, height, rows),
-        MenuStyle::Prompt | MenuStyle::Search => rows.saturating_sub(height),
-    };
-    let column = match menu.style {
-        MenuStyle::Inline => menu.anchor.column.min(cols.saturating_sub(width)),
-        MenuStyle::Search => cols.saturating_sub(width),
-        MenuStyle::Prompt => 0,
-    };
+    let selected_column = selected / rows_per_column;
+    if selected_column < visible_columns {
+        0
+    } else {
+        selected_column
+            .saturating_add(1)
+            .saturating_sub(visible_columns)
+            .min(total_columns.saturating_sub(visible_columns))
+    }
+}
 
-    let rect = CellRect {
-        row,
-        column,
-        width,
-        height,
+fn menu_first_search_item(menu: &MenuState, available_width: usize) -> usize {
+    let Some(selected) = menu.selected else {
+        return 0;
     };
-    fill_rect(canvas, rect, &menu.menu_face, metrics, top_padding);
+    if available_width == 0 {
+        return 0;
+    }
 
-    for (index, item) in menu.items.iter().take(height).enumerate() {
+    let mut first = 0;
+    let mut used_width = 0;
+    for index in 0..=selected.min(menu.items.len().saturating_sub(1)) {
+        let item_width = line_display_width(&menu.items[index]).saturating_add(1);
+        if used_width + item_width > available_width {
+            first = index;
+            used_width = item_width;
+        } else {
+            used_width += item_width;
+        }
+    }
+    first
+}
+
+fn render_single_column_menu(
+    canvas: &Canvas,
+    menu: &MenuState,
+    layout: MenuLayout,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    for (index, item) in menu.items.iter().take(layout.rect.height).enumerate() {
         let face = if menu.selected == Some(index) {
             &menu.selected_face
         } else {
@@ -281,26 +421,199 @@ fn render_menu(
         };
         fill_line_segment(
             canvas,
-            rect.row + index,
-            rect.column,
-            rect.width,
+            layout.rect.row + index,
+            layout.rect.column,
+            layout.rect.width,
             face,
             metrics,
             top_padding,
         );
         render_line_at(
             canvas,
-            rect.row + index,
-            rect.column,
+            layout.rect.row + index,
+            layout.rect.column,
             item,
             face,
-            rect.column + rect.width,
+            layout.rect.column + layout.rect.width,
             metrics,
             top_padding,
         );
     }
+}
 
-    Some(rect)
+fn render_single_row_menu(
+    canvas: &Canvas,
+    menu: &MenuState,
+    layout: MenuLayout,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    let row = layout.rect.row;
+    let mut column = layout.rect.column;
+
+    if layout.first_visible_column > 0 {
+        render_string_line(
+            canvas,
+            row,
+            column,
+            "< ",
+            &menu.menu_face,
+            metrics,
+            top_padding,
+        );
+    }
+    column += 2;
+
+    let end_column = layout.rect.column + layout.rect.width.saturating_sub(2);
+    let mut index = layout.first_visible_column;
+    while index < menu.items.len() && column < end_column {
+        let item = &menu.items[index];
+        let face = if menu.selected == Some(index) {
+            &menu.selected_face
+        } else {
+            &menu.menu_face
+        };
+        let available_width = end_column.saturating_sub(column);
+        let item_width = line_display_width(item);
+        let truncated = if item_width > available_width {
+            truncate_atoms(item, available_width.saturating_sub(1))
+        } else {
+            item.clone()
+        };
+        render_line_at(
+            canvas,
+            row,
+            column,
+            &truncated,
+            face,
+            end_column,
+            metrics,
+            top_padding,
+        );
+
+        if item_width > available_width {
+            render_string_line(
+                canvas,
+                row,
+                end_column,
+                "…",
+                &menu.menu_face,
+                metrics,
+                top_padding,
+            );
+            break;
+        }
+
+        column += item_width;
+        if column < end_column {
+            render_string_line(
+                canvas,
+                row,
+                column,
+                " ",
+                &menu.menu_face,
+                metrics,
+                top_padding,
+            );
+            column += 1;
+        }
+        index += 1;
+    }
+
+    if index < menu.items.len() {
+        render_string_line(
+            canvas,
+            row,
+            layout.rect.column + layout.rect.width.saturating_sub(1),
+            ">",
+            &menu.menu_face,
+            metrics,
+            top_padding,
+        );
+    }
+}
+
+fn render_multi_column_menu(
+    canvas: &Canvas,
+    menu: &MenuState,
+    layout: MenuLayout,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    let mark_height = layout
+        .rect
+        .height
+        .saturating_mul(layout.rect.height)
+        .div_ceil(layout.total_columns.max(layout.visible_columns))
+        .min(layout.rect.height)
+        .max(1);
+    let mark_row = if layout.total_columns > layout.visible_columns {
+        layout
+            .rect
+            .height
+            .saturating_sub(mark_height)
+            .saturating_mul(layout.first_visible_column)
+            / (layout.total_columns - layout.visible_columns)
+    } else {
+        0
+    };
+
+    for row_offset in 0..layout.rect.height {
+        let row = layout.rect.row + row_offset;
+        for col_offset in 0..layout.visible_columns {
+            let column_index = layout.first_visible_column + col_offset;
+            if column_index >= layout.total_columns {
+                break;
+            }
+
+            let item_index = column_index * layout.rows_per_column + row_offset;
+            let face = if menu.selected == Some(item_index) {
+                &menu.selected_face
+            } else {
+                &menu.menu_face
+            };
+            let start_column = layout.rect.column + col_offset * layout.column_width;
+            fill_line_segment(
+                canvas,
+                row,
+                start_column,
+                layout.column_width,
+                face,
+                metrics,
+                top_padding,
+            );
+
+            if let Some(item) = menu.items.get(item_index) {
+                let truncated = truncate_atoms(item, layout.column_width.saturating_sub(1));
+                render_line_at(
+                    canvas,
+                    row,
+                    start_column,
+                    &truncated,
+                    face,
+                    start_column + layout.column_width,
+                    metrics,
+                    top_padding,
+                );
+            }
+        }
+
+        let scrollbar_face = &menu.menu_face;
+        let marker = if row_offset >= mark_row && row_offset < mark_row + mark_height {
+            "█"
+        } else {
+            "░"
+        };
+        render_string_line(
+            canvas,
+            row,
+            layout.rect.column + layout.rect.width.saturating_sub(1),
+            marker,
+            scrollbar_face,
+            metrics,
+            top_padding,
+        );
+    }
 }
 
 fn render_info(
@@ -1056,7 +1369,7 @@ pub fn resize_surface(
 #[cfg(test)]
 mod tests {
     use crate::app::StatusState;
-    use crate::kakoune_messages::StatusStyle;
+    use crate::kakoune_messages::{Coord, StatusStyle};
 
     use super::*;
 
@@ -1113,7 +1426,6 @@ mod tests {
             Some(Rgb::new(0xff, 0xff, 0xff))
         );
     }
-
     #[test]
     fn cursor_cell_uses_visible_placeholder_at_end_of_line() {
         let cursor_face = Face {
@@ -1153,5 +1465,69 @@ mod tests {
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
         assert_eq!(cursor.ch, Some('c'));
         assert_eq!(cursor.face.bg, "white");
+    }
+
+    #[test]
+    fn prompt_menu_layout_uses_multiple_columns() {
+        let menu = MenuState {
+            items: vec![menu_item("alpha"); 12],
+            anchor: Coord { line: 0, column: 0 },
+            selected: Some(0),
+            selected_face: Face::default(),
+            menu_face: Face::default(),
+            style: MenuStyle::Prompt,
+        };
+
+        let layout = menu_layout(&menu, 40, 12).expect("prompt layout");
+        assert_eq!(layout.rect.width, 40);
+        assert_eq!(layout.rect.height, 2);
+        assert_eq!(layout.visible_columns, 6);
+        assert_eq!(layout.total_columns, 6);
+        assert_eq!(layout.column_width, 6);
+    }
+
+    #[test]
+    fn prompt_menu_scrolls_columns_to_selected_item() {
+        let menu = MenuState {
+            items: vec![menu_item("abcdefghij"); 40],
+            anchor: Coord { line: 0, column: 0 },
+            selected: Some(39),
+            selected_face: Face::default(),
+            menu_face: Face::default(),
+            style: MenuStyle::Prompt,
+        };
+
+        let layout = menu_layout(&menu, 30, 10).expect("prompt layout");
+        assert_eq!(layout.visible_columns, 2);
+        assert_eq!(layout.total_columns, 4);
+        assert_eq!(layout.first_visible_column, 2);
+    }
+
+    #[test]
+    fn search_menu_tracks_first_visible_item_from_selection() {
+        let menu = MenuState {
+            items: vec![
+                menu_item("aaaa"),
+                menu_item("bbbb"),
+                menu_item("cccc"),
+                menu_item("dddd"),
+            ],
+            anchor: Coord { line: 0, column: 0 },
+            selected: Some(2),
+            selected_face: Face::default(),
+            menu_face: Face::default(),
+            style: MenuStyle::Search,
+        };
+
+        let layout = menu_layout(&menu, 20, 8).expect("search layout");
+        assert!(layout.single_row);
+        assert_eq!(layout.first_visible_column, 2);
+    }
+
+    fn menu_item(text: &str) -> Vec<Atom> {
+        vec![Atom {
+            face: Face::default(),
+            contents: text.into(),
+        }]
     }
 }
