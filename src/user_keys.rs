@@ -13,12 +13,21 @@ pub enum FontSizeAction {
     Reset,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UserAction {
+    FontSize(FontSizeAction),
+    WindowNew,
+    WindowClose,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct UserKeysConfig {
     pub font_scale_up: String,
     pub font_scale_down: String,
     pub font_scale_reset: String,
+    pub window_new: String,
+    pub window_close: String,
 }
 
 impl Default for UserKeysConfig {
@@ -29,7 +38,7 @@ impl Default for UserKeysConfig {
 
 #[derive(Debug, Clone)]
 pub struct UserKeys {
-    bindings: Vec<(Binding, FontSizeAction)>,
+    bindings: Vec<(Binding, UserAction)>,
 }
 
 impl UserKeys {
@@ -38,15 +47,20 @@ impl UserKeys {
             bindings: vec![
                 (
                     Binding::parse(&config.font_scale_up)?,
-                    FontSizeAction::Increase,
+                    UserAction::FontSize(FontSizeAction::Increase),
                 ),
                 (
                     Binding::parse(&config.font_scale_down)?,
-                    FontSizeAction::Decrease,
+                    UserAction::FontSize(FontSizeAction::Decrease),
                 ),
                 (
                     Binding::parse(&config.font_scale_reset)?,
-                    FontSizeAction::Reset,
+                    UserAction::FontSize(FontSizeAction::Reset),
+                ),
+                (Binding::parse(&config.window_new)?, UserAction::WindowNew),
+                (
+                    Binding::parse(&config.window_close)?,
+                    UserAction::WindowClose,
                 ),
             ],
         })
@@ -56,7 +70,7 @@ impl UserKeys {
         &self,
         event: &KeyEvent,
         modifiers: ModifiersState,
-    ) -> Option<FontSizeAction> {
+    ) -> Option<UserAction> {
         let key = event.key_without_modifiers();
         self.bindings
             .iter()
@@ -176,7 +190,10 @@ impl BindingKey {
         match (self, key) {
             (Self::Character(expected), Key::Character(text)) => {
                 let mut chars = text.chars();
-                matches!((chars.next(), chars.next()), (Some(ch), None) if ch == *expected)
+                matches!(
+                    (chars.next(), chars.next()),
+                    (Some(ch), None) if ch.eq_ignore_ascii_case(expected)
+                )
             }
             (Self::Named(expected), Key::Named(actual)) => expected == actual,
             _ => false,
@@ -194,6 +211,8 @@ mod tests {
         assert_eq!(config.font_scale_up, "Cmd-=");
         assert_eq!(config.font_scale_down, "Cmd--");
         assert_eq!(config.font_scale_reset, "Cmd-0");
+        assert_eq!(config.window_new, "Cmd-N");
+        assert_eq!(config.window_close, "Cmd-W");
     }
 
     #[test]
@@ -225,5 +244,23 @@ mod tests {
         let binding = Binding::parse("Cmd-0").unwrap();
 
         assert!(binding.matches(&Key::Character("0".into()), ModifiersState::SUPER));
+    }
+
+    #[test]
+    fn matches_default_window_shortcuts() {
+        let keys = UserKeys::from_config(&UserKeysConfig::default()).unwrap();
+
+        let new_binding = Binding::parse("Cmd-N").unwrap();
+        let close_binding = Binding::parse("Cmd-W").unwrap();
+
+        assert!(new_binding.matches(&Key::Character("n".into()), ModifiersState::SUPER));
+        assert!(close_binding.matches(&Key::Character("w".into()), ModifiersState::SUPER));
+        assert_eq!(
+            keys.bindings
+                .iter()
+                .find(|(_, action)| *action == UserAction::WindowNew)
+                .map(|(_, action)| *action),
+            Some(UserAction::WindowNew)
+        );
     }
 }

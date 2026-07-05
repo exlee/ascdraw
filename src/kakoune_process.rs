@@ -2,14 +2,16 @@ use std::borrow::Cow;
 use std::env;
 use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
 
 use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
@@ -23,8 +25,10 @@ pub fn spawn_kakoune(
     args: &Args,
     proxy: EventLoopProxy<AppEvent>,
     window_id: WindowId,
+    client_id: &str,
+    client_close_socket: Option<&Path>,
 ) -> Result<Child> {
-    let mut command = build_kakoune_command(args);
+    let mut command = build_kakoune_command(args, client_id, client_close_socket);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -87,6 +91,72 @@ pub fn spawn_kakoune(
     Ok(child)
 }
 
+#[cfg(unix)]
+pub struct ClientCloseListener {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl ClientCloseListener {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ClientCloseListener {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
+pub fn spawn_client_close_listener(proxy: EventLoopProxy<AppEvent>) -> Result<ClientCloseListener> {
+    let path = env::temp_dir().join(format!("kakvide-client-close-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("failed to bind client close socket {}", path.display()))?;
+
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    let mut message = String::new();
+                    match stream.read_to_string(&mut message) {
+                        Ok(_) => {
+                            if let Some((session, client_id)) =
+                                parse_client_close_message(message.trim())
+                            {
+                                let _ =
+                                    proxy.send_event(AppEvent::ClientClosed { session, client_id });
+                            }
+                        }
+                        Err(error) => {
+                            log_error(format!("client close socket read error: {error:#}"))
+                        }
+                    }
+                }
+                Err(error) => {
+                    log_error(format!("client close socket accept error: {error:#}"));
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(ClientCloseListener { path })
+}
+
+fn parse_client_close_message(message: &str) -> Option<(OsString, String)> {
+    let rest = message.strip_prefix("KAKVIDE_CLIENT_CLOSE:")?;
+    let (session, client_id) = rest.split_once(':')?;
+    if session.is_empty() || client_id.is_empty() {
+        return None;
+    }
+
+    Some((OsString::from(session), client_id.to_string()))
+}
+
 struct JsonUiLine<'a> {
     text: Cow<'a, str>,
     utf8_error: Option<std::str::Utf8Error>,
@@ -114,42 +184,107 @@ fn trim_line_ending(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
-fn build_kakoune_command(args: &Args) -> Command {
-    platform_kakoune_command(args)
+fn build_kakoune_command(
+    args: &Args,
+    client_id: &str,
+    client_close_socket: Option<&Path>,
+) -> Command {
+    platform_kakoune_command(args, client_id, client_close_socket)
 }
 
 pub fn build_kakoune_help_command(kak_bin: &OsStr) -> Command {
     platform_kakoune_help_command(kak_bin)
 }
 
-fn append_kakoune_json_ui_args(command: &mut Command, args: &Args) {
+pub fn list_kakoune_sessions(kak_bin: &str) -> Result<Vec<OsString>> {
+    let output = platform_kakoune_list_sessions_command(OsStr::new(kak_bin))
+        .output()
+        .with_context(|| format!("failed to run {kak_bin} -l"))?;
+
+    if !output.status.success() {
+        anyhow::bail!("{kak_bin} -l exited with {}", output.status);
+    }
+
+    Ok(parse_kakoune_sessions(&output.stdout))
+}
+
+fn parse_kakoune_sessions(output: &[u8]) -> Vec<OsString> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(OsString::from)
+        .collect()
+}
+
+fn append_kakoune_json_ui_args(
+    command: &mut Command,
+    args: &Args,
+    client_id: &str,
+    client_close_socket: Option<&Path>,
+) {
     command
         .arg("-ui")
         .arg("json")
         .arg("-e")
-        .arg(kakvide_directory_title_ui_options_command())
+        .arg(kakvide_client_init_command(client_id, client_close_socket))
         .args(&args.kak_args);
 }
 
-fn kakvide_directory_title_ui_options_command() -> String {
-    format!(
-        "hook global EnterDirectory .* %{{ set-option -add window ui_options \"{0}=%val{{hook_param}}\" }}; \
-         set-option -add window ui_options \"{0}=%sh{{pwd}}\"",
+fn kakvide_client_init_command(client_id: &str, client_close_socket: Option<&Path>) -> String {
+    let mut command = format!(
+        "rename-client {client_id}; \
+         hook global EnterDirectory .* %{{ set-option -add window ui_options \"{0}=%val{{hook_param}} - %val{{client}}\" }}; \
+         set-option -add window ui_options \"{0}=%sh{{pwd}} - %val{{client}}\"",
         WINDOW_TITLE_UI_OPTION
+    );
+    if let Some(socket) = client_close_socket {
+        command.push_str("; ");
+        command.push_str(&kakvide_client_close_hook_command(client_id, socket));
+    }
+    command
+}
+
+fn kakvide_client_close_hook_command(client_id: &str, socket: &Path) -> String {
+    format!(
+        "hook -once global ClientClose ^{client_id}$ %{{ nop %sh{{ printf 'KAKVIDE_CLIENT_CLOSE:%s:%s\\n' \"$kak_session\" \"$kak_hook_param\" | nc -U {} }} }}",
+        shell_quote(socket.as_os_str())
     )
 }
 
 #[cfg(unix)]
-fn platform_kakoune_command(args: &Args) -> Command {
+fn shell_quote(value: &OsStr) -> String {
+    let mut quoted = String::from("'");
+    for part in value.to_string_lossy().split('\'') {
+        if quoted.len() > 1 {
+            quoted.push_str("'\\''");
+        }
+        quoted.push_str(part);
+    }
+    quoted.push('\'');
+    quoted
+}
+
+#[cfg(not(unix))]
+fn shell_quote(value: &OsStr) -> String {
+    format!("{:?}", value.to_string_lossy())
+}
+
+#[cfg(unix)]
+fn platform_kakoune_command(
+    args: &Args,
+    client_id: &str,
+    client_close_socket: Option<&Path>,
+) -> Command {
     if let Some(shell) = user_shell() {
         let mut command = shell_command(shell, OsStr::new(&args.kak_bin));
-        append_kakoune_json_ui_args(&mut command, args);
+        append_kakoune_json_ui_args(&mut command, args, client_id, client_close_socket);
         command
     } else {
         let (program, constrained_path) = constrained_app_program(OsStr::new(&args.kak_bin));
         let mut command = Command::new(program);
         apply_constrained_app_path(&mut command, constrained_path);
-        append_kakoune_json_ui_args(&mut command, args);
+        append_kakoune_json_ui_args(&mut command, args, client_id, client_close_socket);
         command
     }
 }
@@ -169,10 +304,29 @@ fn platform_kakoune_help_command(kak_bin: &OsStr) -> Command {
     }
 }
 
+#[cfg(unix)]
+fn platform_kakoune_list_sessions_command(kak_bin: &OsStr) -> Command {
+    if let Some(shell) = user_shell() {
+        let mut command = shell_command(shell, kak_bin);
+        command.arg("-l");
+        command
+    } else {
+        let (program, constrained_path) = constrained_app_program(kak_bin);
+        let mut command = Command::new(program);
+        apply_constrained_app_path(&mut command, constrained_path);
+        command.arg("-l");
+        command
+    }
+}
+
 #[cfg(windows)]
-fn platform_kakoune_command(args: &Args) -> Command {
+fn platform_kakoune_command(
+    args: &Args,
+    client_id: &str,
+    client_close_socket: Option<&Path>,
+) -> Command {
     let mut command = Command::new(&args.kak_bin);
-    append_kakoune_json_ui_args(&mut command, args);
+    append_kakoune_json_ui_args(&mut command, args, client_id, client_close_socket);
     command
 }
 
@@ -180,6 +334,13 @@ fn platform_kakoune_command(args: &Args) -> Command {
 fn platform_kakoune_help_command(kak_bin: &OsStr) -> Command {
     let mut command = Command::new(kak_bin);
     command.arg("--help");
+    command
+}
+
+#[cfg(windows)]
+fn platform_kakoune_list_sessions_command(kak_bin: &OsStr) -> Command {
+    let mut command = Command::new(kak_bin);
+    command.arg("-l");
     command
 }
 
@@ -314,6 +475,7 @@ pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
 mod tests {
     use std::ffi::{OsStr, OsString};
     use std::fs;
+    use std::path::Path;
 
     use crate::kakoune_messages::KakouneNotification;
 
@@ -360,13 +522,43 @@ mod tests {
     }
 
     #[test]
-    fn title_ui_options_command_tracks_working_directory() {
-        let command = super::kakvide_directory_title_ui_options_command();
+    fn client_init_command_renames_client_and_tracks_working_directory() {
+        let command = super::kakvide_client_init_command("kakvide-123-0", None);
 
+        assert!(command.contains("rename-client kakvide-123-0"));
         assert!(command.contains("EnterDirectory"));
+        assert!(command.contains("%val{hook_param} - %val{client}"));
+        assert!(command.contains("%sh{pwd} - %val{client}"));
         assert!(command.contains("%val{hook_param}"));
         assert!(command.contains("%sh{pwd}"));
         assert!(!command.contains("buffile"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_init_command_installs_client_close_hook() {
+        let command =
+            super::kakvide_client_init_command("kakvide-123-0", Some(Path::new("/tmp/a b.sock")));
+
+        assert!(command.contains("hook -once global ClientClose ^kakvide-123-0$"));
+        assert!(command.contains("KAKVIDE_CLIENT_CLOSE:%s:%s\\n"));
+        assert!(command.contains("nc -U '/tmp/a b.sock'"));
+    }
+
+    #[test]
+    fn client_close_message_parser_extracts_session_and_client() {
+        assert_eq!(
+            super::parse_client_close_message("KAKVIDE_CLIENT_CLOSE:work:kakvide-123-0"),
+            Some((OsString::from("work"), "kakvide-123-0".to_string()))
+        );
+    }
+
+    #[test]
+    fn session_list_parser_trims_blank_lines() {
+        assert_eq!(
+            super::parse_kakoune_sessions(b"\nmain\n  scratch  \n\n"),
+            vec![OsString::from("main"), OsString::from("scratch")]
+        );
     }
 
     #[cfg(windows)]
@@ -382,7 +574,7 @@ mod tests {
             ],
         };
 
-        let command = build_kakoune_command(&args);
+        let command = build_kakoune_command(&args, "client0", None);
         let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
 
         assert_eq!(
@@ -391,7 +583,7 @@ mod tests {
                 OsString::from("-ui"),
                 OsString::from("json"),
                 OsString::from("-e"),
-                OsString::from(super::kakvide_directory_title_ui_options_command()),
+                OsString::from(super::kakvide_client_init_command("client0", None)),
                 OsString::from("-d"),
                 OsString::from("-e"),
                 OsString::from("echo hi"),
@@ -407,7 +599,7 @@ mod tests {
             kak_bin: "kak".to_string(),
             kak_args: vec![OsString::from("file.txt")],
         };
-        let command = build_kakoune_command(&args);
+        let command = build_kakoune_command(&args, "client0", None);
         let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
 
         assert_eq!(
@@ -420,7 +612,7 @@ mod tests {
                 OsString::from("-ui"),
                 OsString::from("json"),
                 OsString::from("-e"),
-                OsString::from(super::kakvide_directory_title_ui_options_command()),
+                OsString::from(super::kakvide_client_init_command("client0", None)),
                 OsString::from("file.txt"),
             ]
         );

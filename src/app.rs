@@ -45,7 +45,23 @@ impl Default for AppConfig {
 pub enum AppEvent {
     Rpc(WindowId, Box<KakouneNotification>),
     KakouneExited(WindowId),
+    ClientClosed {
+        session: OsString,
+        client_id: String,
+    },
     OpenFiles(Vec<PathBuf>),
+    Command(AppCommand),
+}
+
+#[derive(Debug)]
+pub enum AppCommand {
+    FontScaleUp,
+    FontScaleDown,
+    FontScaleReset,
+    WindowNew,
+    WindowClose,
+    ConnectToSession(OsString),
+    SwitchToSession(OsString),
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +211,16 @@ pub fn bundled_default_keys() -> UserKeysConfig {
             .and_then(Value::as_str)
             .expect("bundled [keys] should set font-scale-reset")
             .to_string(),
+        window_new: keys
+            .get("window-new")
+            .and_then(Value::as_str)
+            .expect("bundled [keys] should set window-new")
+            .to_string(),
+        window_close: keys
+            .get("window-close")
+            .and_then(Value::as_str)
+            .expect("bundled [keys] should set window-close")
+            .to_string(),
     }
 }
 
@@ -288,16 +314,36 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
 }
 
 fn window_title_from_ui_options(options: &serde_json::Map<String, serde_json::Value>) -> String {
-    let Some(path) = options
+    let Some(title) = options
         .get(WINDOW_TITLE_UI_OPTION)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|path| !path.is_empty())
+        .filter(|title| !title.is_empty())
     else {
         return DEFAULT_WINDOW_TITLE.to_string();
     };
 
-    format!("{DEFAULT_WINDOW_TITLE} - {path}")
+    if let Some((pwd, client)) = title.rsplit_once(" - ") {
+        format!(
+            "{DEFAULT_WINDOW_TITLE} - {} - {}",
+            pwd.trim(),
+            display_client_name(client.trim())
+        )
+    } else {
+        format!("{DEFAULT_WINDOW_TITLE} - {title}")
+    }
+}
+
+fn display_client_name(client: &str) -> String {
+    if let Some(suffix) = client.strip_prefix("client") {
+        if suffix.is_empty() {
+            "Client".to_string()
+        } else {
+            format!("Client {suffix}")
+        }
+    } else {
+        client.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -384,18 +430,32 @@ mod tests {
         let mut options = serde_json::Map::new();
         options.insert(
             WINDOW_TITLE_UI_OPTION.to_string(),
-            serde_json::Value::String("/tmp/project".to_string()),
+            serde_json::Value::String("/tmp/project - client0".to_string()),
         );
 
         apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
 
-        assert_eq!(state.window_title, "kakvide - /tmp/project");
+        assert_eq!(state.window_title, "kakvide - /tmp/project - Client 0");
+    }
+
+    #[test]
+    fn set_ui_options_preserves_non_default_client_name() {
+        let mut state = AppState::default();
+        let mut options = serde_json::Map::new();
+        options.insert(
+            WINDOW_TITLE_UI_OPTION.to_string(),
+            serde_json::Value::String("/tmp/project - main".to_string()),
+        );
+
+        apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
+
+        assert_eq!(state.window_title, "kakvide - /tmp/project - main");
     }
 
     #[test]
     fn set_ui_options_uses_default_window_title_for_missing_title() {
         let mut state = AppState {
-            window_title: "kakvide - /tmp/project".to_string(),
+            window_title: "kakvide - /tmp/project - Client 0".to_string(),
             ..AppState::default()
         };
 
@@ -412,7 +472,7 @@ mod tests {
     #[test]
     fn set_ui_options_uses_default_window_title_for_empty_title() {
         let mut state = AppState {
-            window_title: "kakvide - /tmp/project".to_string(),
+            window_title: "kakvide - /tmp/project - Client 0".to_string(),
             ..AppState::default()
         };
         let mut options = serde_json::Map::new();

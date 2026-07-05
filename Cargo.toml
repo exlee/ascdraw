@@ -27,5 +27,5 @@ winit = "=0.30.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "std"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow", "std"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSArray", "NSData", "NSString", "std"] }

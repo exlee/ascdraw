@@ -7,3 +7,5 @@ transparent-menubar = true
 font-scale-up = "Cmd-="
 font-scale-down = "Cmd--"
 font-scale-reset = "Cmd-0"
+window-new = "Cmd-N"
+window-close = "Cmd-W"

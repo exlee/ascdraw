@@ -29,20 +29,22 @@ mod kakoune_messages;
 mod kakoune_process;
 mod layout;
 #[cfg(target_os = "macos")]
-mod macos_open_files;
+mod macos;
 mod render;
 mod user_keys;
 
-use app::{AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
+use app::{AppCommand, AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
 use diagnostics::log_error;
 use input::{
     MouseMotionState, ScrollState, key_event_to_kak, pointer_position_to_coord,
     scroll_delta_to_kak, send_keys, send_mouse_button, send_mouse_move, send_resize, send_scroll,
 };
 use kakoune_messages::{Coord, KakouneNotification};
+#[cfg(unix)]
+use kakoune_process::spawn_client_close_listener;
 use kakoune_process::{build_kakoune_help_command, spawn_kakoune, spawn_stdin_writer};
 use render::{Renderer, load_renderer, render, resize_surface};
-use user_keys::{FontSizeAction, UserKeys};
+use user_keys::{FontSizeAction, UserAction, UserKeys};
 
 #[cfg(target_os = "macos")]
 fn apply_platform_window_attributes(
@@ -93,6 +95,8 @@ struct ClientWindow {
     window: Rc<Window>,
     surface: Surface<Rc<Window>, Rc<Window>>,
     child: Child,
+    session: OsString,
+    client_id: String,
     command_tx: Sender<String>,
     modifiers: ModifiersState,
     mouse_cell: Coord,
@@ -133,6 +137,8 @@ fn create_client_window(
     args: &Args,
     proxy: EventLoopProxy<AppEvent>,
     config: &AppConfig,
+    client_id: String,
+    client_close_socket: Option<&Path>,
 ) -> Result<ClientWindow> {
     let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
     let mut surface =
@@ -140,13 +146,15 @@ fn create_client_window(
     resize_surface(&mut surface, window.inner_size())?;
 
     let renderer = load_renderer(config);
-    let mut child = spawn_kakoune(args, proxy, window.id())?;
+    let mut child = spawn_kakoune(args, proxy, window.id(), &client_id, client_close_socket)?;
     let command_tx = spawn_stdin_writer(&mut child)?;
 
     let client = ClientWindow {
         window,
         surface,
         child,
+        session: OsString::new(),
+        client_id,
         command_tx,
         modifiers: ModifiersState::empty(),
         mouse_cell: Coord { line: 0, column: 0 },
@@ -168,9 +176,11 @@ fn create_initial_client_window(
     proxy: EventLoopProxy<AppEvent>,
     config: &AppConfig,
     window_icon: Option<Icon>,
+    client_id: String,
+    client_close_socket: Option<&Path>,
 ) -> Result<ClientWindow> {
     let window = Rc::new(event_loop.create_window(window_attributes(config, window_icon))?);
-    create_client_window(window, args, proxy, config)
+    create_client_window(window, args, proxy, config, client_id, client_close_socket)
 }
 
 fn create_active_client_window(
@@ -179,9 +189,171 @@ fn create_active_client_window(
     proxy: EventLoopProxy<AppEvent>,
     config: &AppConfig,
     window_icon: Option<Icon>,
+    client_id: String,
+    client_close_socket: Option<&Path>,
 ) -> Result<ClientWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config, window_icon))?);
-    create_client_window(window, args, proxy, config)
+    create_client_window(window, args, proxy, config, client_id, client_close_socket)
+}
+
+fn focused_window_id(clients: &HashMap<WindowId, ClientWindow>) -> Option<WindowId> {
+    clients
+        .iter()
+        .find_map(|(window_id, client)| client.window.has_focus().then_some(*window_id))
+        .or_else(|| (clients.len() == 1).then(|| *clients.keys().next().expect("one client")))
+}
+
+fn command_window_id(
+    clients: &HashMap<WindowId, ClientWindow>,
+    source_window_id: Option<WindowId>,
+) -> Option<WindowId> {
+    source_window_id
+        .filter(|window_id| clients.contains_key(window_id))
+        .or_else(|| focused_window_id(clients))
+}
+
+fn close_client(
+    clients: &mut HashMap<WindowId, ClientWindow>,
+    window_id: WindowId,
+    elwt: &ActiveEventLoop,
+    exit_if_empty: bool,
+) {
+    if let Some(mut client) = clients.remove(&window_id) {
+        let _ = client.child.kill();
+    }
+    if exit_if_empty && clients.is_empty() {
+        elwt.exit();
+    }
+}
+
+fn remove_closed_client(
+    clients: &mut HashMap<WindowId, ClientWindow>,
+    session: &OsStr,
+    client_id: &str,
+    elwt: &ActiveEventLoop,
+) {
+    let window_id = clients.iter().find_map(|(window_id, client)| {
+        (client.session == session && client.client_id == client_id).then_some(*window_id)
+    });
+    if let Some(window_id) = window_id {
+        clients.remove(&window_id);
+    }
+    if clients.is_empty() {
+        elwt.exit();
+    }
+}
+
+fn next_client_id(next_client_number: &mut u64) -> String {
+    let client_id = format!("kakvide-{}-{next_client_number}", std::process::id());
+    *next_client_number += 1;
+    client_id
+}
+
+fn adjust_client_font_size(client: &mut ClientWindow, action: FontSizeAction, config: &AppConfig) {
+    let changed = match action {
+        FontSizeAction::Increase => client.renderer.adjust_font_size(1.0),
+        FontSizeAction::Decrease => client.renderer.adjust_font_size(-1.0),
+        FontSizeAction::Reset => client.renderer.reset_font_size(),
+    };
+    if changed {
+        client.send_resize(config);
+        client.request_redraw();
+    }
+}
+
+struct RuntimeContext<'a> {
+    elwt: &'a ActiveEventLoop,
+    clients: &'a mut HashMap<WindowId, ClientWindow>,
+    proxy: EventLoopProxy<AppEvent>,
+    config: &'a AppConfig,
+    window_icon: Option<Icon>,
+    kak_bin: &'a str,
+    kakoune_session: &'a OsStr,
+    next_client_number: &'a mut u64,
+    client_close_socket: Option<&'a Path>,
+}
+
+impl RuntimeContext<'_> {
+    fn open_session_window(&mut self, session: &OsStr, paths: &[PathBuf], log_label: &str) {
+        let open_args = connected_kakoune_args(self.kak_bin, session, paths);
+        match create_active_client_window(
+            self.elwt,
+            &open_args,
+            self.proxy.clone(),
+            self.config,
+            self.window_icon.clone(),
+            next_client_id(self.next_client_number),
+            self.client_close_socket,
+        ) {
+            Ok(client) => {
+                let mut client = client;
+                client.session = session.to_os_string();
+                self.clients.insert(client.window_id(), client);
+            }
+            Err(error) => log_error(format!("{log_label} window creation failed: {error:#}")),
+        }
+    }
+
+    fn handle_command(&mut self, command: AppCommand, source_window_id: Option<WindowId>) {
+        match command {
+            AppCommand::FontScaleUp => {
+                self.adjust_font_size_for_window(source_window_id, FontSizeAction::Increase)
+            }
+            AppCommand::FontScaleDown => {
+                self.adjust_font_size_for_window(source_window_id, FontSizeAction::Decrease)
+            }
+            AppCommand::FontScaleReset => {
+                self.adjust_font_size_for_window(source_window_id, FontSizeAction::Reset)
+            }
+            AppCommand::WindowNew => {
+                let session = command_window_id(self.clients, source_window_id)
+                    .and_then(|window_id| self.clients.get(&window_id))
+                    .map(|client| client.session.clone())
+                    .filter(|session| !session.is_empty())
+                    .unwrap_or_else(|| self.kakoune_session.to_os_string());
+                self.open_session_window(&session, &[], "new");
+            }
+            AppCommand::WindowClose => {
+                if let Some(window_id) = command_window_id(self.clients, source_window_id) {
+                    close_client(self.clients, window_id, self.elwt, true);
+                }
+            }
+            AppCommand::ConnectToSession(session) => {
+                self.open_session_window(&session, &[], "connect to session");
+            }
+            AppCommand::SwitchToSession(session) => {
+                if let Some(window_id) = command_window_id(self.clients, source_window_id) {
+                    close_client(self.clients, window_id, self.elwt, false);
+                }
+                self.open_session_window(&session, &[], "switch to session");
+                if self.clients.is_empty() {
+                    self.elwt.exit();
+                }
+            }
+        }
+    }
+
+    fn adjust_font_size_for_window(
+        &mut self,
+        source_window_id: Option<WindowId>,
+        action: FontSizeAction,
+    ) {
+        if let Some(window_id) = command_window_id(self.clients, source_window_id)
+            && let Some(client) = self.clients.get_mut(&window_id)
+        {
+            adjust_client_font_size(client, action, self.config);
+        }
+    }
+}
+
+fn app_command_from_user_action(action: UserAction) -> AppCommand {
+    match action {
+        UserAction::FontSize(FontSizeAction::Increase) => AppCommand::FontScaleUp,
+        UserAction::FontSize(FontSizeAction::Decrease) => AppCommand::FontScaleDown,
+        UserAction::FontSize(FontSizeAction::Reset) => AppCommand::FontScaleReset,
+        UserAction::WindowNew => AppCommand::WindowNew,
+        UserAction::WindowClose => AppCommand::WindowClose,
+    }
 }
 
 fn main() -> ExitCode {
@@ -225,27 +397,56 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     #[cfg(target_os = "macos")]
-    if let Err(error) = macos_open_files::register_open_file_handler(proxy.clone()) {
-        log_error(format!("open file handler setup failed: {error:#}"));
+    if let Err(error) = macos::install(proxy.clone(), args.kak_bin.clone()) {
+        log_error(format!("macOS integration setup failed: {error:#}"));
     }
 
-    let initial_client = create_initial_client_window(
+    #[cfg(unix)]
+    let _client_close_listener = match spawn_client_close_listener(proxy.clone()) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log_error(format!("client close socket setup failed: {error:#}"));
+            None
+        }
+    };
+    #[cfg(unix)]
+    let client_close_socket = _client_close_listener
+        .as_ref()
+        .map(|listener| listener.path().to_path_buf());
+    #[cfg(not(unix))]
+    let client_close_socket: Option<PathBuf> = None;
+
+    let mut next_client_number = 0;
+    let mut initial_client = create_initial_client_window(
         &event_loop,
         &args,
         proxy.clone(),
         &config,
         window_icon.clone(),
+        next_client_id(&mut next_client_number),
+        client_close_socket.as_deref(),
     )?;
     let kakoune_session = resolve_kakoune_session(&args.kak_args, initial_client.child.id());
+    initial_client.session = kakoune_session.clone();
     let kak_bin = args.kak_bin.clone();
     let mut clients = HashMap::new();
     clients.insert(initial_client.window_id(), initial_client);
+    #[cfg(target_os = "macos")]
+    let mut did_install_macos_menus_after_winit = false;
 
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
 
         match event {
             Event::Resumed => {
+                #[cfg(target_os = "macos")]
+                if !did_install_macos_menus_after_winit {
+                    if let Err(error) = macos::install_menus() {
+                        log_error(format!("macOS menu setup failed: {error:#}"));
+                    }
+                    did_install_macos_menus_after_winit = true;
+                }
+
                 for client in clients.values() {
                     client.send_resize(&config);
                     client.request_redraw();
@@ -256,7 +457,11 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                     let should_force_resize =
                         matches!(notification.as_ref(), KakouneNotification::Draw { .. })
                             && !client.did_force_startup_resize;
+                    let old_window_title = client.state.window_title.clone();
                     apply_notification(&mut client.state, *notification);
+                    if client.state.window_title != old_window_title {
+                        client.window.set_title(&client.state.window_title);
+                    }
                     if should_force_resize {
                         client.send_resize(&config);
                         client.did_force_startup_resize = true;
@@ -270,23 +475,40 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                     elwt.exit();
                 }
             }
+            Event::UserEvent(AppEvent::ClientClosed { session, client_id }) => {
+                remove_closed_client(&mut clients, &session, &client_id, elwt);
+            }
             Event::UserEvent(AppEvent::OpenFiles(paths)) => {
-                let open_args = connected_kakoune_args(&kak_bin, &kakoune_session, &paths);
-                match create_active_client_window(
+                RuntimeContext {
                     elwt,
-                    &open_args,
-                    proxy.clone(),
-                    &config,
-                    window_icon.clone(),
-                ) {
-                    Ok(client) => {
-                        clients.insert(client.window_id(), client);
-                    }
-                    Err(error) => log_error(format!("open file window creation failed: {error:#}")),
+                    clients: &mut clients,
+                    proxy: proxy.clone(),
+                    config: &config,
+                    window_icon: window_icon.clone(),
+                    kak_bin: &kak_bin,
+                    kakoune_session: &kakoune_session,
+                    next_client_number: &mut next_client_number,
+                    client_close_socket: client_close_socket.as_deref(),
                 }
+                .open_session_window(&kakoune_session, &paths, "open file");
+            }
+            Event::UserEvent(AppEvent::Command(command)) => {
+                RuntimeContext {
+                    elwt,
+                    clients: &mut clients,
+                    proxy: proxy.clone(),
+                    config: &config,
+                    window_icon: window_icon.clone(),
+                    kak_bin: &kak_bin,
+                    kakoune_session: &kakoune_session,
+                    next_client_number: &mut next_client_number,
+                    client_close_socket: client_close_socket.as_deref(),
+                }
+                .handle_command(command, None);
             }
             Event::WindowEvent { window_id, event } => {
                 let mut remove_client = false;
+                let mut pending_command = None;
                 if let Some(client) = clients.get_mut(&window_id) {
                     match event {
                         WindowEvent::CloseRequested => {
@@ -330,22 +552,10 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                                 if let Some(action) =
                                     user_keys.action_for_event(&event, client.modifiers)
                                 {
-                                    let changed = match action {
-                                        FontSizeAction::Increase => {
-                                            client.renderer.adjust_font_size(1.0)
-                                        }
-                                        FontSizeAction::Decrease => {
-                                            client.renderer.adjust_font_size(-1.0)
-                                        }
-                                        FontSizeAction::Reset => client.renderer.reset_font_size(),
-                                    };
-                                    if changed {
-                                        client.send_resize(&config);
-                                        client.request_redraw();
-                                    }
-                                    return;
-                                }
-                                if let Some(keys) = key_event_to_kak(&event, client.modifiers) {
+                                    pending_command = Some(app_command_from_user_action(action));
+                                } else if let Some(keys) =
+                                    key_event_to_kak(&event, client.modifiers)
+                                {
                                     send_keys(&client.command_tx, &[keys]);
                                 }
                             }
@@ -401,7 +611,20 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                         _ => {}
                     }
                 }
-                if remove_client {
+                if let Some(command) = pending_command {
+                    RuntimeContext {
+                        elwt,
+                        clients: &mut clients,
+                        proxy: proxy.clone(),
+                        config: &config,
+                        window_icon: window_icon.clone(),
+                        kak_bin: &kak_bin,
+                        kakoune_session: &kakoune_session,
+                        next_client_number: &mut next_client_number,
+                        client_close_socket: client_close_socket.as_deref(),
+                    }
+                    .handle_command(command, Some(window_id));
+                } else if remove_client {
                     clients.remove(&window_id);
                     if clients.is_empty() {
                         elwt.exit();
@@ -644,6 +867,17 @@ mod tests {
                 OsString::from("/tmp/file with spaces.md"),
                 OsString::from("/tmp/alice's note.md"),
             ]
+        );
+    }
+
+    #[test]
+    fn connected_kakoune_args_connect_to_session_without_paths() {
+        let args = connected_kakoune_args("custom-kak", OsString::from("work").as_os_str(), &[]);
+
+        assert_eq!(args.kak_bin, "custom-kak");
+        assert_eq!(
+            args.kak_args,
+            vec![OsString::from("-c"), OsString::from("work")]
         );
     }
 }
