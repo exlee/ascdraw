@@ -7,10 +7,9 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use serde::Deserialize;
-use serde_json::{Value, json};
 use skia_safe::{
     AlphaType, Canvas, Color, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo, Paint,
     PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
@@ -28,6 +27,13 @@ use winit::platform::macos::WindowAttributesExtMacOS;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::WindowLevel;
 use winit::window::{Window, WindowAttributes};
+
+mod kakoune_messages;
+
+use kakoune_messages::{
+    Atom, Coord, Face, InfoStyle, KakouneNotification, KakouneRequest, MenuStyle, MouseButtonName,
+    StatusStyle, parse_notification,
+};
 
 const PADDING: usize = 12;
 const FALLBACK_BG: Rgb = Rgb::new(0x1e, 0x1e, 0x2e);
@@ -60,82 +66,8 @@ impl Default for AppConfig {
 
 #[derive(Debug)]
 enum AppEvent {
-    Rpc(RpcNotification),
+    Rpc(KakouneNotification),
     KakouneExited,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct Face {
-    #[serde(default = "default_color")]
-    fg: String,
-    #[serde(default = "default_color")]
-    bg: String,
-    #[serde(default = "default_color")]
-    underline: String,
-    #[serde(default)]
-    attributes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Atom {
-    face: Face,
-    contents: String,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-struct Coord {
-    line: usize,
-    column: usize,
-}
-
-#[derive(Debug)]
-enum RpcNotification {
-    Draw {
-        lines: Vec<Vec<Atom>>,
-        cursor_pos: Coord,
-        default_face: Face,
-        padding_face: Face,
-        widget_columns: usize,
-    },
-    DrawStatus {
-        prompt: Vec<Atom>,
-        content: Vec<Atom>,
-        cursor_pos: isize,
-        mode_line: Vec<Atom>,
-        default_face: Face,
-        style: String,
-    },
-    Refresh {
-        force: bool,
-    },
-    SetUiOptions {
-        options: serde_json::Map<String, Value>,
-    },
-    MenuShow {
-        items: Vec<Vec<Atom>>,
-        anchor: Coord,
-        selected_face: Face,
-        menu_face: Face,
-        style: String,
-    },
-    MenuSelect {
-        selected: isize,
-    },
-    MenuHide,
-    InfoShow {
-        title: Vec<Atom>,
-        content: Vec<Vec<Atom>>,
-        anchor: Coord,
-        face: Face,
-        style: String,
-    },
-    InfoHide,
-}
-
-#[derive(Debug, Deserialize)]
-struct RpcEnvelope {
-    method: String,
-    params: Vec<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,14 +91,27 @@ impl Default for GridState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct StatusState {
     prompt: Vec<Atom>,
     content: Vec<Atom>,
     cursor_pos: isize,
     mode_line: Vec<Atom>,
     default_face: Face,
-    style: String,
+    style: StatusStyle,
+}
+
+impl Default for StatusState {
+    fn default() -> Self {
+        Self {
+            prompt: Vec::new(),
+            content: Vec::new(),
+            cursor_pos: 0,
+            mode_line: Vec::new(),
+            default_face: Face::default(),
+            style: StatusStyle::Status,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +121,7 @@ struct MenuState {
     selected: Option<usize>,
     selected_face: Face,
     menu_face: Face,
-    style: String,
+    style: MenuStyle,
 }
 
 #[derive(Debug, Clone)]
@@ -185,7 +130,7 @@ struct InfoState {
     content: Vec<Vec<Atom>>,
     anchor: Coord,
     face: Face,
-    style: String,
+    style: InfoStyle,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -227,10 +172,6 @@ impl Rgb {
     fn to_color(self) -> Color {
         Color::from_rgb(self.r, self.g, self.b)
     }
-}
-
-fn default_color() -> String {
-    "default".to_string()
 }
 
 fn load_config() -> Result<AppConfig> {
@@ -305,7 +246,7 @@ fn main() -> Result<()> {
                 window.request_redraw();
             }
             Event::UserEvent(AppEvent::Rpc(notification)) => {
-                let should_force_resize = matches!(notification, RpcNotification::Draw { .. })
+                let should_force_resize = matches!(notification, KakouneNotification::Draw { .. })
                     && !did_force_startup_resize;
                 apply_notification(&mut state, notification);
                 if should_force_resize {
@@ -362,10 +303,10 @@ fn main() -> Result<()> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => match state {
                     ElementState::Pressed => {
-                        send_mouse_button(&command_tx, "mouse_press", button, mouse_cell)
+                        send_mouse_button(&command_tx, true, button, mouse_cell)
                     }
                     ElementState::Released => {
-                        send_mouse_button(&command_tx, "mouse_release", button, mouse_cell)
+                        send_mouse_button(&command_tx, false, button, mouse_cell)
                     }
                 },
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -460,104 +401,9 @@ fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
     Ok(tx)
 }
 
-fn parse_notification(line: &str) -> Result<RpcNotification> {
-    let envelope: RpcEnvelope = serde_json::from_str(line)?;
-    match envelope.method.as_str() {
-        "draw" => {
-            let (lines, cursor_pos, default_face, padding_face, widget_columns): (
-                Vec<Vec<Atom>>,
-                Coord,
-                Face,
-                Face,
-                usize,
-            ) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::Draw {
-                lines,
-                cursor_pos,
-                default_face,
-                padding_face,
-                widget_columns,
-            })
-        }
-        "draw_status" => {
-            let (prompt, content, cursor_pos, mode_line, default_face, style): (
-                Vec<Atom>,
-                Vec<Atom>,
-                isize,
-                Vec<Atom>,
-                Face,
-                String,
-            ) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::DrawStatus {
-                prompt,
-                content,
-                cursor_pos,
-                mode_line,
-                default_face,
-                style,
-            })
-        }
-        "refresh" => {
-            let (force,): (bool,) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::Refresh { force })
-        }
-        "set_ui_options" => {
-            let (options,): (serde_json::Map<String, Value>,) =
-                deserialize_params(envelope.params)?;
-            Ok(RpcNotification::SetUiOptions { options })
-        }
-        "menu_show" => {
-            let (items, anchor, selected_face, menu_face, style): (
-                Vec<Vec<Atom>>,
-                Coord,
-                Face,
-                Face,
-                String,
-            ) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::MenuShow {
-                items,
-                anchor,
-                selected_face,
-                menu_face,
-                style,
-            })
-        }
-        "menu_select" => {
-            let (selected,): (isize,) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::MenuSelect { selected })
-        }
-        "menu_hide" => Ok(RpcNotification::MenuHide),
-        "info_show" => {
-            let (title, content, anchor, face, style): (
-                Vec<Atom>,
-                Vec<Vec<Atom>>,
-                Coord,
-                Face,
-                String,
-            ) = deserialize_params(envelope.params)?;
-            Ok(RpcNotification::InfoShow {
-                title,
-                content,
-                anchor,
-                face,
-                style,
-            })
-        }
-        "info_hide" => Ok(RpcNotification::InfoHide),
-        other => bail!("unsupported rpc method {other}"),
-    }
-}
-
-fn deserialize_params<T>(params: Vec<Value>) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    Ok(serde_json::from_value(Value::Array(params))?)
-}
-
-fn apply_notification(state: &mut AppState, notification: RpcNotification) {
+fn apply_notification(state: &mut AppState, notification: KakouneNotification) {
     match notification {
-        RpcNotification::Draw {
+        KakouneNotification::Draw {
             lines,
             cursor_pos,
             default_face,
@@ -572,7 +418,7 @@ fn apply_notification(state: &mut AppState, notification: RpcNotification) {
                 widget_columns,
             };
         }
-        RpcNotification::DrawStatus {
+        KakouneNotification::DrawStatus {
             prompt,
             content,
             cursor_pos,
@@ -589,13 +435,13 @@ fn apply_notification(state: &mut AppState, notification: RpcNotification) {
                 style,
             });
         }
-        RpcNotification::Refresh { force } => {
+        KakouneNotification::Refresh { force } => {
             let _ = force;
         }
-        RpcNotification::SetUiOptions { options } => {
+        KakouneNotification::SetUiOptions { options } => {
             let _ = options;
         }
-        RpcNotification::MenuShow {
+        KakouneNotification::MenuShow {
             items,
             anchor,
             selected_face,
@@ -611,15 +457,15 @@ fn apply_notification(state: &mut AppState, notification: RpcNotification) {
                 style,
             });
         }
-        RpcNotification::MenuSelect { selected } => {
+        KakouneNotification::MenuSelect { selected } => {
             if let Some(menu) = state.menu.as_mut() {
                 menu.selected = usize::try_from(selected).ok();
             }
         }
-        RpcNotification::MenuHide => {
+        KakouneNotification::MenuHide => {
             state.menu = None;
         }
-        RpcNotification::InfoShow {
+        KakouneNotification::InfoShow {
             title,
             content,
             anchor,
@@ -634,7 +480,7 @@ fn apply_notification(state: &mut AppState, notification: RpcNotification) {
                 style,
             });
         }
-        RpcNotification::InfoHide => {
+        KakouneNotification::InfoHide => {
             state.info = None;
         }
     }
@@ -797,15 +643,14 @@ fn render_menu(
         return None;
     }
 
-    let row = match menu.style.as_str() {
-        "inline" => inline_popup_row(menu.anchor.line, height, rows),
-        "prompt" | "search" => rows.saturating_sub(height),
-        _ => rows.saturating_sub(height),
+    let row = match menu.style {
+        MenuStyle::Inline => inline_popup_row(menu.anchor.line, height, rows),
+        MenuStyle::Prompt | MenuStyle::Search => rows.saturating_sub(height),
     };
-    let column = match menu.style.as_str() {
-        "inline" => menu.anchor.column.min(cols.saturating_sub(width)),
-        "search" => cols.saturating_sub(width),
-        _ => 0,
+    let column = match menu.style {
+        MenuStyle::Inline => menu.anchor.column.min(cols.saturating_sub(width)),
+        MenuStyle::Search => cols.saturating_sub(width),
+        MenuStyle::Prompt => 0,
     };
 
     let rect = CellRect {
@@ -856,7 +701,7 @@ fn render_info(
         return;
     }
 
-    let framed = matches!(info.style.as_str(), "prompt" | "modal");
+    let framed = matches!(info.style, InfoStyle::Prompt | InfoStyle::Modal);
     let title_width = line_display_width(&info.title);
     let content_width = info
         .content
@@ -995,8 +840,8 @@ fn info_rect(
     width: usize,
     height: usize,
 ) -> CellRect {
-    match info.style.as_str() {
-        "inlineAbove" => CellRect {
+    match info.style {
+        InfoStyle::InlineAbove => CellRect {
             row: info
                 .anchor
                 .line
@@ -1006,13 +851,13 @@ fn info_rect(
             width,
             height,
         },
-        "inlineBelow" | "inline" => CellRect {
+        InfoStyle::InlineBelow | InfoStyle::Inline => CellRect {
             row: inline_popup_row(info.anchor.line, height, rows),
             column: info.anchor.column.min(cols.saturating_sub(width)),
             width,
             height,
         },
-        "menuDoc" => {
+        InfoStyle::MenuDoc => {
             if let Some(menu) = menu_rect {
                 let right_column = menu.column + menu.width;
                 let left_column = menu.column.saturating_sub(width);
@@ -1031,14 +876,13 @@ fn info_rect(
                 centered_rect(cols, rows, width, height)
             }
         }
-        "modal" => centered_rect(cols, rows, width, height),
-        "prompt" => CellRect {
+        InfoStyle::Modal => centered_rect(cols, rows, width, height),
+        InfoStyle::Prompt => CellRect {
             row: rows.saturating_sub(height),
             column: cols.saturating_sub(width),
             width,
             height,
         },
-        _ => centered_rect(cols, rows, width, height),
     }
 }
 
@@ -1286,38 +1130,45 @@ fn send_resize(tx: &Sender<String>, window: &Window, renderer: &Renderer) {
     let metrics = renderer.metrics(window.scale_factor());
     let cols = ((size.width as usize).saturating_sub(PADDING * 2) / metrics.cell_width).max(1);
     let rows = ((size.height as usize).saturating_sub(PADDING * 2) / metrics.cell_height).max(1);
-    send_rpc(tx, "resize", json!([rows, cols]));
+    send_request(
+        tx,
+        KakouneRequest::Resize {
+            rows,
+            columns: cols,
+        },
+    );
 }
 
 fn send_keys(tx: &Sender<String>, keys: &[String]) {
-    send_rpc(
+    send_request(
         tx,
-        "keys",
-        Value::Array(keys.iter().cloned().map(Value::String).collect()),
+        KakouneRequest::Keys {
+            keys: keys.to_vec(),
+        },
     );
 }
 
 fn send_mouse_move(tx: &Sender<String>, coord: Coord) {
-    send_rpc(tx, "mouse_move", json!([coord.line, coord.column]));
+    send_request(tx, KakouneRequest::MouseMove { coord });
 }
 
-fn send_mouse_button(tx: &Sender<String>, method: &str, button: MouseButton, coord: Coord) {
+fn send_mouse_button(tx: &Sender<String>, pressed: bool, button: MouseButton, coord: Coord) {
     if let Some(button) = mouse_button_to_kak(button) {
-        send_rpc(tx, method, json!([button, coord.line, coord.column]));
+        let request = if pressed {
+            KakouneRequest::MousePress { button, coord }
+        } else {
+            KakouneRequest::MouseRelease { button, coord }
+        };
+        send_request(tx, request);
     }
 }
 
 fn send_scroll(tx: &Sender<String>, amount: i32, coord: Coord) {
-    send_rpc(tx, "scroll", json!([amount, coord.line, coord.column]));
+    send_request(tx, KakouneRequest::Scroll { amount, coord });
 }
 
-fn send_rpc(tx: &Sender<String>, method: &str, params: Value) {
-    let message = json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-    });
-    let _ = tx.send(message.to_string());
+fn send_request(tx: &Sender<String>, request: KakouneRequest) {
+    let _ = tx.send(request.to_json_line());
 }
 
 fn pointer_position_to_coord(x: f64, y: f64, renderer: &Renderer, window: &Window) -> Coord {
@@ -1328,11 +1179,11 @@ fn pointer_position_to_coord(x: f64, y: f64, renderer: &Renderer, window: &Windo
     Coord { line, column }
 }
 
-fn mouse_button_to_kak(button: MouseButton) -> Option<&'static str> {
+fn mouse_button_to_kak(button: MouseButton) -> Option<MouseButtonName> {
     match button {
-        MouseButton::Left => Some("left"),
-        MouseButton::Right => Some("right"),
-        MouseButton::Middle => Some("middle"),
+        MouseButton::Left => Some(MouseButtonName::Left),
+        MouseButton::Right => Some(MouseButtonName::Right),
+        MouseButton::Middle => Some(MouseButtonName::Middle),
         _ => None,
     }
 }
@@ -1626,7 +1477,7 @@ mod tests {
                 contents: "status".into(),
             }],
             default_face: Face::default(),
-            style: "status".into(),
+            style: StatusStyle::Status,
         };
         let mut prompt_line = status.prompt.clone();
         prompt_line.extend(status.content.clone());
@@ -1681,53 +1532,5 @@ mod tests {
         assert_eq!(config.font_family, "SF Mono");
         assert_eq!(config.font_size, 15.0);
         assert!(config.transparent_menubar);
-    }
-
-    #[test]
-    fn parses_menu_show_payload() {
-        let notification = parse_notification(
-            r#"{"jsonrpc":"2.0","method":"menu_show","params":[[[{"face":{"fg":"default","bg":"default","underline":"default","attributes":[]},"contents":"item"}]],{"line":1,"column":2},{"fg":"white","bg":"blue","underline":"default","attributes":[]},{"fg":"black","bg":"white","underline":"default","attributes":[]},"prompt"]}"#,
-        )
-        .unwrap();
-
-        match notification {
-            RpcNotification::MenuShow {
-                items,
-                anchor,
-                style,
-                ..
-            } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(anchor.line, 1);
-                assert_eq!(anchor.column, 2);
-                assert_eq!(style, "prompt");
-            }
-            other => panic!("unexpected notification: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_info_show_payload() {
-        let notification = parse_notification(
-            r#"{"jsonrpc":"2.0","method":"info_show","params":[[{"face":{"fg":"default","bg":"default","underline":"default","attributes":[]},"contents":"title"}],[[{"face":{"fg":"default","bg":"default","underline":"default","attributes":[]},"contents":"body"}]],{"line":3,"column":4},{"fg":"white","bg":"black","underline":"default","attributes":[]},"modal"]}"#,
-        )
-        .unwrap();
-
-        match notification {
-            RpcNotification::InfoShow {
-                title,
-                content,
-                anchor,
-                style,
-                ..
-            } => {
-                assert_eq!(title.len(), 1);
-                assert_eq!(content.len(), 1);
-                assert_eq!(anchor.line, 3);
-                assert_eq!(anchor.column, 4);
-                assert_eq!(style, "modal");
-            }
-            other => panic!("unexpected notification: {other:?}"),
-        }
     }
 }
