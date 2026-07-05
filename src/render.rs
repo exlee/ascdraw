@@ -11,7 +11,7 @@ use softbuffer::Surface;
 use unicode_width::UnicodeWidthChar;
 use winit::window::Window;
 
-use crate::app::{AppConfig, AppState, InfoState, MenuState, StatusState};
+use crate::app::{AppConfig, AppState, GridState, InfoState, MenuState, StatusState};
 use crate::kakoune_messages::{Atom, Face, InfoStyle, MenuStyle};
 use crate::layout::{LayoutMetrics, PADDING, layout_metrics};
 
@@ -57,6 +57,12 @@ struct CellRect {
     column: usize,
     width: usize,
     height: usize,
+}
+
+#[derive(Clone)]
+struct CursorCell {
+    face: Face,
+    ch: Option<char>,
 }
 
 pub fn render(
@@ -129,6 +135,15 @@ fn render_canvas(canvas: &Canvas, state: &AppState, metrics: &CellMetrics, layou
             layout.top_padding,
         );
     }
+
+    render_grid_cursor(
+        canvas,
+        &state.grid,
+        cols,
+        content_rows,
+        metrics,
+        layout.top_padding,
+    );
 
     if let Some(status) = &state.status {
         render_status(canvas, rows, cols, status, metrics, layout.top_padding);
@@ -614,6 +629,79 @@ fn render_line_at(
     }
 }
 
+fn render_grid_cursor(
+    canvas: &Canvas,
+    grid: &GridState,
+    cols: usize,
+    rows: usize,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    if cols == 0 || rows == 0 {
+        return;
+    }
+
+    let cursor = grid.cursor_pos;
+    if cursor.line >= rows || cursor.column >= cols {
+        return;
+    }
+
+    let cell = cursor_cell(
+        grid.lines.get(cursor.line).map(Vec::as_slice),
+        cursor.column,
+    )
+    .unwrap_or_else(|| CursorCell {
+        face: grid.default_face.clone(),
+        ch: Some(' '),
+    });
+
+    let fg = resolve_face_color(&cell.face.fg, &grid.default_face.fg, FALLBACK_FG);
+    let bg = resolve_face_color(&cell.face.bg, &grid.default_face.bg, FALLBACK_BG);
+    let top = top_padding + cursor.line * metrics.cell_height;
+
+    let mut bg_paint = Paint::default();
+    bg_paint.set_anti_alias(false).set_color(bg.to_color());
+    fill_cells(canvas, cursor.column, top, 1, metrics, &bg_paint);
+
+    let mut fg_paint = Paint::default();
+    fg_paint.set_anti_alias(true).set_color(fg.to_color());
+    if let Some(ch) = cell.ch {
+        draw_glyph(canvas, cursor.column, top, ch, metrics, &fg_paint);
+    }
+
+    draw_cursor_outline(canvas, cursor.column, top, metrics, fg);
+}
+
+fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell> {
+    let line = line?;
+    let mut column = 0;
+
+    for atom in line {
+        for ch in atom.contents.chars() {
+            if ch == '\n' {
+                if column == target_column {
+                    return Some(CursorCell {
+                        face: atom.face.clone(),
+                        ch: Some(' '),
+                    });
+                }
+                continue;
+            }
+
+            let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            if target_column >= column && target_column < column + span {
+                return Some(CursorCell {
+                    face: atom.face.clone(),
+                    ch: Some(ch),
+                });
+            }
+            column += span;
+        }
+    }
+
+    None
+}
+
 pub fn atom_display_width(contents: &str) -> usize {
     contents
         .chars()
@@ -769,6 +857,31 @@ fn fill_cells(
         metrics.cell_height as f32,
     );
     canvas.draw_rect(rect, paint);
+}
+
+fn draw_cursor_outline(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    metrics: &CellMetrics,
+    color: Rgb,
+) {
+    let left = PADDING + column * metrics.cell_width;
+    let stroke = (metrics.cell_width.min(metrics.cell_height) / 10).max(1) as f32;
+    let rect = Rect::from_xywh(
+        left as f32 + stroke / 2.0,
+        top as f32 + stroke / 2.0,
+        metrics.cell_width as f32 - stroke,
+        metrics.cell_height as f32 - stroke,
+    );
+
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(color.to_color())
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_width(stroke);
+    canvas.draw_rect(rect, &paint);
 }
 
 fn draw_glyph(
@@ -999,5 +1112,46 @@ mod tests {
             parse_prefixed_color("rgba:ffffff80"),
             Some(Rgb::new(0xff, 0xff, 0xff))
         );
+    }
+
+    #[test]
+    fn cursor_cell_uses_visible_placeholder_at_end_of_line() {
+        let cursor_face = Face {
+            fg: "black".into(),
+            bg: "white".into(),
+            underline: "default".into(),
+            attributes: Vec::new(),
+        };
+        let line = vec![Atom {
+            face: cursor_face.clone(),
+            contents: "\n".into(),
+        }];
+
+        let cursor = cursor_cell(Some(&line), 0).expect("cursor cell should exist");
+        assert_eq!(cursor.face.bg, "white");
+        assert_eq!(cursor.ch, Some(' '));
+    }
+
+    #[test]
+    fn cursor_cell_finds_character_under_cursor() {
+        let line = vec![
+            Atom {
+                face: Face::default(),
+                contents: "ab".into(),
+            },
+            Atom {
+                face: Face {
+                    fg: "black".into(),
+                    bg: "white".into(),
+                    underline: "default".into(),
+                    attributes: Vec::new(),
+                },
+                contents: "c".into(),
+            },
+        ];
+
+        let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
+        assert_eq!(cursor.ch, Some('c'));
+        assert_eq!(cursor.face.bg, "white");
     }
 }
