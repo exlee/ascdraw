@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
-    AlphaType, Canvas, Color, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo, Paint,
+    AlphaType, Canvas, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo, Paint,
     PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
 };
 use softbuffer::Surface;
@@ -12,11 +12,14 @@ use unicode_width::UnicodeWidthChar;
 use winit::window::Window;
 
 use crate::app::{AppConfig, AppState, GridState, InfoState, MenuState, StatusState};
+use crate::face_resolution::{
+    ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
+};
 use crate::kakoune_messages::{Atom, Face, InfoStyle, MenuStyle};
 use crate::layout::{LayoutMetrics, PADDING, layout_metrics};
 
-const FALLBACK_BG: Rgb = Rgb::new(0x1e, 0x1e, 0x2e);
-const FALLBACK_FG: Rgb = Rgb::new(0xdd, 0xdd, 0xdd);
+const FALLBACK_BG: Rgba = Rgba::rgb(0x1e, 0x1e, 0x2e);
+const FALLBACK_FG: Rgba = Rgba::rgb(0xdd, 0xdd, 0xdd);
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -33,23 +36,6 @@ pub struct CellMetrics {
     pub cell_width: usize,
     pub cell_height: usize,
     pub baseline_offset: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Rgb {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-
-impl Rgb {
-    const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    fn to_color(self) -> Color {
-        Color::from_rgb(self.r, self.g, self.b)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,8 +113,8 @@ pub fn render(
 }
 
 fn render_canvas(canvas: &Canvas, state: &AppState, metrics: &CellMetrics, layout: LayoutMetrics) {
-    let bg = resolve_color(&state.grid.default_face.bg, FALLBACK_BG).to_color();
-    canvas.clear(bg);
+    let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+    canvas.clear(default_face.bg.to_color());
 
     let cols = layout.cols;
     let rows = layout.rows;
@@ -647,19 +633,18 @@ fn render_info(
     }
 
     let rect = info_rect(info, menu_rect, cols, rows, width, height);
-    let rendered_info = modal_background_info(info);
-    fill_rect(canvas, rect, &rendered_info.face, metrics, top_padding);
+    fill_rect(canvas, rect, &info.face, metrics, top_padding);
 
     if framed {
-        render_framed_info(canvas, &rendered_info, rect, metrics, top_padding);
+        render_framed_info(canvas, info, rect, metrics, top_padding);
     } else {
-        for (index, line) in rendered_info.content.iter().take(rect.height).enumerate() {
+        for (index, line) in info.content.iter().take(rect.height).enumerate() {
             render_line_at(
                 canvas,
                 rect.row + index,
                 rect.column,
                 line,
-                &rendered_info.face,
+                &info.face,
                 rect.column + rect.width,
                 metrics,
                 top_padding,
@@ -800,24 +785,6 @@ fn render_framed_info_body(
     );
 }
 
-fn modal_background_info(info: &InfoState) -> InfoState {
-    if !matches!(info.style, InfoStyle::Modal) {
-        return info.clone();
-    }
-
-    InfoState {
-        title: line_with_face(&info.title, &info.face),
-        content: info
-            .content
-            .iter()
-            .map(|line| line_with_face(line, &info.face))
-            .collect(),
-        anchor: info.anchor,
-        face: info.face.clone(),
-        style: info.style,
-    }
-}
-
 fn info_rect(
     info: &InfoState,
     menu_rect: Option<CellRect>,
@@ -934,12 +901,6 @@ fn render_line_at(
     fg_paint.set_anti_alias(true);
 
     for atom in line {
-        let fg = resolve_face_color(&atom.face.fg, &default_face.fg, FALLBACK_FG);
-        let bg = resolve_face_color(&atom.face.bg, &default_face.bg, FALLBACK_BG);
-        let _ = (&atom.face.underline, &atom.face.attributes);
-        bg_paint.set_color(bg.to_color());
-        fg_paint.set_color(fg.to_color());
-
         let atom_width = atom_display_width(&atom.contents);
         if atom_width == 0 {
             continue;
@@ -950,7 +911,11 @@ fn render_line_at(
         if atom_width == 0 {
             return;
         }
+        let resolved = resolve_derived_face(default_face, &atom.face, FALLBACK_FG, FALLBACK_BG);
+        bg_paint.set_color(resolved.bg.to_color());
+        fg_paint.set_color(resolved.fg.to_color());
         fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
+        let font = font_for_face(metrics, &resolved);
 
         for ch in atom.contents.chars() {
             if ch == '\n' {
@@ -958,12 +923,14 @@ fn render_line_at(
             }
 
             let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            draw_glyph(canvas, column, top, ch, metrics, &fg_paint);
+            draw_glyph(canvas, column, top, ch, &font, metrics, &fg_paint);
             column += span;
             if column >= max_columns {
+                draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
                 return;
             }
         }
+        draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
     }
 }
 
@@ -993,19 +960,24 @@ fn render_grid_cursor(
         ch: Some(' '),
     });
 
-    let fg = resolve_face_color(&cell.face.fg, &grid.default_face.fg, FALLBACK_FG);
-    let bg = resolve_face_color(&cell.face.bg, &grid.default_face.bg, FALLBACK_BG);
+    let resolved = resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
     let top = top_padding + cursor.line * metrics.cell_height;
 
     let mut bg_paint = Paint::default();
-    bg_paint.set_anti_alias(false).set_color(bg.to_color());
+    bg_paint
+        .set_anti_alias(false)
+        .set_color(resolved.bg.to_color());
     fill_cells(canvas, cursor.column, top, 1, metrics, &bg_paint);
 
     let mut fg_paint = Paint::default();
-    fg_paint.set_anti_alias(true).set_color(fg.to_color());
+    fg_paint
+        .set_anti_alias(true)
+        .set_color(resolved.fg.to_color());
+    let font = font_for_face(metrics, &resolved);
     if let Some(ch) = cell.ch {
-        draw_glyph(canvas, cursor.column, top, ch, metrics, &fg_paint);
+        draw_glyph(canvas, cursor.column, top, ch, &font, metrics, &fg_paint);
     }
+    draw_text_decorations(canvas, cursor.column, top, 1, metrics, &resolved);
 }
 
 fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell> {
@@ -1060,7 +1032,9 @@ fn fill_line_background(
     metrics: &CellMetrics,
     top_padding: usize,
 ) {
-    let bg = resolve_face_color(&default_face.bg, &default_face.bg, FALLBACK_BG).to_color();
+    let bg = resolve_root_face(default_face, FALLBACK_FG, FALLBACK_BG)
+        .bg
+        .to_color();
     let mut paint = Paint::default();
     paint.set_anti_alias(false).set_color(bg);
     fill_cells(
@@ -1082,7 +1056,9 @@ fn fill_line_segment(
     metrics: &CellMetrics,
     top_padding: usize,
 ) {
-    let bg = resolve_face_color(&face.bg, &face.bg, FALLBACK_BG).to_color();
+    let bg = resolve_root_face(face, FALLBACK_FG, FALLBACK_BG)
+        .bg
+        .to_color();
     let mut paint = Paint::default();
     paint.set_anti_alias(false).set_color(bg);
     fill_cells(
@@ -1113,35 +1089,6 @@ fn fill_rect(
             top_padding,
         );
     }
-}
-
-fn render_string_line(
-    canvas: &Canvas,
-    row: usize,
-    column: usize,
-    text: &str,
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top_padding: usize,
-) {
-    if text.is_empty() {
-        return;
-    }
-
-    let atoms = [Atom {
-        face: Face::default(),
-        contents: text.to_string(),
-    }];
-    render_line_at(
-        canvas,
-        row,
-        column,
-        &atoms,
-        default_face,
-        column + atom_display_width(text),
-        metrics,
-        top_padding,
-    );
 }
 
 fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
@@ -1177,18 +1124,33 @@ fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
     result
 }
 
-fn line_with_face(line: &[Atom], face: &Face) -> Vec<Atom> {
-    line.iter()
-        .map(|atom| Atom {
-            face: Face {
-                fg: face.fg.clone(),
-                bg: face.bg.clone(),
-                underline: atom.face.underline.clone(),
-                attributes: atom.face.attributes.clone(),
-            },
-            contents: atom.contents.clone(),
-        })
-        .collect()
+fn render_string_line(
+    canvas: &Canvas,
+    row: usize,
+    column: usize,
+    text: &str,
+    default_face: &Face,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let atoms = [Atom {
+        face: Face::default(),
+        contents: text.to_string(),
+    }];
+    render_line_at(
+        canvas,
+        row,
+        column,
+        &atoms,
+        default_face,
+        column + atom_display_width(text),
+        metrics,
+        top_padding,
+    );
 }
 
 fn fill_cells(
@@ -1214,6 +1176,7 @@ fn draw_glyph(
     column: usize,
     top: usize,
     ch: char,
+    font: &Font,
     metrics: &CellMetrics,
     paint: &Paint,
 ) {
@@ -1225,71 +1188,83 @@ fn draw_glyph(
     let baseline = top as f32 + metrics.baseline_offset;
     let mut utf8 = [0; 4];
     let text = ch.encode_utf8(&mut utf8);
-    canvas.draw_str(text, (left as f32, baseline), &metrics.font, paint);
+    canvas.draw_str(text, (left as f32, baseline), font, paint);
 }
 
-fn resolve_face_color(color: &str, inherited: &str, fallback: Rgb) -> Rgb {
-    if color == "default" {
-        resolve_color(inherited, fallback)
-    } else {
-        resolve_color(color, fallback)
-    }
+fn font_for_face(metrics: &CellMetrics, face: &ResolvedFace) -> Font {
+    let mut font = metrics.font.clone();
+    font.set_embolden(face.bold);
+    font.set_skew_x(if face.italic { -0.2 } else { 0.0 });
+    font
 }
 
-fn resolve_color(color: &str, fallback: Rgb) -> Rgb {
-    if color == "default" {
-        return fallback;
+fn draw_text_decorations(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    width_in_cells: usize,
+    metrics: &CellMetrics,
+    face: &ResolvedFace,
+) {
+    if width_in_cells == 0 {
+        return;
     }
 
-    if let Some(rgb) = parse_prefixed_color(color) {
-        return rgb;
+    let left = PADDING + column * metrics.cell_width;
+    let width = metrics.cell_width * width_in_cells;
+    let baseline = top as f32 + metrics.baseline_offset;
+    let stroke_width = (metrics.cell_height as f32 / 14.0).max(1.0);
+    let decoration_color = face.underline.unwrap_or(face.fg).to_color();
+
+    if let Some(style) = face.underline_style {
+        let mut paint = Paint::default();
+        paint
+            .set_anti_alias(true)
+            .set_color(decoration_color)
+            .set_stroke_width(stroke_width);
+
+        match style {
+            UnderlineStyle::Straight => {
+                let y = baseline + stroke_width;
+                canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
+            }
+            UnderlineStyle::Double => {
+                let y = baseline + stroke_width;
+                let gap = stroke_width + 1.0;
+                canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
+                canvas.draw_line(
+                    (left as f32, y + gap),
+                    ((left + width) as f32, y + gap),
+                    &paint,
+                );
+            }
+            UnderlineStyle::Curly => {
+                let y = baseline + stroke_width;
+                let wave = (metrics.cell_height as f32 / 8.0).max(1.5);
+                let mut x = left as f32;
+                let end = (left + width) as f32;
+                let step = (metrics.cell_width as f32 / 2.0).max(2.0);
+                let mut up = true;
+                while x < end {
+                    let next = (x + step).min(end);
+                    let next_y = if up { y - wave } else { y + wave };
+                    canvas.draw_line((x, y), (next, next_y), &paint);
+                    x = next;
+                    up = !up;
+                }
+            }
+        }
     }
 
-    match color {
-        "black" => Rgb::new(0x00, 0x00, 0x00),
-        "white" => Rgb::new(0xff, 0xff, 0xff),
-        "red" => Rgb::new(0xff, 0x55, 0x55),
-        "green" => Rgb::new(0x50, 0xfa, 0x7b),
-        "yellow" => Rgb::new(0xf1, 0xfa, 0x8c),
-        "blue" => Rgb::new(0x62, 0xd6, 0xe8),
-        "magenta" => Rgb::new(0xff, 0x79, 0xc6),
-        "cyan" => Rgb::new(0x8b, 0xe9, 0xfd),
-        _ => fallback,
+    if face.strikethrough {
+        let mut paint = Paint::default();
+        paint
+            .set_anti_alias(true)
+            .set_color(face.fg.to_color())
+            .set_stroke_width(stroke_width);
+        let y = top as f32 + metrics.cell_height as f32 * 0.55;
+        canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
     }
-}
-
-fn parse_prefixed_color(value: &str) -> Option<Rgb> {
-    if let Some(rgb) = value.strip_prefix("rgb:").and_then(parse_hex_color) {
-        return Some(rgb);
-    }
-    if let Some(rgb) = value.strip_prefix("rgba:").and_then(parse_rgba_color) {
-        return Some(rgb);
-    }
-    parse_hex_color(value)
-}
-
-fn parse_hex_color(value: &str) -> Option<Rgb> {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    if hex.len() != 6 {
-        return None;
-    }
-
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Rgb::new(r, g, b))
-}
-
-fn parse_rgba_color(value: &str) -> Option<Rgb> {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    if hex.len() != 8 {
-        return None;
-    }
-
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Rgb::new(r, g, b))
 }
 
 pub fn load_renderer(config: &AppConfig) -> Renderer {
@@ -1457,9 +1432,24 @@ mod tests {
 
     #[test]
     fn parses_rgba_colors_by_ignoring_alpha() {
+        let resolved = resolve_root_face(
+            &Face {
+                fg: "rgba:ffffff80".into(),
+                bg: "default".into(),
+                underline: "default".into(),
+                attributes: Vec::new(),
+            },
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
         assert_eq!(
-            parse_prefixed_color("rgba:ffffff80"),
-            Some(Rgb::new(0xff, 0xff, 0xff))
+            resolved.fg,
+            Rgba {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+                a: 0x80
+            }
         );
     }
     #[test]
@@ -1520,106 +1510,6 @@ mod tests {
         assert_eq!(layout.visible_columns, 6);
         assert_eq!(layout.total_columns, 6);
         assert_eq!(layout.column_width, 6);
-    }
-
-    #[test]
-    fn modal_background_info_overrides_title_and_content_backgrounds() {
-        let info = InfoState {
-            title: vec![Atom {
-                face: Face {
-                    fg: "white".into(),
-                    bg: "red".into(),
-                    underline: "default".into(),
-                    attributes: Vec::new(),
-                },
-                contents: "title".into(),
-            }],
-            content: vec![vec![Atom {
-                face: Face {
-                    fg: "black".into(),
-                    bg: "blue".into(),
-                    underline: "default".into(),
-                    attributes: Vec::new(),
-                },
-                contents: "body".into(),
-            }]],
-            anchor: Coord { line: 0, column: 0 },
-            face: Face {
-                fg: "default".into(),
-                bg: "green".into(),
-                underline: "default".into(),
-                attributes: Vec::new(),
-            },
-            style: InfoStyle::Modal,
-        };
-
-        let rendered = modal_background_info(&info);
-        assert_eq!(rendered.face.bg, "green");
-        assert_eq!(rendered.title[0].face.bg, "green");
-        assert_eq!(rendered.title[0].face.fg, "default");
-        assert_eq!(rendered.content[0][0].face.bg, "green");
-        assert_eq!(rendered.content[0][0].face.fg, "default");
-    }
-
-    #[test]
-    fn non_modal_info_keeps_original_backgrounds() {
-        let info = InfoState {
-            title: vec![Atom {
-                face: Face {
-                    fg: "white".into(),
-                    bg: "red".into(),
-                    underline: "default".into(),
-                    attributes: Vec::new(),
-                },
-                contents: "title".into(),
-            }],
-            content: vec![vec![Atom {
-                face: Face {
-                    fg: "black".into(),
-                    bg: "blue".into(),
-                    underline: "default".into(),
-                    attributes: Vec::new(),
-                },
-                contents: "body".into(),
-            }]],
-            anchor: Coord { line: 0, column: 0 },
-            face: Face {
-                fg: "default".into(),
-                bg: "green".into(),
-                underline: "default".into(),
-                attributes: Vec::new(),
-            },
-            style: InfoStyle::Prompt,
-        };
-
-        let rendered = modal_background_info(&info);
-        assert_eq!(rendered.title[0].face.bg, "red");
-        assert_eq!(rendered.content[0][0].face.bg, "blue");
-    }
-
-    #[test]
-    fn line_with_face_uses_top_level_colors_and_keeps_text_attributes() {
-        let line = vec![Atom {
-            face: Face {
-                fg: "red".into(),
-                bg: "blue".into(),
-                underline: "underline".into(),
-                attributes: vec!["bold".into()],
-            },
-            contents: "body".into(),
-        }];
-        let face = Face {
-            fg: "white".into(),
-            bg: "gray".into(),
-            underline: "default".into(),
-            attributes: Vec::new(),
-        };
-
-        let rendered = line_with_face(&line, &face);
-        assert_eq!(rendered[0].face.fg, "white");
-        assert_eq!(rendered[0].face.bg, "gray");
-        assert_eq!(rendered[0].face.underline, "underline");
-        assert_eq!(rendered[0].face.attributes, vec!["bold"]);
     }
 
     #[test]

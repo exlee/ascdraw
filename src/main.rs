@@ -13,6 +13,7 @@ use winit::window::WindowAttributes;
 use winit::window::WindowLevel;
 
 mod app;
+mod face_resolution;
 mod input;
 mod kakoune_messages;
 mod kakoune_process;
