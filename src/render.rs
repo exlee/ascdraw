@@ -94,7 +94,13 @@ pub fn render(
         canvas,
         state,
         &metrics,
-        layout_metrics(width, height, &metrics, config.transparent_menubar),
+        layout_metrics(
+            width,
+            height,
+            &metrics,
+            config.transparent_menubar,
+            window.scale_factor(),
+        ),
     );
 
     buffer

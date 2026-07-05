@@ -12,12 +12,14 @@ use crate::render::Renderer;
 
 pub fn send_resize(tx: &Sender<String>, window: &Window, renderer: &Renderer, config: &AppConfig) {
     let size = window.inner_size();
-    let metrics = renderer.metrics(window.scale_factor());
+    let scale_factor = window.scale_factor();
+    let metrics = renderer.metrics(scale_factor);
     let layout = layout_metrics(
         size.width as usize,
         size.height as usize,
         &metrics,
         config.transparent_menubar,
+        scale_factor,
     );
     send_request(
         tx,
@@ -67,8 +69,9 @@ pub fn pointer_position_to_coord(
     window: &Window,
     config: &AppConfig,
 ) -> Coord {
-    let metrics = renderer.metrics(window.scale_factor());
-    let top_padding = content_top_padding(&metrics, config.transparent_menubar);
+    let scale_factor = window.scale_factor();
+    let metrics = renderer.metrics(scale_factor);
+    let top_padding = content_top_padding(scale_factor, config.transparent_menubar);
     let column =
         ((x - PADDING as f64).max(0.0) / metrics.cell_width.max(1) as f64).floor() as usize;
     let line =
