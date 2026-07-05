@@ -523,7 +523,7 @@ fn render_canvas(
 
     let cols = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let rows = height.saturating_sub(PADDING * 2) / metrics.cell_height.max(1);
-    let status_rows = state.status.as_ref().map(status_rows).unwrap_or(0);
+    let status_rows = usize::from(state.status.is_some());
     let grid_rows = rows.saturating_sub(status_rows);
 
     for (row_index, line) in state.grid.lines.iter().take(grid_rows).enumerate() {
@@ -541,14 +541,6 @@ fn render_canvas(
         render_status(canvas, rows, cols, status, metrics);
     }
 
-    if state.grid.cursor_pos.line < grid_rows {
-        render_cursor(
-            canvas,
-            state.grid.cursor_pos,
-            &state.grid.default_face,
-            metrics,
-        );
-    }
 }
 
 fn render_status(
@@ -558,43 +550,38 @@ fn render_status(
     status: &StatusState,
     metrics: &CellMetrics,
 ) {
-    let mut bottom_row = total_rows.saturating_sub(1);
+    let row = total_rows.saturating_sub(1);
+    fill_line_background(canvas, row, cols, &status.default_face, metrics);
+
+    let mut prompt_line = status.prompt.clone();
+    prompt_line.extend(status.content.clone());
+
+    let mode_width = line_display_width(&status.mode_line);
+    let right_start = cols.saturating_sub(mode_width);
+    let prompt_limit = if prompt_line.is_empty() { cols } else { right_start };
+
+    if !prompt_line.is_empty() {
+        render_line_at(
+            canvas,
+            row,
+            0,
+            &prompt_line,
+            &status.default_face,
+            prompt_limit,
+            metrics,
+        );
+    }
 
     if !status.mode_line.is_empty() {
-        render_line(
+        render_line_at(
             canvas,
-            bottom_row,
+            row,
+            right_start,
             &status.mode_line,
             &status.default_face,
             cols,
             metrics,
         );
-        bottom_row = bottom_row.saturating_sub(1);
-    }
-
-    if !status.prompt.is_empty() || !status.content.is_empty() {
-        let mut line = status.prompt.clone();
-        line.extend(status.content.clone());
-        render_line(
-            canvas,
-            bottom_row,
-            &line,
-            &status.default_face,
-            cols,
-            metrics,
-        );
-
-        if status.cursor_pos >= 0 {
-            render_cursor(
-                canvas,
-                Coord {
-                    line: bottom_row,
-                    column: status.cursor_pos as usize,
-                },
-                &status.default_face,
-                metrics,
-            );
-        }
     }
 }
 
@@ -606,14 +593,26 @@ fn render_line(
     max_columns: usize,
     metrics: &CellMetrics,
 ) {
+    render_line_at(canvas, row, 0, line, default_face, max_columns, metrics);
+}
+
+fn render_line_at(
+    canvas: &Canvas,
+    row: usize,
+    start_column: usize,
+    line: &[Atom],
+    default_face: &Face,
+    max_columns: usize,
+    metrics: &CellMetrics,
+) {
     let top = PADDING + row * metrics.cell_height;
-    let mut column = 0usize;
+    let mut column = start_column;
     let mut bg_paint = Paint::default();
     bg_paint.set_anti_alias(false);
     let mut fg_paint = Paint::default();
     fg_paint.set_anti_alias(true);
 
-    for (atom_index, atom) in line.iter().enumerate() {
+    for atom in line {
         let fg = resolve_face_color(&atom.face.fg, &default_face.fg, FALLBACK_FG);
         let bg = resolve_face_color(&atom.face.bg, &default_face.bg, FALLBACK_BG);
         let _ = (&atom.face.underline, &atom.face.attributes);
@@ -622,14 +621,6 @@ fn render_line(
 
         let atom_width = atom_display_width(&atom.contents);
         if atom_width == 0 {
-            let remaining_width = remaining_line_width(line, atom_index + 1);
-            let spacer_width = max_columns
-                .saturating_sub(column)
-                .saturating_sub(remaining_width);
-            if spacer_width > 0 {
-                fill_cells(canvas, column, top, spacer_width, metrics, &bg_paint);
-                column += spacer_width;
-            }
             continue;
         }
 
@@ -665,11 +656,24 @@ fn atom_display_width(contents: &str) -> usize {
         .sum()
 }
 
-fn remaining_line_width(line: &[Atom], start_index: usize) -> usize {
-    line[start_index..]
+fn line_display_width(line: &[Atom]) -> usize {
+    line
         .iter()
         .map(|atom| atom_display_width(&atom.contents))
         .sum()
+}
+
+fn fill_line_background(
+    canvas: &Canvas,
+    row: usize,
+    cols: usize,
+    default_face: &Face,
+    metrics: &CellMetrics,
+) {
+    let bg = resolve_face_color(&default_face.bg, &default_face.bg, FALLBACK_BG).to_color();
+    let mut paint = Paint::default();
+    paint.set_anti_alias(false).set_color(bg);
+    fill_cells(canvas, 0, PADDING + row * metrics.cell_height, cols, metrics, &paint);
 }
 
 fn fill_cells(
@@ -712,21 +716,6 @@ fn draw_glyph(
         &metrics.font,
         paint,
     );
-}
-
-fn render_cursor(canvas: &Canvas, cursor_pos: Coord, default_face: &Face, metrics: &CellMetrics) {
-    let cursor_x = PADDING + cursor_pos.column * metrics.cell_width;
-    let cursor_y = PADDING + cursor_pos.line * metrics.cell_height;
-    let color = resolve_face_color(&default_face.fg, &default_face.fg, FALLBACK_FG).to_color();
-    let rect = Rect::from_xywh(
-        cursor_x as f32,
-        (cursor_y + metrics.cell_height.saturating_sub(2)) as f32,
-        metrics.cell_width as f32,
-        2.0,
-    );
-    let mut paint = Paint::default();
-    paint.set_anti_alias(false).set_color(color);
-    canvas.draw_rect(rect, &paint);
 }
 
 fn send_resize(tx: &Sender<String>, window: &Window, renderer: &Renderer) {
@@ -806,17 +795,6 @@ fn dominant_scroll_component(x: f64, y: f64) -> i32 {
     } else {
         0
     }
-}
-
-fn status_rows(status: &StatusState) -> usize {
-    let mut rows = 0;
-    if !status.mode_line.is_empty() {
-        rows += 1;
-    }
-    if !status.prompt.is_empty() || !status.content.is_empty() {
-        rows += 1;
-    }
-    rows
 }
 
 fn key_event_to_kak(event: &KeyEvent, modifiers: ModifiersState) -> Option<String> {
@@ -1065,7 +1043,10 @@ mod tests {
             default_face: Face::default(),
             style: "status".into(),
         };
-        assert_eq!(status_rows(&status), 2);
+        let mut prompt_line = status.prompt.clone();
+        prompt_line.extend(status.content.clone());
+        assert_eq!(line_display_width(&prompt_line), 2);
+        assert_eq!(line_display_width(&status.mode_line), 6);
     }
 
     #[test]
@@ -1081,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_status_atom_becomes_right_aligning_spacer() {
+    fn line_display_width_ignores_empty_spacer_atoms() {
         let line = vec![
             Atom {
                 face: Face::default(),
@@ -1097,9 +1078,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(atom_display_width(&line[0].contents), 4);
         assert_eq!(atom_display_width(&line[1].contents), 0);
-        assert_eq!(remaining_line_width(&line, 2), 5);
-        assert_eq!(20usize.saturating_sub(4).saturating_sub(5), 11);
+        assert_eq!(line_display_width(&line), 9);
     }
 }
