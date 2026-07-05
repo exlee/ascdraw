@@ -613,23 +613,30 @@ fn render_line(
     let mut fg_paint = Paint::default();
     fg_paint.set_anti_alias(true);
 
-    for atom in line {
+    for (atom_index, atom) in line.iter().enumerate() {
         let fg = resolve_face_color(&atom.face.fg, &default_face.fg, FALLBACK_FG);
         let bg = resolve_face_color(&atom.face.bg, &default_face.bg, FALLBACK_BG);
         let _ = (&atom.face.underline, &atom.face.attributes);
         bg_paint.set_color(bg.to_color());
         fg_paint.set_color(fg.to_color());
 
+        let atom_width = atom_display_width(&atom.contents);
+        if atom_width == 0 {
+            let remaining_width = remaining_line_width(line, atom_index + 1);
+            let spacer_width = max_columns
+                .saturating_sub(column)
+                .saturating_sub(remaining_width);
+            if spacer_width > 0 {
+                fill_cells(canvas, column, top, spacer_width, metrics, &bg_paint);
+                column += spacer_width;
+            }
+            continue;
+        }
+
         let atom_start = column;
-        let mut atom_width = 0usize;
-        for ch in atom.contents.chars() {
-            if ch == '\n' {
-                continue;
-            }
-            atom_width += UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            if atom_start + atom_width >= max_columns {
-                break;
-            }
+        let atom_width = atom_width.min(max_columns.saturating_sub(atom_start));
+        if atom_width == 0 {
+            return;
         }
         if atom_width > 0 {
             fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
@@ -648,6 +655,21 @@ fn render_line(
             }
         }
     }
+}
+
+fn atom_display_width(contents: &str) -> usize {
+    contents
+        .chars()
+        .filter(|&ch| ch != '\n')
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(1).max(1))
+        .sum()
+}
+
+fn remaining_line_width(line: &[Atom], start_index: usize) -> usize {
+    line[start_index..]
+        .iter()
+        .map(|atom| atom_display_width(&atom.contents))
+        .sum()
 }
 
 fn fill_cells(
@@ -1056,5 +1078,28 @@ mod tests {
             scroll_delta_to_kak(MouseScrollDelta::LineDelta(0.0, -2.0)),
             Some(2)
         );
+    }
+
+    #[test]
+    fn empty_status_atom_becomes_right_aligning_spacer() {
+        let line = vec![
+            Atom {
+                face: Face::default(),
+                contents: "left".into(),
+            },
+            Atom {
+                face: Face::default(),
+                contents: "".into(),
+            },
+            Atom {
+                face: Face::default(),
+                contents: "right".into(),
+            },
+        ];
+
+        assert_eq!(atom_display_width(&line[0].contents), 4);
+        assert_eq!(atom_display_width(&line[1].contents), 0);
+        assert_eq!(remaining_line_width(&line, 2), 5);
+        assert_eq!(20usize.saturating_sub(4).saturating_sub(5), 11);
     }
 }
