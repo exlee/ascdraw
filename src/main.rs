@@ -68,6 +68,20 @@ fn apply_platform_window_attributes(
     attrs
 }
 
+#[cfg(target_os = "macos")]
+fn native_window_title<'a>(config: &AppConfig, title: &'a str) -> &'a str {
+    if config.transparent_menubar {
+        ""
+    } else {
+        title
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_window_title<'a>(_config: &AppConfig, title: &'a str) -> &'a str {
+    title
+}
+
 fn default_launch_directory(current_dir: &Path, home: Option<OsString>) -> Option<PathBuf> {
     if current_dir == Path::new("/") {
         home.map(PathBuf::from)
@@ -124,7 +138,7 @@ impl ClientWindow {
 fn window_attributes(config: &AppConfig, window_icon: Option<Icon>) -> WindowAttributes {
     apply_platform_window_attributes(
         WindowAttributes::default()
-            .with_title("kakvide")
+            .with_title(native_window_title(config, "kakvide"))
             .with_window_level(WindowLevel::Normal)
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
             .with_window_icon(window_icon),
@@ -460,7 +474,9 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                     let old_window_title = client.state.window_title.clone();
                     apply_notification(&mut client.state, *notification);
                     if client.state.window_title != old_window_title {
-                        client.window.set_title(&client.state.window_title);
+                        client
+                            .window
+                            .set_title(native_window_title(&config, &client.state.window_title));
                     }
                     if should_force_resize {
                         client.send_resize(&config);
