@@ -18,15 +18,17 @@ mod kakoune_messages;
 mod kakoune_process;
 mod layout;
 mod render;
+mod user_keys;
 
 use app::{AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
 use input::{
-    font_size_delta, key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys,
+    key_event_to_kak, pointer_position_to_coord, scroll_delta_to_kak, send_keys,
     send_mouse_button, send_mouse_move, send_resize, send_scroll,
 };
 use kakoune_messages::{Coord, KakouneNotification};
 use kakoune_process::{spawn_kakoune, spawn_stdin_writer};
 use render::{load_renderer, render, resize_surface};
+use user_keys::{UserAction, UserKeys};
 
 #[cfg(target_os = "macos")]
 fn apply_platform_window_attributes(
@@ -53,6 +55,7 @@ fn apply_platform_window_attributes(
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = load_config()?;
+    let user_keys = UserKeys::from_config(&config.keys)?;
 
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let attrs = apply_platform_window_attributes(
@@ -134,8 +137,13 @@ fn main() -> Result<()> {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state == ElementState::Pressed {
-                        if let Some(delta) = font_size_delta(&event, modifiers) {
-                            if renderer.adjust_font_size(delta) {
+                        if let Some(action) = user_keys.action_for_event(&event, modifiers) {
+                            let changed = match action {
+                                UserAction::FontScaleUp => renderer.adjust_font_size(1.0),
+                                UserAction::FontScaleDown => renderer.adjust_font_size(-1.0),
+                                UserAction::FontScaleReset => renderer.reset_font_size(),
+                            };
+                            if changed {
                                 send_resize(&command_tx, &window, &renderer, &config);
                                 window.request_redraw();
                             }

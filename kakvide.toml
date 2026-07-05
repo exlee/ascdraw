@@ -1,3 +1,8 @@
 font-family = "SF Mono"
 font-size = 15.0
 transparent-menubar = true
+
+[keys]
+font-scale-up = "Cmd-="
+font-scale-down = "Cmd--"
+font-scale-reset = "Cmd-0"

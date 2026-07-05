@@ -3,10 +3,12 @@ use std::fs;
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
+use toml::Value;
 
 use crate::kakoune_messages::{
     Atom, Coord, Face, InfoStyle, KakouneNotification, MenuStyle, StatusStyle,
 };
+use crate::user_keys::UserKeysConfig;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -21,15 +23,12 @@ pub struct AppConfig {
     pub font_family: String,
     pub font_size: f32,
     pub transparent_menubar: bool,
+    pub keys: UserKeysConfig,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self {
-            font_family: "SF Mono".to_string(),
-            font_size: 15.0,
-            transparent_menubar: true,
-        }
+        bundled_default_config()
     }
 }
 
@@ -119,6 +118,56 @@ pub fn load_config() -> Result<AppConfig> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
         Err(error) => Err(error).with_context(|| format!("failed to read {path}")),
     }
+}
+
+fn bundled_default_config() -> AppConfig {
+    let value = bundled_default_value();
+    AppConfig {
+        font_family: value
+            .get("font-family")
+            .and_then(Value::as_str)
+            .expect("bundled kakvide.toml should set font-family")
+            .to_string(),
+        font_size: value
+            .get("font-size")
+            .and_then(Value::as_float)
+            .expect("bundled kakvide.toml should set font-size") as f32,
+        transparent_menubar: value
+            .get("transparent-menubar")
+            .and_then(Value::as_bool)
+            .expect("bundled kakvide.toml should set transparent-menubar"),
+        keys: bundled_default_keys(),
+    }
+}
+
+pub fn bundled_default_keys() -> UserKeysConfig {
+    let value = bundled_default_value();
+    let keys = value
+        .get("keys")
+        .and_then(Value::as_table)
+        .expect("bundled kakvide.toml should contain a [keys] section");
+
+    UserKeysConfig {
+        font_scale_up: keys
+            .get("font-scale-up")
+            .and_then(Value::as_str)
+            .expect("bundled [keys] should set font-scale-up")
+            .to_string(),
+        font_scale_down: keys
+            .get("font-scale-down")
+            .and_then(Value::as_str)
+            .expect("bundled [keys] should set font-scale-down")
+            .to_string(),
+        font_scale_reset: keys
+            .get("font-scale-reset")
+            .and_then(Value::as_str)
+            .expect("bundled [keys] should set font-scale-reset")
+            .to_string(),
+    }
+}
+
+fn bundled_default_value() -> Value {
+    toml::from_str(include_str!("../kakvide.toml")).expect("bundled kakvide.toml should parse")
 }
 
 pub fn apply_notification(state: &mut AppState, notification: KakouneNotification) {
@@ -216,5 +265,6 @@ mod tests {
         assert_eq!(config.font_family, "SF Mono");
         assert_eq!(config.font_size, 15.0);
         assert!(config.transparent_menubar);
+        assert_eq!(config.keys, UserKeysConfig::default());
     }
 }

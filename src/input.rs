@@ -122,26 +122,6 @@ pub fn key_event_to_kak(event: &KeyEvent, modifiers: ModifiersState) -> Option<S
     }
 }
 
-pub fn font_size_delta(event: &KeyEvent, modifiers: ModifiersState) -> Option<f32> {
-    if !modifiers.super_key() {
-        return None;
-    }
-
-    font_size_delta_for_key(&event.key_without_modifiers(), modifiers)
-}
-
-fn font_size_delta_for_key(key: &Key, modifiers: ModifiersState) -> Option<f32> {
-    if !modifiers.super_key() {
-        return None;
-    }
-
-    match key {
-        Key::Character(text) if text == "-" => Some(-1.0),
-        Key::Character(text) if text == "=" => Some(1.0),
-        _ => None,
-    }
-}
-
 fn modified_character_key_to_kak(key: &Key, modifiers: ModifiersState) -> Option<String> {
     let Key::Character(text) = key else {
         return None;
@@ -227,26 +207,6 @@ mod tests {
         assert_eq!(
             modified_character_key_to_kak(&key, modifiers).as_deref(),
             Some("<s-c-p>")
-        );
-    }
-
-    #[test]
-    fn maps_super_minus_to_font_size_decrease() {
-        let modifiers = ModifiersState::SUPER;
-
-        assert_eq!(
-            font_size_delta_for_key(&Key::Character("-".into()), modifiers),
-            Some(-1.0)
-        );
-    }
-
-    #[test]
-    fn maps_super_shift_equal_to_font_size_increase() {
-        let modifiers = ModifiersState::SUPER | ModifiersState::SHIFT;
-
-        assert_eq!(
-            font_size_delta_for_key(&Key::Character("=".into()), modifiers),
-            Some(1.0)
         );
     }
 

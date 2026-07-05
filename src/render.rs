@@ -22,6 +22,7 @@ const FALLBACK_FG: Rgb = Rgb::new(0xdd, 0xdd, 0xdd);
 pub struct Renderer {
     font_mgr: FontMgr,
     preferred_font_family: String,
+    default_logical_font_size: f32,
     logical_font_size: Cell<f32>,
     metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
 }
@@ -1284,6 +1285,7 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
         preferred_font_family: config.font_family.clone(),
+        default_logical_font_size: config.font_size,
         logical_font_size: Cell::new(config.font_size),
         metrics_cache: RefCell::new(None),
     }
@@ -1299,6 +1301,16 @@ impl Renderer {
         }
 
         self.logical_font_size.set(next);
+        self.metrics_cache.borrow_mut().take();
+        true
+    }
+
+    pub fn reset_font_size(&self) -> bool {
+        if (self.logical_font_size.get() - self.default_logical_font_size).abs() < f32::EPSILON {
+            return false;
+        }
+
+        self.logical_font_size.set(self.default_logical_font_size);
         self.metrics_cache.borrow_mut().take();
         true
     }
