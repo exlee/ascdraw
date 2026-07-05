@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
 use std::num::NonZeroU32;
 use std::process::{Child, Command, Stdio};
@@ -139,6 +140,7 @@ struct AppState {
 struct Renderer {
     font_mgr: FontMgr,
     logical_font_size: f32,
+    metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
 }
 
 #[derive(Clone)]
@@ -182,6 +184,7 @@ fn main() -> Result<()> {
     let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
     let mut surface =
         Surface::new(&context, window.clone()).map_err(|error| anyhow!(error.to_string()))?;
+    resize_surface(&mut surface, window.inner_size())?;
 
     let mut child = spawn_kakoune(&args, event_loop.create_proxy())?;
     let command_tx = spawn_stdin_writer(&mut child)?;
@@ -209,9 +212,7 @@ fn main() -> Result<()> {
                     elwt.exit();
                 }
                 WindowEvent::Resized(size) => {
-                    let width = NonZeroU32::new(size.width.max(1)).expect("width is non-zero");
-                    let height = NonZeroU32::new(size.height.max(1)).expect("height is non-zero");
-                    if let Err(error) = surface.resize(width, height) {
+                    if let Err(error) = resize_surface(&mut surface, size) {
                         eprintln!("surface resize failed: {error:#}");
                     }
                     send_resize(&command_tx, &window, &renderer);
@@ -241,9 +242,6 @@ fn main() -> Result<()> {
                 }
                 _ => {}
             },
-            Event::AboutToWait => {
-                window.request_redraw();
-            }
             _ => {}
         }
     })?;
@@ -446,13 +444,6 @@ fn render(
     let height = size.height.max(1) as usize;
     let metrics = renderer.metrics(window.scale_factor());
 
-    surface
-        .resize(
-            NonZeroU32::new(size.width.max(1)).expect("width is non-zero"),
-            NonZeroU32::new(size.height.max(1)).expect("height is non-zero"),
-        )
-        .map_err(|error| anyhow!(error.to_string()))?;
-
     let mut buffer = surface
         .buffer_mut()
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -536,11 +527,32 @@ fn render_line(
 ) {
     let top = PADDING + row * metrics.cell_height;
     let mut column = 0usize;
+    let mut bg_paint = Paint::default();
+    bg_paint.set_anti_alias(false);
+    let mut fg_paint = Paint::default();
+    fg_paint.set_anti_alias(true);
 
     for atom in line {
         let fg = resolve_face_color(&atom.face.fg, &default_face.fg, FALLBACK_FG);
         let bg = resolve_face_color(&atom.face.bg, &default_face.bg, FALLBACK_BG);
         let _ = (&atom.face.underline, &atom.face.attributes);
+        bg_paint.set_color(bg.to_color());
+        fg_paint.set_color(fg.to_color());
+
+        let atom_start = column;
+        let mut atom_width = 0usize;
+        for ch in atom.contents.chars() {
+            if ch == '\n' {
+                continue;
+            }
+            atom_width += UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            if atom_start + atom_width >= max_columns {
+                break;
+            }
+        }
+        if atom_width > 0 {
+            fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
+        }
 
         for ch in atom.contents.chars() {
             if ch == '\n' {
@@ -548,10 +560,7 @@ fn render_line(
             }
 
             let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            for offset in 0..span {
-                fill_cell(canvas, column + offset, top, metrics, bg);
-            }
-            draw_glyph(canvas, column, top, ch, metrics, fg);
+            draw_glyph(canvas, column, top, ch, metrics, &fg_paint);
             column += span;
             if column >= max_columns {
                 return;
@@ -560,17 +569,22 @@ fn render_line(
     }
 }
 
-fn fill_cell(canvas: &Canvas, column: usize, top: usize, metrics: &CellMetrics, bg: Rgb) {
+fn fill_cells(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    width_in_cells: usize,
+    metrics: &CellMetrics,
+    paint: &Paint,
+) {
     let left = PADDING + column * metrics.cell_width;
     let rect = Rect::from_xywh(
         left as f32,
         top as f32,
-        metrics.cell_width as f32,
+        (metrics.cell_width * width_in_cells) as f32,
         metrics.cell_height as f32,
     );
-    let mut paint = Paint::default();
-    paint.set_anti_alias(false).set_color(bg.to_color());
-    canvas.draw_rect(rect, &paint);
+    canvas.draw_rect(rect, paint);
 }
 
 fn draw_glyph(
@@ -579,7 +593,7 @@ fn draw_glyph(
     top: usize,
     ch: char,
     metrics: &CellMetrics,
-    fg: Rgb,
+    paint: &Paint,
 ) {
     if ch.is_control() {
         return;
@@ -587,13 +601,13 @@ fn draw_glyph(
 
     let left = PADDING + column * metrics.cell_width;
     let baseline = top as f32 + metrics.baseline_offset;
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true).set_color(fg.to_color());
+    let mut utf8 = [0; 4];
+    let text = ch.encode_utf8(&mut utf8);
     canvas.draw_str(
-        ch.to_string(),
+        text,
         (left as f32, baseline),
         &metrics.font,
-        &paint,
+        paint,
     );
 }
 
@@ -749,11 +763,19 @@ fn load_renderer() -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
         logical_font_size: 15.0,
+        metrics_cache: RefCell::new(None),
     }
 }
 
 impl Renderer {
     fn metrics(&self, scale_factor: f64) -> CellMetrics {
+        let cache_key = scale_factor.to_bits();
+        if let Some((cached_key, metrics)) = self.metrics_cache.borrow().as_ref() {
+            if *cached_key == cache_key {
+                return metrics.clone();
+            }
+        }
+
         let physical_font_size = (self.logical_font_size as f64 * scale_factor) as f32;
         let typeface = preferred_typeface(&self.font_mgr).unwrap_or_else(|| {
             self.font_mgr
@@ -775,12 +797,16 @@ impl Renderer {
             .max(1.0) as usize;
         let baseline_offset = (-metrics.ascent).ceil();
 
-        CellMetrics {
+        let metrics = CellMetrics {
             font,
             cell_width,
             cell_height: cell_height.max(16),
             baseline_offset,
-        }
+        };
+        self.metrics_cache
+            .borrow_mut()
+            .replace((cache_key, metrics.clone()));
+        metrics
     }
 }
 
@@ -803,4 +829,15 @@ unsafe fn buffer_as_u8_mut(buffer: &mut [u32]) -> &mut [u8] {
             std::mem::size_of_val(buffer),
         )
     }
+}
+
+fn resize_surface(
+    surface: &mut Surface<Rc<Window>, Rc<Window>>,
+    size: winit::dpi::PhysicalSize<u32>,
+) -> Result<()> {
+    let width = NonZeroU32::new(size.width.max(1)).expect("width is non-zero");
+    let height = NonZeroU32::new(size.height.max(1)).expect("height is non-zero");
+    surface
+        .resize(width, height)
+        .map_err(|error| anyhow!(error.to_string()))
 }
