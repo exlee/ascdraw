@@ -19,6 +19,7 @@ use winit::window::WindowAttributes;
 use winit::window::WindowLevel;
 
 mod app;
+mod diagnostics;
 mod face_resolution;
 mod icon;
 mod input;
@@ -31,6 +32,7 @@ mod render;
 mod user_keys;
 
 use app::{AppConfig, AppEvent, AppState, Args, apply_notification, load_config};
+use diagnostics::log_error;
 use input::{
     MouseMotionState, ScrollState, key_event_to_kak, pointer_position_to_coord,
     scroll_delta_to_kak, send_keys, send_mouse_button, send_mouse_move, send_resize, send_scroll,
@@ -78,19 +80,24 @@ fn apply_launch_directory() {
         return;
     };
     if let Err(error) = env::set_current_dir(&home) {
-        eprintln!(
+        log_error(format!(
             "failed to set launch directory to {}: {error:#}",
             home.display()
-        );
+        ));
     }
 }
 
 fn main() -> ExitCode {
+    if let Err(error) = diagnostics::init() {
+        eprintln!("diagnostics setup failed: {error:#}");
+    }
+    diagnostics::install_panic_hook();
+
     let raw_args: Vec<OsString> = env::args_os().collect();
     match try_main(raw_args) {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("{error:#}");
+            log_error(format!("{error:#}"));
             ExitCode::FAILURE
         }
     }
@@ -108,12 +115,12 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     let config = load_config()?;
     let user_keys = UserKeys::from_config(&config.keys)?;
     if let Err(error) = icon::apply_app_icon() {
-        eprintln!("app icon setup failed: {error:#}");
+        log_error(format!("app icon setup failed: {error:#}"));
     }
     let window_icon = match icon::load_window_icon() {
         Ok(icon) => Some(icon),
         Err(error) => {
-            eprintln!("window icon setup failed: {error:#}");
+            log_error(format!("window icon setup failed: {error:#}"));
             None
         }
     };
@@ -121,7 +128,7 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     #[cfg(target_os = "macos")]
     if let Err(error) = macos_open_files::register_open_file_handler(event_loop.create_proxy()) {
-        eprintln!("open file handler setup failed: {error:#}");
+        log_error(format!("open file handler setup failed: {error:#}"));
     }
     let attrs = apply_platform_window_attributes(
         WindowAttributes::default()
@@ -185,14 +192,14 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                 }
                 WindowEvent::Resized(size) => {
                     if let Err(error) = resize_surface(&mut surface, size) {
-                        eprintln!("surface resize failed: {error:#}");
+                        log_error(format!("surface resize failed: {error:#}"));
                     }
                     send_resize(&command_tx, &window, &renderer, &config);
                     window.request_redraw();
                 }
                 WindowEvent::RedrawRequested => {
                     if let Err(error) = render(&window, &mut surface, &state, &renderer, &config) {
-                        eprintln!("render failed: {error:#}");
+                        log_error(format!("render failed: {error:#}"));
                         let _ = child.kill();
                         elwt.exit();
                     }

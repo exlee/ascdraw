@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::{AppEvent, Args};
+use crate::diagnostics::log_error;
 use crate::kakoune_messages::parse_notification;
 
 pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Child> {
@@ -37,10 +38,12 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
                     Ok(notification) => {
                         let _ = proxy.send_event(AppEvent::Rpc(Box::new(notification)));
                     }
-                    Err(error) => eprintln!("json ui parse error: {error:#}\nline: {line}"),
+                    Err(error) => {
+                        log_error(format!("json ui parse error: {error:#}\nline: {line}"))
+                    }
                 },
                 Err(error) => {
-                    eprintln!("stdout read error: {error:#}");
+                    log_error(format!("stdout read error: {error:#}"));
                     break;
                 }
             }
@@ -52,9 +55,9 @@ pub fn spawn_kakoune(args: &Args, proxy: EventLoopProxy<AppEvent>) -> Result<Chi
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             match line {
-                Ok(line) => eprintln!("kak stderr: {line}"),
+                Ok(line) => log_error(format!("kak stderr: {line}")),
                 Err(error) => {
-                    eprintln!("stderr read error: {error:#}");
+                    log_error(format!("stderr read error: {error:#}"));
                     break;
                 }
             }
