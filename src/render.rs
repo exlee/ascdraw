@@ -647,24 +647,19 @@ fn render_info(
     }
 
     let rect = info_rect(info, menu_rect, cols, rows, width, height);
-
-    if matches!(info.style, InfoStyle::Modal) {
-        render_modal_info(canvas, info, rect, metrics, top_padding);
-        return;
-    }
-
     fill_rect(canvas, rect, &info.face, metrics, top_padding);
+    let rendered_info = modal_background_info(info);
 
     if framed {
-        render_framed_info(canvas, info, rect, metrics, top_padding);
+        render_framed_info(canvas, &rendered_info, rect, metrics, top_padding);
     } else {
-        for (index, line) in info.content.iter().take(rect.height).enumerate() {
+        for (index, line) in rendered_info.content.iter().take(rect.height).enumerate() {
             render_line_at(
                 canvas,
                 rect.row + index,
                 rect.column,
                 line,
-                &info.face,
+                &rendered_info.face,
                 rect.column + rect.width,
                 metrics,
                 top_padding,
@@ -805,138 +800,21 @@ fn render_framed_info_body(
     );
 }
 
-fn render_modal_info(
-    canvas: &Canvas,
-    info: &InfoState,
-    rect: CellRect,
-    metrics: &CellMetrics,
-    top_padding: usize,
-) {
-    let inner_rect = framed_info_inner_rect(rect);
-    if inner_rect.width > 0 && inner_rect.height > 0 {
-        fill_rect(canvas, inner_rect, &info.face, metrics, top_padding);
+fn modal_background_info(info: &InfoState) -> InfoState {
+    if !matches!(info.style, InfoStyle::Modal) {
+        return info.clone();
     }
 
-    let content = info
-        .content
-        .iter()
-        .map(|line| line_with_background(line, &info.face.bg))
-        .collect::<Vec<_>>();
-
-    if rect.width < 2 || rect.height < 2 {
-        return;
-    }
-
-    let inner_width = rect.width.saturating_sub(4);
-    let mut top = String::from("╭─");
-    if info.title.is_empty() || inner_width < 2 {
-        top.push_str(&"─".repeat(inner_width));
-    } else {
-        let title = truncate_atoms(&info.title, inner_width.saturating_sub(2));
-        let title_width = line_display_width(&title);
-        let dash_width = inner_width.saturating_sub(title_width + 2);
-        top.push_str(&"─".repeat(dash_width / 2));
-        top.push('┤');
-        render_string_line_fg_only(
-            canvas,
-            rect.row,
-            rect.column,
-            &top,
-            &info.face,
-            metrics,
-            top_padding,
-        );
-        render_line_at_fg_only(
-            canvas,
-            rect.row,
-            rect.column + top.chars().count(),
-            &title,
-            &info.face,
-            rect.column + rect.width,
-            metrics,
-            top_padding,
-        );
-        let mut right = String::from("├");
-        right.push_str(&"─".repeat(dash_width - dash_width / 2));
-        right.push_str("─╮");
-        render_string_line_fg_only(
-            canvas,
-            rect.row,
-            rect.column + rect.width.saturating_sub(right.chars().count()),
-            &right,
-            &info.face,
-            metrics,
-            top_padding,
-        );
-        return render_modal_info_body(canvas, &content, &info.face, rect, metrics, top_padding);
-    }
-    top.push_str("─╮");
-    render_string_line_fg_only(
-        canvas,
-        rect.row,
-        rect.column,
-        &top,
-        &info.face,
-        metrics,
-        top_padding,
-    );
-    render_modal_info_body(canvas, &content, &info.face, rect, metrics, top_padding);
-}
-
-fn render_modal_info_body(
-    canvas: &Canvas,
-    content: &[Vec<Atom>],
-    face: &Face,
-    rect: CellRect,
-    metrics: &CellMetrics,
-    top_padding: usize,
-) {
-    let inner_width = rect.width.saturating_sub(4);
-    let body_rows = rect.height.saturating_sub(2);
-    for row_offset in 0..body_rows {
-        let row = rect.row + 1 + row_offset;
-        render_string_line_fg_only(canvas, row, rect.column, "│ ", face, metrics, top_padding);
-        if let Some(line) = content.get(row_offset) {
-            render_line_at(
-                canvas,
-                row,
-                rect.column + 2,
-                line,
-                face,
-                rect.column + 2 + inner_width,
-                metrics,
-                top_padding,
-            );
-        }
-        render_string_line_fg_only(
-            canvas,
-            row,
-            rect.column + rect.width.saturating_sub(2),
-            " │",
-            face,
-            metrics,
-            top_padding,
-        );
-    }
-
-    let bottom = format!("╰─{}─╯", "─".repeat(inner_width));
-    render_string_line_fg_only(
-        canvas,
-        rect.row + rect.height.saturating_sub(1),
-        rect.column,
-        &bottom,
-        face,
-        metrics,
-        top_padding,
-    );
-}
-
-fn framed_info_inner_rect(rect: CellRect) -> CellRect {
-    CellRect {
-        row: rect.row.saturating_add(1),
-        column: rect.column.saturating_add(1),
-        width: rect.width.saturating_sub(2),
-        height: rect.height.saturating_sub(2),
+    InfoState {
+        title: line_with_background(&info.title, &info.face.bg),
+        content: info
+            .content
+            .iter()
+            .map(|line| line_with_background(line, &info.face.bg))
+            .collect(),
+        anchor: info.anchor,
+        face: info.face.clone(),
+        style: info.style,
     }
 }
 
@@ -1068,52 +946,6 @@ fn render_line_at(
             return;
         }
         fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
-
-        for ch in atom.contents.chars() {
-            if ch == '\n' {
-                continue;
-            }
-
-            let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            draw_glyph(canvas, column, top, ch, metrics, &fg_paint);
-            column += span;
-            if column >= max_columns {
-                return;
-            }
-        }
-    }
-}
-
-fn render_line_at_fg_only(
-    canvas: &Canvas,
-    row: usize,
-    start_column: usize,
-    line: &[Atom],
-    default_face: &Face,
-    max_columns: usize,
-    metrics: &CellMetrics,
-    top_padding: usize,
-) {
-    let top = top_padding + row * metrics.cell_height;
-    let mut column = start_column;
-    let mut fg_paint = Paint::default();
-    fg_paint.set_anti_alias(true);
-
-    for atom in line {
-        let fg = resolve_face_color(&atom.face.fg, &default_face.fg, FALLBACK_FG);
-        let _ = (&atom.face.bg, &atom.face.underline, &atom.face.attributes);
-        fg_paint.set_color(fg.to_color());
-
-        let atom_width = atom_display_width(&atom.contents);
-        if atom_width == 0 {
-            continue;
-        }
-
-        let atom_start = column;
-        let atom_width = atom_width.min(max_columns.saturating_sub(atom_start));
-        if atom_width == 0 {
-            return;
-        }
 
         for ch in atom.contents.chars() {
             if ch == '\n' {
@@ -1296,35 +1128,6 @@ fn render_string_line(
         contents: text.to_string(),
     }];
     render_line_at(
-        canvas,
-        row,
-        column,
-        &atoms,
-        default_face,
-        column + atom_display_width(text),
-        metrics,
-        top_padding,
-    );
-}
-
-fn render_string_line_fg_only(
-    canvas: &Canvas,
-    row: usize,
-    column: usize,
-    text: &str,
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top_padding: usize,
-) {
-    if text.is_empty() {
-        return;
-    }
-
-    let atoms = [Atom {
-        face: Face::default(),
-        contents: text.to_string(),
-    }];
-    render_line_at_fg_only(
         canvas,
         row,
         column,
@@ -1713,39 +1516,77 @@ mod tests {
     }
 
     #[test]
-    fn framed_info_inner_rect_leaves_border_cells_unfilled() {
-        let inner = framed_info_inner_rect(CellRect {
-            row: 4,
-            column: 8,
-            width: 10,
-            height: 6,
-        });
-        assert_eq!(
-            inner,
-            CellRect {
-                row: 5,
-                column: 9,
-                width: 8,
-                height: 4,
-            }
-        );
-    }
-
-    #[test]
-    fn line_with_background_overrides_content_backgrounds() {
-        let line = vec![Atom {
+    fn modal_background_info_overrides_title_and_content_backgrounds() {
+        let info = InfoState {
+            title: vec![Atom {
+                face: Face {
+                    fg: "white".into(),
+                    bg: "red".into(),
+                    underline: "default".into(),
+                    attributes: Vec::new(),
+                },
+                contents: "title".into(),
+            }],
+            content: vec![vec![Atom {
+                face: Face {
+                    fg: "black".into(),
+                    bg: "blue".into(),
+                    underline: "default".into(),
+                    attributes: Vec::new(),
+                },
+                contents: "body".into(),
+            }]],
+            anchor: Coord { line: 0, column: 0 },
             face: Face {
-                fg: "black".into(),
-                bg: "blue".into(),
+                fg: "default".into(),
+                bg: "green".into(),
                 underline: "default".into(),
                 attributes: Vec::new(),
             },
-            contents: "body".into(),
-        }];
+            style: InfoStyle::Modal,
+        };
 
-        let rendered = line_with_background(&line, "green");
-        assert_eq!(rendered[0].face.bg, "green");
-        assert_eq!(rendered[0].face.fg, "black");
+        let rendered = modal_background_info(&info);
+        assert_eq!(rendered.title[0].face.bg, "green");
+        assert_eq!(rendered.title[0].face.fg, "white");
+        assert_eq!(rendered.content[0][0].face.bg, "green");
+        assert_eq!(rendered.content[0][0].face.fg, "black");
+    }
+
+    #[test]
+    fn non_modal_info_keeps_original_backgrounds() {
+        let info = InfoState {
+            title: vec![Atom {
+                face: Face {
+                    fg: "white".into(),
+                    bg: "red".into(),
+                    underline: "default".into(),
+                    attributes: Vec::new(),
+                },
+                contents: "title".into(),
+            }],
+            content: vec![vec![Atom {
+                face: Face {
+                    fg: "black".into(),
+                    bg: "blue".into(),
+                    underline: "default".into(),
+                    attributes: Vec::new(),
+                },
+                contents: "body".into(),
+            }]],
+            anchor: Coord { line: 0, column: 0 },
+            face: Face {
+                fg: "default".into(),
+                bg: "green".into(),
+                underline: "default".into(),
+                attributes: Vec::new(),
+            },
+            style: InfoStyle::Prompt,
+        };
+
+        let rendered = modal_background_info(&info);
+        assert_eq!(rendered.title[0].face.bg, "red");
+        assert_eq!(rendered.content[0][0].face.bg, "blue");
     }
 
     #[test]
