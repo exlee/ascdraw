@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
@@ -8,7 +9,8 @@ use skia_safe::{
     PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
 };
 use softbuffer::Surface;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 use winit::window::Window;
 
 mod popup;
@@ -40,12 +42,22 @@ pub struct CellMetrics {
     pub cell_width: usize,
     pub cell_height: usize,
     pub baseline_offset: f32,
+    font_mgr: FontMgr,
+    fallback_fonts: Rc<RefCell<HashMap<FallbackFontKey, Font>>>,
 }
 
 #[derive(Clone)]
 struct CursorCell {
     face: Face,
-    ch: Option<char>,
+    text: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct FallbackFontKey {
+    character: u32,
+    size_bits: u32,
+    bold: bool,
+    italic: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -333,13 +345,13 @@ pub(in crate::render) fn render_line_at(
         fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
         let font = font_for_face(metrics, &resolved);
 
-        for ch in atom.contents.chars() {
-            if ch == '\n' {
+        for cluster in text_clusters(&atom.contents) {
+            if cluster == "\n" {
                 continue;
             }
 
-            let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            draw_glyph(canvas, column, top, ch, &font, metrics, &fg_paint);
+            let span = cluster_display_width(cluster);
+            draw_text_cluster(canvas, column, top, cluster, &font, metrics, &fg_paint);
             column += span;
             if column >= position.max_columns {
                 draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
@@ -373,7 +385,7 @@ fn render_grid_cursor(
     )
     .unwrap_or_else(|| CursorCell {
         face: grid.default_face.clone(),
-        ch: Some(' '),
+        text: Some(" ".to_string()),
     });
 
     let resolved = resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
@@ -390,8 +402,8 @@ fn render_grid_cursor(
         .set_anti_alias(true)
         .set_color(resolved.fg.to_color());
     let font = font_for_face(metrics, &resolved);
-    if let Some(ch) = cell.ch {
-        draw_glyph(canvas, cursor.column, top, ch, &font, metrics, &fg_paint);
+    if let Some(text) = cell.text {
+        draw_text_cluster(canvas, cursor.column, top, &text, &font, metrics, &fg_paint);
     }
     draw_text_decorations(canvas, cursor.column, top, 1, metrics, &resolved);
 }
@@ -401,22 +413,22 @@ fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell
     let mut column = 0;
 
     for atom in line {
-        for ch in atom.contents.chars() {
-            if ch == '\n' {
+        for cluster in text_clusters(&atom.contents) {
+            if cluster == "\n" {
                 if column == target_column {
                     return Some(CursorCell {
                         face: atom.face.clone(),
-                        ch: Some(' '),
+                        text: Some(" ".to_string()),
                     });
                 }
                 continue;
             }
 
-            let span = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            let span = cluster_display_width(cluster);
             if target_column >= column && target_column < column + span {
                 return Some(CursorCell {
                     face: atom.face.clone(),
-                    ch: Some(ch),
+                    text: Some(cluster.to_string()),
                 });
             }
             column += span;
@@ -427,10 +439,9 @@ fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell
 }
 
 pub fn atom_display_width(contents: &str) -> usize {
-    contents
-        .chars()
-        .filter(|&ch| ch != '\n')
-        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(1).max(1))
+    text_clusters(contents)
+        .filter(|cluster| *cluster != "\n")
+        .map(cluster_display_width)
         .sum()
 }
 
@@ -517,15 +528,15 @@ pub(in crate::render) fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<
         }
 
         let mut contents = String::new();
-        for ch in atom.contents.chars() {
-            if ch == '\n' {
+        for cluster in text_clusters(&atom.contents) {
+            if cluster == "\n" {
                 continue;
             }
-            let width = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            let width = cluster_display_width(cluster);
             if width > remaining {
                 break;
             }
-            contents.push(ch);
+            contents.push_str(cluster);
             remaining -= width;
         }
 
@@ -600,24 +611,97 @@ fn fill_cells(
     canvas.draw_rect(rect, paint);
 }
 
-fn draw_glyph(
+fn draw_text_cluster(
     canvas: &Canvas,
     column: usize,
     top: usize,
-    ch: char,
+    text: &str,
     font: &Font,
     metrics: &CellMetrics,
     paint: &Paint,
 ) {
-    if ch.is_control() {
+    if text.chars().all(char::is_control) {
         return;
     }
 
     let left = PADDING + column * metrics.cell_width;
     let baseline = top as f32 + metrics.baseline_offset;
-    let mut utf8 = [0; 4];
-    let text = ch.encode_utf8(&mut utf8);
-    canvas.draw_str(text, (left as f32, baseline), font, paint);
+    let font = font_for_text(metrics, font, text);
+    canvas.draw_str(text, (left as f32, baseline), &font, paint);
+}
+
+fn text_clusters(text: &str) -> impl Iterator<Item = &str> {
+    UnicodeSegmentation::graphemes(text, true)
+}
+
+fn cluster_display_width(cluster: &str) -> usize {
+    UnicodeWidthStr::width(cluster).max(usize::from(!cluster.is_empty()))
+}
+
+fn font_for_text(metrics: &CellMetrics, font: &Font, text: &str) -> Font {
+    if !prefers_fallback_font(text) && typeface_supports_text(&font.typeface(), text) {
+        return font.clone();
+    }
+
+    let Some(character) = fallback_character(text) else {
+        return font.clone();
+    };
+    let key = FallbackFontKey {
+        character: character as u32,
+        size_bits: font.size().to_bits(),
+        bold: font.is_embolden(),
+        italic: font.skew_x() != 0.0,
+    };
+
+    if !metrics.fallback_fonts.borrow().contains_key(&key)
+        && let Some(typeface) = metrics.font_mgr.match_family_style_character(
+            "",
+            FontStyle::normal(),
+            &[],
+            character as i32,
+        )
+    {
+        let mut fallback = Font::new(typeface, font.size());
+        fallback
+            .set_subpixel(font.is_subpixel())
+            .set_edging(font.edging())
+            .set_hinting(font.hinting())
+            .set_baseline_snap(font.is_baseline_snap())
+            .set_linear_metrics(font.is_linear_metrics())
+            .set_embolden(font.is_embolden())
+            .set_skew_x(font.skew_x());
+        metrics.fallback_fonts.borrow_mut().insert(key, fallback);
+    }
+
+    metrics
+        .fallback_fonts
+        .borrow()
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| font.clone())
+}
+
+fn typeface_supports_text(typeface: &skia_safe::Typeface, text: &str) -> bool {
+    let mut glyphs = vec![0; text.chars().count().max(1)];
+    let count = typeface.str_to_glyphs(text, &mut glyphs);
+    count > 0 && glyphs.into_iter().take(count).all(|glyph| glyph != 0)
+}
+
+fn fallback_character(text: &str) -> Option<char> {
+    text.chars()
+        .find(|&ch| ch != '\u{200d}' && !('\u{fe00}'..='\u{fe0f}').contains(&ch))
+}
+
+fn prefers_fallback_font(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ch == '\u{200d}' || ('\u{fe00}'..='\u{fe0f}').contains(&ch) || is_emojiish(ch))
+}
+
+fn is_emojiish(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1f000..=0x1faff | 0x2600..=0x27bf
+    )
 }
 
 fn font_for_face(metrics: &CellMetrics, face: &ResolvedFace) -> Font {
@@ -765,6 +849,8 @@ impl Renderer {
             cell_width,
             cell_height: cell_height.max(16),
             baseline_offset,
+            font_mgr: self.font_mgr.clone(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
         self.metrics_cache
             .borrow_mut()
@@ -904,7 +990,7 @@ mod tests {
 
         let cursor = cursor_cell(Some(&line), 0).expect("cursor cell should exist");
         assert_eq!(cursor.face.bg, "white");
-        assert_eq!(cursor.ch, Some(' '));
+        assert_eq!(cursor.text, Some(" ".to_string()));
     }
 
     #[test]
@@ -926,7 +1012,29 @@ mod tests {
         ];
 
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
-        assert_eq!(cursor.ch, Some('c'));
+        assert_eq!(cursor.text, Some("c".to_string()));
         assert_eq!(cursor.face.bg, "white");
+    }
+
+    #[test]
+    fn atom_display_width_counts_single_emoji_as_double_width() {
+        assert_eq!(atom_display_width("😀"), 2);
+    }
+
+    #[test]
+    fn atom_display_width_treats_emoji_variation_sequence_as_one_cluster() {
+        assert_eq!(atom_display_width("❤️"), 2);
+    }
+
+    #[test]
+    fn truncate_atoms_does_not_split_emoji_variation_sequence() {
+        let line = vec![Atom {
+            face: Face::default(),
+            contents: "a❤️b".into(),
+        }];
+
+        let truncated = truncate_atoms(&line, 2);
+
+        assert_eq!(truncated[0].contents, "a");
     }
 }

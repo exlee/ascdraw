@@ -815,6 +815,7 @@ dependencies = [
  "skia-safe",
  "softbuffer",
  "toml 0.9.7",
+ "unicode-segmentation",
  "unicode-width",
  "winit",
 ]
