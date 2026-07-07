@@ -15,6 +15,7 @@ use winit::window::WindowId;
 
 pub const DEFAULT_WINDOW_TITLE: &str = "kakvide";
 pub const WINDOW_TITLE_UI_OPTION: &str = "kakvide_title";
+pub const CURSOR_MODE_UI_OPTION: &str = "kakvide_cursor_mode";
 
 #[derive(Parser, Debug, Clone)]
 #[command(trailing_var_arg = true)]
@@ -35,6 +36,7 @@ pub struct AppConfig {
     pub mouse_scroll_rate: f32,
     pub transparent_menubar: bool,
     pub cell: CellConfig,
+    pub display: DisplayConfig,
     pub macos: MacosConfig,
     pub keys: UserKeysConfig,
 }
@@ -54,6 +56,60 @@ pub struct CellConfig {
 impl Default for CellConfig {
     fn default() -> Self {
         bundled_default_cell_config()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DisplayConfig {
+    pub cursor_shape: CursorShapeConfig,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        bundled_default_display_config()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct CursorShapeConfig {
+    pub normal: Option<CursorShape>,
+    pub insert: Option<CursorShape>,
+    pub replace: Option<CursorShape>,
+}
+
+impl Default for CursorShapeConfig {
+    fn default() -> Self {
+        bundled_default_cursor_shape_config()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CursorShape {
+    Block,
+    Beam,
+    Underline,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorMode {
+    Normal,
+    Insert,
+    Replace,
+    #[default]
+    Unknown,
+}
+
+impl CursorMode {
+    fn from_ui_option(value: &str) -> Self {
+        match value.trim() {
+            "normal" => Self::Normal,
+            "insert" => Self::Insert,
+            "replace" => Self::Replace,
+            _ => Self::Unknown,
+        }
     }
 }
 
@@ -179,6 +235,7 @@ pub struct AppState {
     pub menu: Option<MenuState>,
     pub info: Option<InfoState>,
     pub window_title: String,
+    pub cursor_mode: CursorMode,
 }
 
 impl Default for AppState {
@@ -189,6 +246,7 @@ impl Default for AppState {
             menu: None,
             info: None,
             window_title: DEFAULT_WINDOW_TITLE.to_string(),
+            cursor_mode: CursorMode::default(),
         }
     }
 }
@@ -299,6 +357,7 @@ fn bundled_default_config() -> AppConfig {
             .and_then(Value::as_bool)
             .expect("bundled kakvide.toml should set transparent-menubar"),
         cell: bundled_default_cell_config(),
+        display: bundled_default_display_config(),
         macos: bundled_default_macos_config(),
         keys: bundled_default_keys(),
     }
@@ -316,6 +375,37 @@ pub fn bundled_default_cell_config() -> CellConfig {
             .get("underline-offset")
             .and_then(Value::as_float)
             .expect("bundled [cell] should set underline-offset") as f32,
+    }
+}
+
+pub fn bundled_default_display_config() -> DisplayConfig {
+    DisplayConfig {
+        cursor_shape: bundled_default_cursor_shape_config(),
+    }
+}
+
+pub fn bundled_default_cursor_shape_config() -> CursorShapeConfig {
+    let value = bundled_default_value();
+    let cursor_shape = value
+        .get("display")
+        .and_then(Value::as_table)
+        .and_then(|display| display.get("cursor-shape"))
+        .and_then(Value::as_table)
+        .expect("bundled kakvide.toml should contain a [display.cursor-shape] section");
+
+    CursorShapeConfig {
+        normal: cursor_shape
+            .get("normal")
+            .and_then(Value::as_str)
+            .map(parse_cursor_shape),
+        insert: cursor_shape
+            .get("insert")
+            .and_then(Value::as_str)
+            .map(parse_cursor_shape),
+        replace: cursor_shape
+            .get("replace")
+            .and_then(Value::as_str)
+            .map(parse_cursor_shape),
     }
 }
 
@@ -420,6 +510,9 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
             if let Some(window_title) = window_title_from_ui_options(&options) {
                 state.window_title = window_title;
             }
+            if let Some(cursor_mode) = cursor_mode_from_ui_options(&options) {
+                state.cursor_mode = cursor_mode;
+            }
         }
         KakouneNotification::MenuShow {
             items,
@@ -466,6 +559,15 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
     }
 }
 
+fn parse_cursor_shape(value: &str) -> CursorShape {
+    match value {
+        "block" => CursorShape::Block,
+        "beam" => CursorShape::Beam,
+        "underline" => CursorShape::Underline,
+        other => panic!("unsupported bundled [display.cursor-shape] value {other}"),
+    }
+}
+
 fn window_title_from_ui_options(
     options: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
@@ -487,6 +589,15 @@ fn window_title_from_ui_options(
     } else {
         Some(format!("{DEFAULT_WINDOW_TITLE} - {title}"))
     }
+}
+
+fn cursor_mode_from_ui_options(
+    options: &serde_json::Map<String, serde_json::Value>,
+) -> Option<CursorMode> {
+    options
+        .get(CURSOR_MODE_UI_OPTION)
+        .and_then(serde_json::Value::as_str)
+        .map(CursorMode::from_ui_option)
 }
 
 fn display_client_name(client: &str) -> String {
@@ -590,6 +701,10 @@ mod tests {
         assert!(config.transparent_menubar);
         assert_eq!(config.cell, CellConfig::default());
         assert_eq!(config.cell.underline_offset, 0.0);
+        assert_eq!(config.display, DisplayConfig::default());
+        assert_eq!(config.display.cursor_shape.normal, None);
+        assert_eq!(config.display.cursor_shape.insert, None);
+        assert_eq!(config.display.cursor_shape.replace, None);
         assert_eq!(config.macos.color_space, MacosColorSpace::P3);
         assert_eq!(config.keys, UserKeysConfig::default());
     }
@@ -667,6 +782,7 @@ mod tests {
             AppConfig::default().transparent_menubar
         );
         assert_eq!(config.cell, AppConfig::default().cell);
+        assert_eq!(config.display, AppConfig::default().display);
         assert_eq!(config.macos, AppConfig::default().macos);
         assert_eq!(config.keys, AppConfig::default().keys);
     }
@@ -681,6 +797,9 @@ transparent-menubar = false
 
 [cell]
 underline-offset = 1.5
+
+[display.cursor-shape]
+insert = "beam"
 
 [macos]
 color-space = "srgb"
@@ -698,6 +817,9 @@ window-new = "Cmd-Shift-N"
         assert_eq!(config.font_size, 18.0);
         assert!(!config.transparent_menubar);
         assert_eq!(config.cell.underline_offset, 1.5);
+        assert_eq!(config.display.cursor_shape.normal, None);
+        assert_eq!(config.display.cursor_shape.insert, Some(CursorShape::Beam));
+        assert_eq!(config.display.cursor_shape.replace, None);
         assert_eq!(config.macos.color_space, MacosColorSpace::Srgb);
         assert_eq!(config.keys.window_new, "Cmd-Shift-N");
         assert_eq!(config.keys.window_close, "Cmd-W");
@@ -721,6 +843,7 @@ window-new = "Cmd-Shift-N"
         assert!(output.contains("[cell]"));
         assert!(output.contains("[macos]"));
         assert!(output.contains("color-space = \"srgb\""));
+        assert!(output.contains("[display.cursor-shape]"));
         assert!(output.contains("[keys]"));
         assert!(output.contains("window-close = \"Cmd-W\""));
     }
@@ -757,6 +880,57 @@ color-space = "p3"
         .expect("config should parse");
 
         assert_eq!(config.cell.underline_offset, 1.5);
+    }
+
+    #[test]
+    fn config_parses_cursor_shape_overrides() {
+        let config: AppConfig = toml::from_str(
+            r#"
+font-family = "SF Mono"
+font-size = 12.0
+mouse-scroll-rate = 0.25
+transparent-menubar = true
+
+[display.cursor-shape]
+normal = "beam"
+insert = "underline"
+replace = "block"
+
+[macos]
+color-space = "p3"
+"#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(config.display.cursor_shape.normal, Some(CursorShape::Beam));
+        assert_eq!(
+            config.display.cursor_shape.insert,
+            Some(CursorShape::Underline)
+        );
+        assert_eq!(
+            config.display.cursor_shape.replace,
+            Some(CursorShape::Block)
+        );
+    }
+
+    #[test]
+    fn config_rejects_unknown_cursor_shape() {
+        let error = toml::from_str::<AppConfig>(
+            r#"
+font-family = "SF Mono"
+font-size = 12.0
+mouse-scroll-rate = 0.25
+transparent-menubar = true
+
+[display.cursor-shape]
+insert = "triangle"
+"#,
+        )
+        .expect_err("config should reject unknown cursor shape")
+        .to_string();
+
+        assert!(error.contains("unknown variant"));
+        assert!(error.contains("triangle"));
     }
 
     #[test]
@@ -857,5 +1031,36 @@ color-space = "adobe-rgb"
         apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
 
         assert_eq!(state.window_title, DEFAULT_WINDOW_TITLE);
+    }
+
+    #[test]
+    fn set_ui_options_updates_cursor_mode() {
+        let mut state = AppState::default();
+        let mut options = serde_json::Map::new();
+        options.insert(
+            CURSOR_MODE_UI_OPTION.to_string(),
+            serde_json::Value::String("insert".to_string()),
+        );
+
+        apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
+
+        assert_eq!(state.cursor_mode, CursorMode::Insert);
+    }
+
+    #[test]
+    fn set_ui_options_falls_back_to_unknown_for_unrecognized_cursor_mode() {
+        let mut state = AppState {
+            cursor_mode: CursorMode::Insert,
+            ..AppState::default()
+        };
+        let mut options = serde_json::Map::new();
+        options.insert(
+            CURSOR_MODE_UI_OPTION.to_string(),
+            serde_json::Value::String("prompt".to_string()),
+        );
+
+        apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
+
+        assert_eq!(state.cursor_mode, CursorMode::Unknown);
     }
 }

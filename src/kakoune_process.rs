@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
 use winit::window::WindowId;
 
-use crate::app::{AppEvent, Args, WINDOW_TITLE_UI_OPTION};
+use crate::app::{AppEvent, Args, CURSOR_MODE_UI_OPTION, WINDOW_TITLE_UI_OPTION};
 use crate::diagnostics::log_error;
 use crate::kakoune_messages::parse_notification;
 
@@ -218,8 +218,10 @@ fn append_kakoune_json_ui_args(command: &mut Command, args: &Args) {
 pub fn kakvide_post_boot_command(client_close_socket: Option<&Path>) -> String {
     let mut command = format!(
         "hook global EnterDirectory .* %{{ set-option -add window ui_options \"{0}=%val{{hook_param}} - %val{{client}}\" }}; \
-         set-option -add window ui_options \"{0}=%sh{{pwd}} - %val{{client}}\"",
-        WINDOW_TITLE_UI_OPTION
+         hook global ModeChange \".*:.*:(.*)\" %{{ set-option -add window ui_options \"{1}=%val{{hook_param_capture_1}}\" }}; \
+         set-option -add window ui_options \"{0}=%sh{{pwd}} - %val{{client}}\"; \
+         set-option -add window ui_options \"{1}=normal\"",
+        WINDOW_TITLE_UI_OPTION, CURSOR_MODE_UI_OPTION
     );
     if let Some(socket) = client_close_socket {
         command.push_str("; ");
@@ -502,10 +504,13 @@ mod tests {
 
         assert!(!command.contains("rename-client"));
         assert!(command.contains("EnterDirectory"));
+        assert!(command.contains("ModeChange"));
         assert!(command.contains("%val{hook_param} - %val{client}"));
         assert!(command.contains("%sh{pwd} - %val{client}"));
         assert!(command.contains("%val{hook_param}"));
         assert!(command.contains("%sh{pwd}"));
+        assert!(command.contains("kakvide_cursor_mode=%val{hook_param_capture_1}"));
+        assert!(command.contains("kakvide_cursor_mode=normal"));
         assert!(!command.contains("buffile"));
     }
 

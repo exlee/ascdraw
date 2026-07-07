@@ -17,7 +17,9 @@ mod popup;
 
 use popup::{render_info, render_menu};
 
-use crate::app::{AppConfig, AppState, GridState, StatusState};
+use crate::app::{
+    AppConfig, AppState, CursorMode, CursorShape, CursorShapeConfig, GridState, StatusState,
+};
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
@@ -54,6 +56,9 @@ struct CursorCell {
     face: Face,
     text: Option<String>,
 }
+
+const CURSOR_BEAM_WIDTH_RATIO: f32 = 0.14;
+const CURSOR_UNDERLINE_HEIGHT_RATIO: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct FallbackFontKey {
@@ -105,6 +110,7 @@ pub fn render(
     render_canvas(
         canvas,
         state,
+        config,
         &metrics,
         &title_metrics,
         layout_metrics(
@@ -128,6 +134,7 @@ pub fn render(
 fn render_canvas(
     canvas: &Canvas,
     state: &AppState,
+    config: &AppConfig,
     metrics: &CellMetrics,
     title_metrics: &CellMetrics,
     layout: LayoutMetrics,
@@ -167,6 +174,8 @@ fn render_canvas(
     render_grid_cursor(
         canvas,
         &state.grid,
+        state.cursor_mode,
+        &config.display.cursor_shape,
         cols,
         content_rows,
         metrics,
@@ -378,6 +387,8 @@ pub(in crate::render) fn render_line_at_top(
 fn render_grid_cursor(
     canvas: &Canvas,
     grid: &GridState,
+    cursor_mode: CursorMode,
+    cursor_shape_config: &CursorShapeConfig,
     cols: usize,
     rows: usize,
     metrics: &CellMetrics,
@@ -402,23 +413,162 @@ fn render_grid_cursor(
     });
 
     let resolved = resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
+    let base_resolved = resolve_root_face(&grid.default_face, FALLBACK_FG, FALLBACK_BG);
     let top = row_top(cursor.line, metrics, top_padding);
+    match cursor_shape_for_mode(cursor_shape_config, cursor_mode) {
+        CursorShape::Block => {
+            render_block_cursor(canvas, cursor.column, top, &cell, metrics, &resolved)
+        }
+        CursorShape::Beam => render_beam_cursor(
+            canvas,
+            cursor.column,
+            top,
+            &cell,
+            metrics,
+            &base_resolved,
+            &resolved,
+        ),
+        CursorShape::Underline => render_underline_cursor(
+            canvas,
+            cursor.column,
+            top,
+            &cell,
+            metrics,
+            &base_resolved,
+            &resolved,
+        ),
+    }
+}
 
+fn render_block_cursor(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    cell: &CursorCell,
+    metrics: &CellMetrics,
+    resolved: &ResolvedFace,
+) {
     let mut bg_paint = Paint::default();
     bg_paint
         .set_anti_alias(false)
         .set_color(resolved.bg.to_color());
-    fill_cells(canvas, cursor.column, top, 1, metrics, &bg_paint);
+    fill_cells(canvas, column, top, 1, metrics, &bg_paint);
 
     let mut fg_paint = Paint::default();
     fg_paint
         .set_anti_alias(true)
         .set_color(resolved.fg.to_color());
-    let font = font_for_face(metrics, &resolved);
-    if let Some(text) = cell.text {
-        draw_text_cluster(canvas, cursor.column, top, &text, &font, metrics, &fg_paint);
+    let font = font_for_face(metrics, resolved);
+    if let Some(text) = &cell.text {
+        draw_text_cluster(canvas, column, top, text, &font, metrics, &fg_paint);
     }
-    draw_text_decorations(canvas, cursor.column, top, 1, metrics, &resolved);
+    draw_text_decorations(canvas, column, top, 1, metrics, resolved);
+}
+
+fn render_beam_cursor(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    cell: &CursorCell,
+    metrics: &CellMetrics,
+    base_resolved: &ResolvedFace,
+    resolved: &ResolvedFace,
+) {
+    render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
+    let width = (metrics.cell_width as f32 * CURSOR_BEAM_WIDTH_RATIO)
+        .round()
+        .clamp(1.0, metrics.cell_width as f32);
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(cursor_indicator_color(CursorShape::Beam, resolved).to_color());
+    fill_rect_pixels(
+        canvas,
+        (PADDING + column * metrics.cell_width) as f32,
+        top as f32,
+        width,
+        metrics.cell_height as f32,
+        &paint,
+    );
+}
+
+fn render_underline_cursor(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    cell: &CursorCell,
+    metrics: &CellMetrics,
+    base_resolved: &ResolvedFace,
+    resolved: &ResolvedFace,
+) {
+    render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
+    let height = (metrics.cell_height as f32 * CURSOR_UNDERLINE_HEIGHT_RATIO)
+        .round()
+        .clamp(1.0, metrics.cell_height as f32);
+    let max_top = top as f32 + metrics.cell_height as f32 - height;
+    let y = underline_start_y(top, metrics, height)
+        .min(max_top)
+        .max(top as f32);
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(cursor_indicator_color(CursorShape::Underline, resolved).to_color());
+    fill_rect_pixels(
+        canvas,
+        (PADDING + column * metrics.cell_width) as f32,
+        y,
+        metrics.cell_width as f32,
+        height,
+        &paint,
+    );
+}
+
+fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> CursorShape {
+    match mode {
+        CursorMode::Normal => config.normal.unwrap_or(CursorShape::Block),
+        CursorMode::Insert => config.insert.unwrap_or(CursorShape::Block),
+        CursorMode::Replace => config.replace.unwrap_or(CursorShape::Block),
+        CursorMode::Unknown => CursorShape::Block,
+    }
+}
+
+fn cursor_shape_fill_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
+    match shape {
+        CursorShape::Block => resolved.bg,
+        CursorShape::Beam | CursorShape::Underline => resolved.bg,
+    }
+}
+
+fn cursor_indicator_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
+    match shape {
+        CursorShape::Block => resolved.bg,
+        CursorShape::Beam | CursorShape::Underline => resolved.bg,
+    }
+}
+
+fn render_cursor_base_cell(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    cell: &CursorCell,
+    metrics: &CellMetrics,
+    resolved: &ResolvedFace,
+) {
+    let mut bg_paint = Paint::default();
+    bg_paint
+        .set_anti_alias(false)
+        .set_color(resolved.bg.to_color());
+    fill_cells(canvas, column, top, 1, metrics, &bg_paint);
+
+    let mut fg_paint = Paint::default();
+    fg_paint
+        .set_anti_alias(true)
+        .set_color(resolved.fg.to_color());
+    let font = font_for_face(metrics, resolved);
+    if let Some(text) = &cell.text {
+        draw_text_cluster(canvas, column, top, text, &font, metrics, &fg_paint);
+    }
+    draw_text_decorations(canvas, column, top, 1, metrics, resolved);
 }
 
 fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell> {
@@ -665,6 +815,11 @@ fn fill_cells(
         (metrics.cell_width * width_in_cells) as f32,
         metrics.cell_height as f32,
     );
+    canvas.draw_rect(rect, paint);
+}
+
+fn fill_rect_pixels(canvas: &Canvas, left: f32, top: f32, width: f32, height: f32, paint: &Paint) {
+    let rect = Rect::from_xywh(left, top, width, height);
     canvas.draw_rect(rect, paint);
 }
 
@@ -987,7 +1142,7 @@ pub fn resize_surface(
 
 #[cfg(test)]
 mod tests {
-    use crate::app::StatusState;
+    use crate::app::{AppConfig, CursorMode, CursorShape, StatusState};
     use crate::kakoune_messages::StatusStyle;
 
     use super::*;
@@ -1166,6 +1321,69 @@ mod tests {
     #[test]
     fn atom_display_width_treats_emoji_variation_sequence_as_one_cluster() {
         assert_eq!(atom_display_width("❤️"), 2);
+    }
+
+    #[test]
+    fn cursor_shape_uses_block_fallback_for_unknown_or_missing_modes() {
+        let config = AppConfig::default();
+
+        assert_eq!(
+            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Unknown),
+            CursorShape::Block
+        );
+        assert_eq!(
+            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Insert),
+            CursorShape::Block
+        );
+    }
+
+    #[test]
+    fn cursor_shape_uses_mode_specific_override_when_present() {
+        let mut config = AppConfig::default();
+        config.display.cursor_shape.insert = Some(CursorShape::Beam);
+        config.display.cursor_shape.normal = Some(CursorShape::Underline);
+
+        assert_eq!(
+            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Insert),
+            CursorShape::Beam
+        );
+        assert_eq!(
+            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Normal),
+            CursorShape::Underline
+        );
+    }
+
+    #[test]
+    fn non_block_cursor_shapes_use_cursor_face_background_color() {
+        let resolved = ResolvedFace {
+            fg: Rgba::rgb(0xaa, 0xbb, 0xcc),
+            bg: Rgba::rgb(0x11, 0x22, 0x33),
+            underline: Some(Rgba::rgb(0xff, 0x00, 0x00)),
+            underline_style: Some(UnderlineStyle::Straight),
+            reverse: false,
+            blink: false,
+            bold: false,
+            dim: false,
+            italic: false,
+            strikethrough: false,
+        };
+
+        assert_eq!(
+            cursor_shape_fill_color(CursorShape::Beam, &resolved),
+            resolved.bg
+        );
+        assert_eq!(
+            cursor_shape_fill_color(CursorShape::Underline, &resolved),
+            resolved.bg
+        );
+        assert_eq!(
+            cursor_indicator_color(CursorShape::Beam, &resolved),
+            resolved.bg
+        );
+        assert_eq!(
+            cursor_indicator_color(CursorShape::Underline, &resolved),
+            resolved.bg
+        );
     }
 
     #[test]

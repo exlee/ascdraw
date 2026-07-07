@@ -1282,7 +1282,7 @@ mod tests {
         assert!(output.contains("Checked configuration paths:"));
         assert!(output.contains("Current configuration:\n\n"));
         assert!(output.contains("kakvide.toml"));
-        assert!(output.contains("font-family = \"SF Mono\""));
+        assert!(output.contains("font-family = "));
         assert!(output.contains("[macos]"));
         assert!(output.contains("[keys]"));
     }

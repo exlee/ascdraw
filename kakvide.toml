@@ -6,6 +6,11 @@ transparent-menubar = true
 [cell]
 underline-offset = 0.0
 
+[display.cursor-shape]
+# normal = "block"
+# insert = "beam"
+# replace = "underline"
+
 [macos]
 color-space = "p3"
 
