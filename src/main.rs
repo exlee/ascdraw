@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, ExitCode};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser};
@@ -35,7 +37,7 @@ mod user_keys;
 
 use app::{
     AppCommand, AppConfig, AppEvent, AppState, Args, WINDOW_TITLE_UI_OPTION, apply_notification,
-    load_config,
+    checked_config_paths, load_config, show_config_toml, user_config_path,
 };
 use diagnostics::log_error;
 use input::{
@@ -356,6 +358,124 @@ fn adjust_client_font_size(client: &mut ClientWindow, action: FontSizeAction, co
     }
 }
 
+const USER_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserConfigWatchState {
+    Missing,
+    Present(SystemTime),
+    Error(String),
+}
+
+struct UserConfigWatch {
+    path: PathBuf,
+    state: UserConfigWatchState,
+}
+
+impl UserConfigWatch {
+    fn new(path: PathBuf) -> Self {
+        let state = read_user_config_watch_state(&path);
+        Self { path, state }
+    }
+}
+
+fn read_user_config_watch_state(path: &Path) -> UserConfigWatchState {
+    match fs::metadata(path) {
+        Ok(metadata) => match metadata.modified() {
+            Ok(modified) => UserConfigWatchState::Present(modified),
+            Err(error) => UserConfigWatchState::Error(format!(
+                "failed to read metadata for {}: {error}",
+                path.display()
+            )),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => UserConfigWatchState::Missing,
+        Err(error) => UserConfigWatchState::Error(format!(
+            "failed to read metadata for {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn escaped_kakoune_double_quoted_string(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+        .replace('\r', " ")
+}
+
+fn config_error_command(message: &str) -> String {
+    let escaped = escaped_kakoune_double_quoted_string(message.trim());
+    format!(
+        "echo -markup \"{{Error}}Error parsing config{{Default}}: {}\"",
+        escaped
+    )
+}
+
+fn send_kakoune_command(tx: &Sender<String>, command: &str) {
+    send_keys(tx, &[String::from(":")]);
+    send_paste(tx, command);
+    send_keys(tx, &[String::from("<ret>")]);
+}
+
+fn show_user_config_error(clients: &HashMap<WindowId, ClientWindow>, message: &str) {
+    let command = config_error_command(message);
+    for client in clients.values() {
+        send_kakoune_command(&client.command_tx, &command);
+    }
+}
+
+fn apply_reloaded_config(clients: &mut HashMap<WindowId, ClientWindow>, config: &AppConfig) {
+    for client in clients.values_mut() {
+        client.renderer.apply_config(config);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = macos::apply_window_color_space(client.window.as_ref(), &config.macos) {
+            log_error(format!("macOS color space setup failed: {error:#}"));
+        }
+        set_native_window_title(&client.window, config, &client.state.window_title);
+        client.send_resize(config);
+        client.request_redraw();
+    }
+}
+
+fn poll_user_config_updates(
+    watch: &mut UserConfigWatch,
+    config: &mut AppConfig,
+    user_keys: &mut UserKeys,
+    clients: &mut HashMap<WindowId, ClientWindow>,
+) {
+    let current_state = read_user_config_watch_state(&watch.path);
+    if current_state == watch.state {
+        return;
+    }
+
+    match &current_state {
+        UserConfigWatchState::Error(message) => {
+            show_user_config_error(clients, message);
+            watch.state = current_state;
+        }
+        UserConfigWatchState::Missing | UserConfigWatchState::Present(_) => match load_config() {
+            Ok(next_config) => match UserKeys::from_config(&next_config.keys) {
+                Ok(next_user_keys) => {
+                    *config = next_config;
+                    *user_keys = next_user_keys;
+                    apply_reloaded_config(clients, config);
+                    watch.state = current_state;
+                }
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    show_user_config_error(clients, &message);
+                    watch.state = UserConfigWatchState::Error(message);
+                }
+            },
+            Err(error) => {
+                let message = format!("{error:#}");
+                show_user_config_error(clients, &message);
+                watch.state = UserConfigWatchState::Error(message);
+            }
+        },
+    }
+}
+
 struct RuntimeContext<'a> {
     elwt: &'a ActiveEventLoop,
     clients: &'a mut HashMap<WindowId, ClientWindow>,
@@ -463,6 +583,7 @@ fn startup_args(base_args: &Args, paths: &[PathBuf]) -> Args {
     }
 
     Args {
+        show_config: base_args.show_config,
         kak_bin: base_args.kak_bin.clone(),
         kak_args: paths
             .iter()
@@ -528,10 +649,15 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let args = Args::parse_from(raw_args);
+    if let Some(output) = early_exit_output(&args)? {
+        print!("{output}");
+        return Ok(ExitCode::SUCCESS);
+    }
     apply_launch_directory();
 
-    let config = load_config()?;
-    let user_keys = UserKeys::from_config(&config.keys)?;
+    let mut config = load_config()?;
+    let mut user_keys = UserKeys::from_config(&config.keys)?;
+    let mut user_config_watch = user_config_path().map(UserConfigWatch::new);
     if let Err(error) = icon::apply_app_icon() {
         log_error(format!("app icon setup failed: {error:#}"));
     }
@@ -576,7 +702,9 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     let mut did_install_macos_menus_after_winit = false;
 
     event_loop.run(move |event, elwt| {
-        elwt.set_control_flow(ControlFlow::Wait);
+        elwt.set_control_flow(ControlFlow::WaitUntil(
+            std::time::Instant::now() + USER_CONFIG_POLL_INTERVAL,
+        ));
 
         match event {
             Event::Resumed => {
@@ -695,6 +823,14 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                 .handle_command(command, None);
             }
             Event::AboutToWait => {
+                if let Some(watch) = user_config_watch.as_mut() {
+                    poll_user_config_updates(
+                        watch,
+                        &mut config,
+                        &mut user_keys,
+                        &mut clients,
+                    );
+                }
                 if should_create_fallback_startup_client(
                     startup_open_state,
                     !clients.is_empty(),
@@ -862,6 +998,23 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn early_exit_output(args: &Args) -> Result<Option<String>> {
+    if args.show_config {
+        let config = load_config()?;
+        let config_toml = show_config_toml(&config)?;
+        let checked_paths = checked_config_paths();
+        let mut output = String::from("Checked configuration paths:\n");
+        for path in checked_paths {
+            output.push_str(&format!("- {}\n", path.display()));
+        }
+        output.push_str("\nCurrent configuration:\n\n");
+        output.push_str(&config_toml);
+        Ok(Some(output))
+    } else {
+        Ok(None)
+    }
+}
+
 fn should_show_combined_help(raw_args: &[OsString]) -> bool {
     let args: Vec<&OsString> = raw_args.iter().skip(1).collect();
     let split_at = args
@@ -981,6 +1134,7 @@ fn connected_kakoune_args(kak_bin: &str, kakoune_session: &OsStr, paths: &[PathB
     let mut kak_args = vec![OsString::from("-c"), kakoune_session.to_os_string()];
     kak_args.extend(paths.iter().map(|path| path.as_os_str().to_os_string()));
     Args {
+        show_config: false,
         kak_bin: kak_bin.to_string(),
         kak_args,
     }
@@ -988,19 +1142,23 @@ fn connected_kakoune_args(kak_bin: &str, kakoune_session: &OsStr, paths: &[PathB
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use std::ffi::OsString;
+    use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
 
     use super::{
-        KakvideHookInstallState, StartupOpenState, client_name_from_ui_options,
+        KakvideHookInstallState, StartupOpenState, UserConfigWatchState,
+        client_name_from_ui_options, config_error_command,
         connected_kakoune_args, default_launch_directory, extract_kak_bin,
-        kakvide_hook_prompt_keys, resolve_kakoune_session, should_create_fallback_startup_client,
+        early_exit_output, kakvide_hook_prompt_keys, read_user_config_watch_state,
+        resolve_kakoune_session, should_create_fallback_startup_client,
         should_handle_startup_open_with_files, should_ignore_startup_open_files,
         should_show_combined_help, should_update_native_window_title, startup_open_files,
         startup_open_state_for_launch,
     };
-    use crate::app::AppConfig;
+    use crate::app::{AppConfig, Args};
 
     #[test]
     fn top_level_help_triggers_combined_help() {
@@ -1112,6 +1270,61 @@ mod tests {
             !cfg!(target_os = "macos")
         );
         assert!(should_update_native_window_title(&standard_config));
+    }
+
+    #[test]
+    fn early_exit_output_returns_none_without_show_config() {
+        let args = Args::try_parse_from(["kakvide", "file.txt"]).expect("args should parse");
+
+        assert_eq!(early_exit_output(&args).unwrap(), None);
+    }
+
+    #[test]
+    fn early_exit_output_returns_effective_config_for_show_config() {
+        let args = Args::try_parse_from(["kakvide", "--show-config"]).expect("args should parse");
+        let output = early_exit_output(&args)
+            .expect("show config should succeed")
+            .expect("show config should early-exit");
+
+        assert!(output.contains("Checked configuration paths:"));
+        assert!(output.contains("Current configuration:\n\n"));
+        assert!(output.contains("kakvide.toml"));
+        assert!(output.contains("font-family = \"SF Mono\""));
+        assert!(output.contains("[macos]"));
+        assert!(output.contains("[keys]"));
+    }
+
+    #[test]
+    fn config_error_command_uses_error_markup() {
+        assert_eq!(
+            config_error_command("failed to parse \"font-size\"\nextra"),
+            "echo -markup \"{Error}Error parsing config{Default}: failed to parse \\\"font-size\\\" extra\""
+        );
+    }
+
+    #[test]
+    fn watch_state_reports_missing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "kakvide-missing-config-{}-missing.toml",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(read_user_config_watch_state(&path), UserConfigWatchState::Missing);
+    }
+
+    #[test]
+    fn watch_state_reports_present_file() {
+        let path = std::env::temp_dir().join(format!(
+            "kakvide-present-config-{}.toml",
+            std::process::id()
+        ));
+        fs::write(&path, "font-size = 14.0\n").expect("temp config should be written");
+
+        let state = read_user_config_watch_state(&path);
+        assert!(matches!(state, UserConfigWatchState::Present(_)));
+
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

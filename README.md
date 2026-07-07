@@ -28,6 +28,10 @@ This is work in progress.
 
 Some features aren't yet documented (e.g. see `kakvide.toml`), bugs are inevitable.
 
+Kakvide uses the checked-in `kakvide.toml` as its bundled default config. Users can override any subset of settings with `~/.config/kakvide/config.toml`, or `$XDG_CONFIG_HOME/kakvide/config.toml` when `XDG_CONFIG_HOME` is set.
+
+Use `kakvide --show-config` to print the full effective config, including bundled defaults plus any user overrides.
+
 ## LLM disclaimer
 
 The code was developed with Codex/ChatGPT 5.4, with an adequate amount of handholding.

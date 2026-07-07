@@ -539,6 +539,7 @@ mod tests {
     #[test]
     fn build_kakoune_command_includes_json_ui_before_forwarded_args() {
         let args = Args {
+            show_config: false,
             kak_bin: "kak".to_string(),
             kak_args: vec![
                 OsString::from("-d"),
@@ -568,6 +569,7 @@ mod tests {
     #[test]
     fn unix_shell_command_runs_kak_through_shell_lc() {
         let args = crate::app::Args {
+            show_config: false,
             kak_bin: "kak".to_string(),
             kak_args: vec![OsString::from("file.txt")],
         };

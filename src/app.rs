@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml::Value;
 
 use crate::kakoune_messages::{
@@ -19,13 +19,15 @@ pub const WINDOW_TITLE_UI_OPTION: &str = "kakvide_title";
 #[derive(Parser, Debug, Clone)]
 #[command(trailing_var_arg = true)]
 pub struct Args {
+    #[arg(long)]
+    pub show_config: bool,
     #[arg(long, default_value = "kak")]
     pub kak_bin: String,
     #[arg(value_name = "KAK_ARG")]
     pub kak_args: Vec<OsString>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct AppConfig {
     pub font_family: String,
@@ -43,7 +45,7 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct CellConfig {
     pub underline_offset: f32,
@@ -55,7 +57,7 @@ impl Default for CellConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct MacosConfig {
     pub color_space: MacosColorSpace,
@@ -67,7 +69,7 @@ impl Default for MacosConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MacosColorSpace {
     P3,
@@ -192,13 +194,84 @@ impl Default for AppState {
 }
 
 pub fn load_config() -> Result<AppConfig> {
-    let path = "kakvide.toml";
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            toml::from_str(&contents).with_context(|| format!("failed to parse {path}"))
+    load_config_with_env(|name| std::env::var_os(name))
+}
+
+pub fn checked_config_paths() -> Vec<PathBuf> {
+    checked_config_paths_with_env(|name| std::env::var_os(name))
+}
+
+pub fn user_config_path() -> Option<PathBuf> {
+    user_config_path_with_env(|name| std::env::var_os(name))
+}
+
+pub fn show_config_toml(config: &AppConfig) -> Result<String> {
+    toml::to_string_pretty(config).context("failed to serialize effective config")
+}
+
+fn load_config_with_env(env_var: impl Fn(&str) -> Option<OsString>) -> Result<AppConfig> {
+    let mut value = bundled_default_value();
+    if let Some(path) = user_config_path_with_env(&env_var) {
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                let user_value = toml::from_str::<Value>(&contents)
+                    .with_context(|| format!("failed to parse {}", path.display()))?;
+                merge_toml_value(&mut value, user_value);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()));
+            }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
-        Err(error) => Err(error).with_context(|| format!("failed to read {path}")),
+    }
+
+    value
+        .try_into()
+        .context("failed to parse effective config")
+}
+
+fn user_config_path_with_env(env_var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    checked_config_paths_with_env(env_var).into_iter().nth(1)
+}
+
+fn checked_config_paths_with_env(env_var: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
+    let mut paths = vec![bundled_config_path()];
+    if let Some(xdg_config_home) = env_var("XDG_CONFIG_HOME")
+        && !xdg_config_home.is_empty()
+    {
+        paths.push(PathBuf::from(xdg_config_home).join("kakvide").join("config.toml"));
+        return paths;
+    }
+
+    if let Some(home) = env_var("HOME").filter(|home| !home.is_empty()) {
+        paths.push(
+            PathBuf::from(home)
+                .join(".config")
+                .join("kakvide")
+                .join("config.toml"),
+        );
+    }
+
+    paths
+}
+
+fn bundled_config_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("kakvide.toml")
+}
+
+fn merge_toml_value(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Table(base_table), Value::Table(overlay_table)) => {
+            for (key, overlay_value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(base_value) => merge_toml_value(base_value, overlay_value),
+                    None => {
+                        base_table.insert(key, overlay_value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => *base_value = overlay_value,
     }
 }
 
@@ -437,6 +510,16 @@ mod tests {
     fn parses_without_forwarded_args() {
         let args = Args::try_parse_from(["kakvide"]).expect("args should parse");
 
+        assert!(!args.show_config);
+        assert_eq!(args.kak_bin, "kak");
+        assert!(args.kak_args.is_empty());
+    }
+
+    #[test]
+    fn parses_show_config_flag() {
+        let args = Args::try_parse_from(["kakvide", "--show-config"]).expect("args should parse");
+
+        assert!(args.show_config);
         assert_eq!(args.kak_bin, "kak");
         assert!(args.kak_args.is_empty());
     }
@@ -472,6 +555,7 @@ mod tests {
     fn forwards_option_args_after_double_dash() {
         let args = Args::try_parse_from([
             "kakvide",
+            "--show-config",
             "--kak-bin",
             "/tmp/kak",
             "--",
@@ -482,6 +566,7 @@ mod tests {
         ])
         .expect("args should parse");
 
+        assert!(args.show_config);
         assert_eq!(args.kak_bin, "/tmp/kak");
         assert_eq!(
             args.kak_args,
@@ -505,6 +590,141 @@ mod tests {
         assert_eq!(config.cell.underline_offset, 0.0);
         assert_eq!(config.macos.color_space, MacosColorSpace::P3);
         assert_eq!(config.keys, UserKeysConfig::default());
+    }
+
+    #[test]
+    fn config_path_uses_xdg_config_home_when_set() {
+        let paths = checked_config_paths_with_env(|name| match name {
+            "XDG_CONFIG_HOME" => Some(OsString::from("/tmp/xdg")),
+            "HOME" => Some(OsString::from("/Users/example")),
+            _ => None,
+        });
+
+        assert_eq!(
+            paths,
+            vec![
+                bundled_config_path(),
+                PathBuf::from("/tmp/xdg/kakvide/config.toml")
+            ]
+        );
+    }
+
+    #[test]
+    fn config_path_falls_back_to_home_when_xdg_unset() {
+        let paths = checked_config_paths_with_env(|name| match name {
+            "HOME" => Some(OsString::from("/Users/example")),
+            _ => None,
+        });
+
+        assert_eq!(
+            paths,
+            vec![
+                bundled_config_path(),
+                PathBuf::from("/Users/example/.config/kakvide/config.toml")
+            ]
+        );
+    }
+
+    #[test]
+    fn config_path_falls_back_to_home_when_xdg_empty() {
+        let paths = checked_config_paths_with_env(|name| match name {
+            "XDG_CONFIG_HOME" => Some(OsString::from("")),
+            "HOME" => Some(OsString::from("/Users/example")),
+            _ => None,
+        });
+
+        assert_eq!(
+            paths,
+            vec![
+                bundled_config_path(),
+                PathBuf::from("/Users/example/.config/kakvide/config.toml")
+            ]
+        );
+    }
+
+    #[test]
+    fn config_path_is_missing_without_xdg_or_home() {
+        assert_eq!(checked_config_paths_with_env(|_| None), vec![bundled_config_path()]);
+    }
+
+    #[test]
+    fn load_config_uses_defaults_without_user_file() {
+        let config = load_config_with_env(|_| None).expect("config should load");
+
+        assert_eq!(config.font_family, AppConfig::default().font_family);
+        assert_eq!(config.font_size, AppConfig::default().font_size);
+        assert_eq!(config.mouse_scroll_rate, AppConfig::default().mouse_scroll_rate);
+        assert_eq!(config.transparent_menubar, AppConfig::default().transparent_menubar);
+        assert_eq!(config.cell, AppConfig::default().cell);
+        assert_eq!(config.macos, AppConfig::default().macos);
+        assert_eq!(config.keys, AppConfig::default().keys);
+    }
+
+    #[test]
+    fn config_merges_user_overrides() {
+        let mut value = bundled_default_value();
+        let user_value = toml::from_str::<Value>(
+            r#"
+font-size = 18.0
+transparent-menubar = false
+
+[cell]
+underline-offset = 1.5
+
+[macos]
+color-space = "srgb"
+
+[keys]
+window-new = "Cmd-Shift-N"
+"#,
+        )
+        .expect("user config should parse");
+
+        merge_toml_value(&mut value, user_value);
+        let config: AppConfig = value.try_into().expect("merged config should parse");
+
+        assert_eq!(config.font_family, "SF Mono");
+        assert_eq!(config.font_size, 18.0);
+        assert!(!config.transparent_menubar);
+        assert_eq!(config.cell.underline_offset, 1.5);
+        assert_eq!(config.macos.color_space, MacosColorSpace::Srgb);
+        assert_eq!(config.keys.window_new, "Cmd-Shift-N");
+        assert_eq!(config.keys.window_close, "Cmd-W");
+    }
+
+    #[test]
+    fn show_config_prints_all_effective_settings() {
+        let config = AppConfig {
+            font_size: 18.0,
+            transparent_menubar: false,
+            macos: MacosConfig {
+                color_space: MacosColorSpace::Srgb,
+            },
+            ..AppConfig::default()
+        };
+        let output = show_config_toml(&config).expect("config should serialize");
+
+        assert!(output.contains("font-family = \"SF Mono\""));
+        assert!(output.contains("font-size = 18.0"));
+        assert!(output.contains("transparent-menubar = false"));
+        assert!(output.contains("[cell]"));
+        assert!(output.contains("[macos]"));
+        assert!(output.contains("color-space = \"srgb\""));
+        assert!(output.contains("[keys]"));
+        assert!(output.contains("window-close = \"Cmd-W\""));
+    }
+
+    #[test]
+    fn user_config_path_skips_bundled_entry() {
+        let path = user_config_path_with_env(|name| match name {
+            "HOME" => Some(OsString::from("/Users/example")),
+            _ => None,
+        });
+
+        assert_eq!(
+            path,
+            Some(PathBuf::from("/Users/example/.config/kakvide/config.toml"))
+        );
     }
 
     #[test]

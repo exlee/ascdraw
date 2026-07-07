@@ -797,6 +797,16 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
 }
 
 impl Renderer {
+    pub fn apply_config(&mut self, config: &AppConfig) {
+        let font_size_delta = self.logical_font_size.get() - self.default_logical_font_size;
+        self.preferred_font_family = config.font_family.clone();
+        self.default_logical_font_size = config.font_size;
+        self.underline_offset = config.cell.underline_offset;
+        self.logical_font_size
+            .set((config.font_size + font_size_delta).max(6.0));
+        self.metrics_cache.borrow_mut().take();
+    }
+
     pub fn adjust_font_size(&self, delta: f32) -> bool {
         const MIN_FONT_SIZE: f32 = 6.0;
 
