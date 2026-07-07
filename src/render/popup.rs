@@ -4,7 +4,7 @@ use crate::app::{InfoState, MenuState};
 use crate::kakoune_messages::{InfoStyle, MenuStyle};
 use crate::layout::bottom_overlay_top;
 use crate::render::{
-    CellMetrics, LineRenderPosition, fill_line_segment, fill_line_segment_at_top, fill_rect,
+    CellMetrics, DrawOrigin, LineRenderPosition, fill_line_segment, fill_line_segment_at_top, fill_rect,
     fill_rect_at_top, line_display_width, render_line_at, render_line_at_top, render_string_line,
     render_string_line_at_top, truncate_atoms,
 };
@@ -50,7 +50,13 @@ pub(super) fn render_menu(
 
     let layout = menu_layout(menu, cols, rows, window_height, metrics.cell_height)?;
     if matches!(menu.style, MenuStyle::Inline) {
-        fill_rect(canvas, layout.rect, &menu.menu_face, metrics, top_padding);
+        fill_rect(
+            canvas,
+            layout.rect,
+            &menu.menu_face,
+            metrics,
+            DrawOrigin::Grid { top_padding },
+        );
     } else {
         fill_rect_at_top(canvas, layout.rect, &menu.menu_face, metrics, layout.top);
     }
@@ -245,7 +251,7 @@ fn render_single_column_menu(
                 layout.rect.width,
                 face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
             render_line_at(
                 canvas,
@@ -257,7 +263,7 @@ fn render_single_column_menu(
                 item,
                 face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         } else {
             fill_line_segment_at_top(
@@ -303,7 +309,7 @@ fn render_single_row_menu(
                 "< ",
                 &menu.menu_face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         } else {
             render_string_line_at_top(canvas, column, "< ", &menu.menu_face, metrics, layout.top);
@@ -338,7 +344,7 @@ fn render_single_row_menu(
                 &truncated,
                 face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         } else {
             render_line_at_top(
@@ -364,7 +370,7 @@ fn render_single_row_menu(
                     "…",
                     &menu.menu_face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             } else {
                 render_string_line_at_top(
@@ -389,7 +395,7 @@ fn render_single_row_menu(
                     " ",
                     &menu.menu_face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             } else {
                 render_string_line_at_top(
@@ -415,7 +421,7 @@ fn render_single_row_menu(
                 ">",
                 &menu.menu_face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         } else {
             render_string_line_at_top(
@@ -480,7 +486,7 @@ fn render_multi_column_menu(
                     layout.column_width,
                     face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             } else {
                 fill_line_segment_at_top(
@@ -506,7 +512,7 @@ fn render_multi_column_menu(
                         &truncated,
                         face,
                         metrics,
-                        top_padding,
+                        DrawOrigin::Grid { top_padding },
                     );
                 } else {
                     render_line_at_top(
@@ -539,7 +545,7 @@ fn render_multi_column_menu(
                 marker,
                 scrollbar_face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         } else {
             render_string_line_at_top(
@@ -597,7 +603,13 @@ pub(super) fn render_info(
     if matches!(info.style, InfoStyle::Prompt) {
         fill_rect_at_top(canvas, layout.rect, &info.face, metrics, layout.top);
     } else {
-        fill_rect(canvas, layout.rect, &info.face, metrics, top_padding);
+        fill_rect(
+            canvas,
+            layout.rect,
+            &info.face,
+            metrics,
+            DrawOrigin::Grid { top_padding },
+        );
     }
 
     if framed {
@@ -628,7 +640,7 @@ pub(super) fn render_info(
                     line,
                     &info.face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             }
         }
@@ -685,7 +697,7 @@ fn render_framed_info(
                 &top,
                 &info.face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
             render_line_at(
                 canvas,
@@ -697,7 +709,7 @@ fn render_framed_info(
                 &title,
                 &info.face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         }
         let mut right = String::from("├");
@@ -720,7 +732,7 @@ fn render_framed_info(
                 &right,
                 &info.face,
                 metrics,
-                top_padding,
+                DrawOrigin::Grid { top_padding },
             );
         }
         return render_framed_info_body(canvas, info, layout, metrics, top_padding);
@@ -736,7 +748,7 @@ fn render_framed_info(
             &top,
             &info.face,
             metrics,
-            top_padding,
+            DrawOrigin::Grid { top_padding },
         );
     }
     render_framed_info_body(canvas, info, layout, metrics, top_padding);
@@ -786,7 +798,7 @@ fn render_framed_info_body(
                     "│ ",
                     &info.face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
                 render_line_at(
                     canvas,
@@ -798,7 +810,7 @@ fn render_framed_info_body(
                     line,
                     &info.face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
                 render_string_line(
                     canvas,
@@ -807,7 +819,7 @@ fn render_framed_info_body(
                     " │",
                     &info.face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             }
         } else {
@@ -829,7 +841,7 @@ fn render_framed_info_body(
                     &blank,
                     &info.face,
                     metrics,
-                    top_padding,
+                    DrawOrigin::Grid { top_padding },
                 );
             }
         }
@@ -853,7 +865,7 @@ fn render_framed_info_body(
             &bottom,
             &info.face,
             metrics,
-            top_padding,
+            DrawOrigin::Grid { top_padding },
         );
     }
 }

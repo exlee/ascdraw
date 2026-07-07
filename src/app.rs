@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -10,6 +11,7 @@ use toml::Value;
 use crate::kakoune_messages::{
     Atom, Coord, Face, InfoStyle, KakouneNotification, MenuStyle, StatusStyle,
 };
+use crate::title_policy::decode_title_update;
 use crate::user_keys::UserKeysConfig;
 use winit::window::WindowId;
 
@@ -397,15 +399,30 @@ pub fn bundled_default_cursor_shape_config() -> CursorShapeConfig {
         normal: cursor_shape
             .get("normal")
             .and_then(Value::as_str)
-            .map(parse_cursor_shape),
+            .map(|value| match value {
+                "block" => CursorShape::Block,
+                "beam" => CursorShape::Beam,
+                "underline" => CursorShape::Underline,
+                other => panic!("unsupported bundled [display.cursor-shape] value {other}"),
+            }),
         insert: cursor_shape
             .get("insert")
             .and_then(Value::as_str)
-            .map(parse_cursor_shape),
+            .map(|value| match value {
+                "block" => CursorShape::Block,
+                "beam" => CursorShape::Beam,
+                "underline" => CursorShape::Underline,
+                other => panic!("unsupported bundled [display.cursor-shape] value {other}"),
+            }),
         replace: cursor_shape
             .get("replace")
             .and_then(Value::as_str)
-            .map(parse_cursor_shape),
+            .map(|value| match value {
+                "block" => CursorShape::Block,
+                "beam" => CursorShape::Beam,
+                "underline" => CursorShape::Underline,
+                other => panic!("unsupported bundled [display.cursor-shape] value {other}"),
+            }),
     }
 }
 
@@ -466,7 +483,13 @@ pub fn bundled_default_keys() -> UserKeysConfig {
 }
 
 fn bundled_default_value() -> Value {
-    toml::from_str(include_str!("../kakvide.toml")).expect("bundled kakvide.toml should parse")
+    static BUNDLED_DEFAULT_VALUE: OnceLock<Value> = OnceLock::new();
+    BUNDLED_DEFAULT_VALUE
+        .get_or_init(|| {
+            toml::from_str(include_str!("../kakvide.toml"))
+                .expect("bundled kakvide.toml should parse")
+        })
+        .clone()
 }
 
 pub fn apply_notification(state: &mut AppState, notification: KakouneNotification) {
@@ -507,8 +530,8 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
             let _ = force;
         }
         KakouneNotification::SetUiOptions { options } => {
-            if let Some(window_title) = window_title_from_ui_options(&options) {
-                state.window_title = window_title;
+            if let Some(title_update) = decode_title_update(&options) {
+                state.window_title = title_update.window_title;
             }
             if let Some(cursor_mode) = cursor_mode_from_ui_options(&options) {
                 state.cursor_mode = cursor_mode;
@@ -559,38 +582,6 @@ pub fn apply_notification(state: &mut AppState, notification: KakouneNotificatio
     }
 }
 
-fn parse_cursor_shape(value: &str) -> CursorShape {
-    match value {
-        "block" => CursorShape::Block,
-        "beam" => CursorShape::Beam,
-        "underline" => CursorShape::Underline,
-        other => panic!("unsupported bundled [display.cursor-shape] value {other}"),
-    }
-}
-
-fn window_title_from_ui_options(
-    options: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    let title = options
-        .get(WINDOW_TITLE_UI_OPTION)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)?;
-
-    if title.is_empty() {
-        return Some(DEFAULT_WINDOW_TITLE.to_string());
-    }
-
-    if let Some((pwd, client)) = title.rsplit_once(" - ") {
-        Some(format!(
-            "{DEFAULT_WINDOW_TITLE} - {} - {}",
-            pwd.trim(),
-            display_client_name(client.trim())
-        ))
-    } else {
-        Some(format!("{DEFAULT_WINDOW_TITLE} - {title}"))
-    }
-}
-
 fn cursor_mode_from_ui_options(
     options: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<CursorMode> {
@@ -598,18 +589,6 @@ fn cursor_mode_from_ui_options(
         .get(CURSOR_MODE_UI_OPTION)
         .and_then(serde_json::Value::as_str)
         .map(CursorMode::from_ui_option)
-}
-
-fn display_client_name(client: &str) -> String {
-    if let Some(suffix) = client.strip_prefix("client") {
-        if suffix.is_empty() {
-            "Client".to_string()
-        } else {
-            format!("Client {suffix}")
-        }
-    } else {
-        client.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -969,34 +948,6 @@ color-space = "adobe-rgb"
 
         assert!(error.contains("unknown variant"));
         assert!(error.contains("adobe-rgb"));
-    }
-
-    #[test]
-    fn set_ui_options_updates_window_title_from_kakvide_title() {
-        let mut state = AppState::default();
-        let mut options = serde_json::Map::new();
-        options.insert(
-            WINDOW_TITLE_UI_OPTION.to_string(),
-            serde_json::Value::String("/tmp/project - client0".to_string()),
-        );
-
-        apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
-
-        assert_eq!(state.window_title, "kakvide - /tmp/project - Client 0");
-    }
-
-    #[test]
-    fn set_ui_options_preserves_non_default_client_name() {
-        let mut state = AppState::default();
-        let mut options = serde_json::Map::new();
-        options.insert(
-            WINDOW_TITLE_UI_OPTION.to_string(),
-            serde_json::Value::String("/tmp/project - main".to_string()),
-        );
-
-        apply_notification(&mut state, KakouneNotification::SetUiOptions { options });
-
-        assert_eq!(state.window_title, "kakvide - /tmp/project - main");
     }
 
     #[test]

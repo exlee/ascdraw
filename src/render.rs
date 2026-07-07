@@ -75,6 +75,12 @@ pub(in crate::render) struct LineRenderPosition {
     pub max_columns: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::render) enum DrawOrigin {
+    Grid { top_padding: usize },
+    Top { top: usize },
+}
+
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
@@ -167,7 +173,9 @@ fn render_canvas(
             &state.grid.default_face,
             cols,
             metrics,
-            layout.top_padding,
+            DrawOrigin::Grid {
+                top_padding: layout.top_padding,
+            },
         );
     }
 
@@ -271,7 +279,7 @@ fn render_status(
     };
 
     if !prompt_line.is_empty() {
-        render_line_at_top(
+        render_line_at(
             canvas,
             LineRenderPosition {
                 row: 0,
@@ -281,12 +289,12 @@ fn render_status(
             &prompt_line,
             &status.default_face,
             metrics,
-            top,
+            DrawOrigin::Top { top },
         );
     }
 
     if !status.mode_line.is_empty() {
-        render_line_at_top(
+        render_line_at(
             canvas,
             LineRenderPosition {
                 row: 0,
@@ -296,7 +304,7 @@ fn render_status(
             &status.mode_line,
             &status.default_face,
             metrics,
-            top,
+            DrawOrigin::Top { top },
         );
     }
 }
@@ -308,7 +316,7 @@ fn render_line(
     default_face: &Face,
     max_columns: usize,
     metrics: &CellMetrics,
-    top_padding: usize,
+    origin: DrawOrigin,
 ) {
     render_line_at(
         canvas,
@@ -320,7 +328,7 @@ fn render_line(
         line,
         default_face,
         metrics,
-        top_padding,
+        origin,
     );
 }
 
@@ -330,20 +338,9 @@ pub(in crate::render) fn render_line_at(
     line: &[Atom],
     default_face: &Face,
     metrics: &CellMetrics,
-    top_padding: usize,
+    origin: DrawOrigin,
 ) {
-    let top = row_top(position.row, metrics, top_padding);
-    render_line_at_top(canvas, position, line, default_face, metrics, top);
-}
-
-pub(in crate::render) fn render_line_at_top(
-    canvas: &Canvas,
-    position: LineRenderPosition,
-    line: &[Atom],
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
+    let top = line_top(origin, position.row, metrics);
     let mut column = position.start_column;
     let mut bg_paint = Paint::default();
     bg_paint.set_anti_alias(false);
@@ -533,10 +530,7 @@ fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> Cursor
 }
 
 fn cursor_shape_fill_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
-    match shape {
-        CursorShape::Block => resolved.bg,
-        CursorShape::Beam | CursorShape::Underline => resolved.bg,
-    }
+    cursor_indicator_color(shape, resolved)
 }
 
 fn cursor_indicator_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
@@ -636,26 +630,9 @@ pub(in crate::render) fn fill_line_segment(
     width: usize,
     face: &Face,
     metrics: &CellMetrics,
-    top_padding: usize,
+    origin: DrawOrigin,
 ) {
-    fill_line_segment_at_top(
-        canvas,
-        column,
-        width,
-        face,
-        metrics,
-        row_top(row, metrics, top_padding),
-    );
-}
-
-pub(in crate::render) fn fill_line_segment_at_top(
-    canvas: &Canvas,
-    column: usize,
-    width: usize,
-    face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
+    let top = line_top(origin, row, metrics);
     let bg = resolve_root_face(face, FALLBACK_FG, FALLBACK_BG)
         .bg
         .to_color();
@@ -669,15 +646,26 @@ pub(in crate::render) fn fill_rect(
     rect: popup::CellRect,
     face: &Face,
     metrics: &CellMetrics,
-    top_padding: usize,
+    origin: DrawOrigin,
 ) {
-    fill_rect_at_top(
-        canvas,
-        rect,
-        face,
-        metrics,
-        row_top(rect.row, metrics, top_padding),
-    );
+    for row_offset in 0..rect.height {
+        let row = match origin {
+            DrawOrigin::Grid { .. } => rect.row + row_offset,
+            DrawOrigin::Top { .. } => row_offset,
+        };
+        fill_line_segment(
+            canvas,
+            row,
+            rect.column,
+            rect.width,
+            face,
+            metrics,
+            match origin {
+                DrawOrigin::Grid { top_padding } => DrawOrigin::Grid { top_padding },
+                DrawOrigin::Top { top } => DrawOrigin::Top { top },
+            },
+        );
+    }
 }
 
 pub(in crate::render) fn fill_rect_at_top(
@@ -687,16 +675,26 @@ pub(in crate::render) fn fill_rect_at_top(
     metrics: &CellMetrics,
     top: usize,
 ) {
-    for row in rect.row..rect.row + rect.height {
-        fill_line_segment_at_top(
-            canvas,
-            rect.column,
-            rect.width,
-            face,
-            metrics,
-            top + (row - rect.row) * metrics.cell_height,
-        );
-    }
+    fill_rect(canvas, rect, face, metrics, DrawOrigin::Top { top });
+}
+
+pub(in crate::render) fn fill_line_segment_at_top(
+    canvas: &Canvas,
+    column: usize,
+    width: usize,
+    face: &Face,
+    metrics: &CellMetrics,
+    top: usize,
+) {
+    fill_line_segment(
+        canvas,
+        0,
+        column,
+        width,
+        face,
+        metrics,
+        DrawOrigin::Top { top },
+    );
 }
 
 pub(in crate::render) fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
@@ -750,19 +748,27 @@ pub(in crate::render) fn render_string_line(
     text: &str,
     default_face: &Face,
     metrics: &CellMetrics,
-    top_padding: usize,
+    origin: DrawOrigin,
 ) {
     if text.is_empty() {
         return;
     }
 
-    render_string_line_at_top(
+    let atoms = [Atom {
+        face: Face::default(),
+        contents: text.to_string(),
+    }];
+    render_line_at(
         canvas,
-        column,
-        text,
+        LineRenderPosition {
+            row,
+            start_column: column,
+            max_columns: column + atom_display_width(text),
+        },
+        &atoms,
         default_face,
         metrics,
-        row_top(row, metrics, top_padding),
+        origin,
     );
 }
 
@@ -774,30 +780,44 @@ pub(in crate::render) fn render_string_line_at_top(
     metrics: &CellMetrics,
     top: usize,
 ) {
-    if text.is_empty() {
-        return;
-    }
-
-    let atoms = [Atom {
-        face: Face::default(),
-        contents: text.to_string(),
-    }];
-    render_line_at_top(
+    render_string_line(
         canvas,
-        LineRenderPosition {
-            row: 0,
-            start_column: column,
-            max_columns: column + atom_display_width(text),
-        },
-        &atoms,
+        0,
+        column,
+        text,
         default_face,
         metrics,
-        top,
+        DrawOrigin::Top { top },
+    );
+}
+
+pub(in crate::render) fn render_line_at_top(
+    canvas: &Canvas,
+    position: LineRenderPosition,
+    line: &[Atom],
+    default_face: &Face,
+    metrics: &CellMetrics,
+    top: usize,
+) {
+    render_line_at(
+        canvas,
+        position,
+        line,
+        default_face,
+        metrics,
+        DrawOrigin::Top { top },
     );
 }
 
 fn row_top(row: usize, metrics: &CellMetrics, top_padding: usize) -> usize {
     top_padding + row * metrics.cell_height
+}
+
+fn line_top(origin: DrawOrigin, row: usize, metrics: &CellMetrics) -> usize {
+    match origin {
+        DrawOrigin::Grid { top_padding } => row_top(row, metrics, top_padding),
+        DrawOrigin::Top { top } => top + row * metrics.cell_height,
+    }
 }
 
 fn fill_cells(
