@@ -120,9 +120,6 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
     let mut config = load_config()?;
     let mut user_keys = UserKeys::from_config(&config.keys)?;
     let mut user_config_watch = user_config_path().map(UserConfigWatch::new);
-    if let Err(error) = icon::apply_app_icon() {
-        log_error(format!("app icon setup failed: {error:#}"));
-    }
     let window_icon = match icon::load_window_icon() {
         Ok(icon) => Some(icon),
         Err(error) => {
@@ -162,6 +159,8 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
         startup_open_state_for_launch(cfg!(target_os = "macos"), &args.kak_args);
     #[cfg(target_os = "macos")]
     let mut did_install_macos_menus_after_winit = false;
+    #[cfg(target_os = "macos")]
+    let mut should_apply_app_icon = true;
 
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::WaitUntil(
@@ -350,6 +349,14 @@ fn try_main(raw_args: Vec<OsString>) -> Result<ExitCode> {
                                 log_error(format!("render failed: {error:#}"));
                                 let _ = client.child.kill();
                                 remove_client = true;
+                            } else {
+                                #[cfg(target_os = "macos")]
+                                if should_apply_app_icon {
+                                    should_apply_app_icon = false;
+                                    if let Err(error) = icon::apply_app_icon() {
+                                        log_error(format!("app icon setup failed: {error:#}"));
+                                    }
+                                }
                             }
                         }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
