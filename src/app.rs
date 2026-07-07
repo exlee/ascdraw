@@ -32,6 +32,7 @@ pub struct AppConfig {
     pub font_size: f32,
     pub mouse_scroll_rate: f32,
     pub transparent_menubar: bool,
+    pub cell: CellConfig,
     pub macos: MacosConfig,
     pub keys: UserKeysConfig,
 }
@@ -39,6 +40,18 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         bundled_default_config()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct CellConfig {
+    pub underline_offset: f32,
+}
+
+impl Default for CellConfig {
+    fn default() -> Self {
+        bundled_default_cell_config()
     }
 }
 
@@ -210,8 +223,24 @@ fn bundled_default_config() -> AppConfig {
             .get("transparent-menubar")
             .and_then(Value::as_bool)
             .expect("bundled kakvide.toml should set transparent-menubar"),
+        cell: bundled_default_cell_config(),
         macos: bundled_default_macos_config(),
         keys: bundled_default_keys(),
+    }
+}
+
+pub fn bundled_default_cell_config() -> CellConfig {
+    let value = bundled_default_value();
+    let cell = value
+        .get("cell")
+        .and_then(Value::as_table)
+        .expect("bundled kakvide.toml should contain a [cell] section");
+
+    CellConfig {
+        underline_offset: cell
+            .get("underline-offset")
+            .and_then(Value::as_float)
+            .expect("bundled [cell] should set underline-offset") as f32,
     }
 }
 
@@ -472,8 +501,31 @@ mod tests {
         assert_eq!(config.font_size, 12.0);
         assert_eq!(config.mouse_scroll_rate, 0.25);
         assert!(config.transparent_menubar);
+        assert_eq!(config.cell, CellConfig::default());
+        assert_eq!(config.cell.underline_offset, 0.0);
         assert_eq!(config.macos.color_space, MacosColorSpace::P3);
         assert_eq!(config.keys, UserKeysConfig::default());
+    }
+
+    #[test]
+    fn config_parses_fractional_cell_underline_offset() {
+        let config: AppConfig = toml::from_str(
+            r#"
+font-family = "SF Mono"
+font-size = 12.0
+mouse-scroll-rate = 0.25
+transparent-menubar = true
+
+[cell]
+underline-offset = 1.5
+
+[macos]
+color-space = "p3"
+"#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(config.cell.underline_offset, 1.5);
     }
 
     #[test]

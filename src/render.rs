@@ -32,6 +32,7 @@ pub struct Renderer {
     font_mgr: FontMgr,
     preferred_font_family: String,
     default_logical_font_size: f32,
+    underline_offset: f32,
     logical_font_size: Cell<f32>,
     metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
 }
@@ -42,6 +43,7 @@ pub struct CellMetrics {
     pub cell_width: usize,
     pub cell_height: usize,
     pub baseline_offset: f32,
+    pub underline_offset: f32,
     font_mgr: FontMgr,
     fallback_fonts: Rc<RefCell<HashMap<FallbackFontKey, Font>>>,
 }
@@ -725,7 +727,6 @@ fn draw_text_decorations(
 
     let left = PADDING + column * metrics.cell_width;
     let width = metrics.cell_width * width_in_cells;
-    let baseline = top as f32 + metrics.baseline_offset;
     let stroke_width = (metrics.cell_height as f32 / 14.0).max(1.0);
     let decoration_color = face.underline.unwrap_or(face.fg).to_color();
 
@@ -738,11 +739,11 @@ fn draw_text_decorations(
 
         match style {
             UnderlineStyle::Straight => {
-                let y = baseline + stroke_width;
+                let y = underline_start_y(top, metrics, stroke_width);
                 canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
             }
             UnderlineStyle::Double => {
-                let y = baseline + stroke_width;
+                let y = underline_start_y(top, metrics, stroke_width);
                 let gap = stroke_width + 1.0;
                 canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
                 canvas.draw_line(
@@ -752,7 +753,7 @@ fn draw_text_decorations(
                 );
             }
             UnderlineStyle::Curly => {
-                let y = baseline + stroke_width;
+                let y = underline_start_y(top, metrics, stroke_width);
                 let wave = (metrics.cell_height as f32 / 8.0).max(1.5);
                 let mut x = left as f32;
                 let end = (left + width) as f32;
@@ -780,11 +781,16 @@ fn draw_text_decorations(
     }
 }
 
+fn underline_start_y(top: usize, metrics: &CellMetrics, stroke_width: f32) -> f32 {
+    top as f32 + metrics.baseline_offset + stroke_width + metrics.underline_offset
+}
+
 pub fn load_renderer(config: &AppConfig) -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
         preferred_font_family: config.font_family.clone(),
         default_logical_font_size: config.font_size,
+        underline_offset: config.cell.underline_offset,
         logical_font_size: Cell::new(config.font_size),
         metrics_cache: RefCell::new(None),
     }
@@ -849,6 +855,7 @@ impl Renderer {
             cell_width,
             cell_height: cell_height.max(16),
             baseline_offset,
+            underline_offset: self.underline_offset,
             font_mgr: self.font_mgr.clone(),
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
@@ -975,6 +982,35 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn underline_offset_shifts_decoration_y_without_changing_other_metrics() {
+        let base_metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let shifted_metrics = CellMetrics {
+            underline_offset: 1.5,
+            ..base_metrics.clone()
+        };
+        let stroke_width = (base_metrics.cell_height as f32 / 14.0).max(1.0);
+
+        let base_y = underline_start_y(3, &base_metrics, stroke_width);
+        let shifted_y = underline_start_y(3, &shifted_metrics, stroke_width);
+
+        assert_eq!(shifted_y - base_y, 1.5);
+        assert_eq!(shifted_metrics.cell_height, base_metrics.cell_height);
+        assert_eq!(
+            shifted_metrics.baseline_offset,
+            base_metrics.baseline_offset
+        );
+    }
+
     #[test]
     fn cursor_cell_uses_visible_placeholder_at_end_of_line() {
         let cursor_face = Face {
