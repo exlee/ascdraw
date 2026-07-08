@@ -906,8 +906,10 @@ fn info_rect_with_window(
         InfoStyle::MenuDoc => {
             if let Some(menu) = menu_rect {
                 let right_column = menu.rect.column + menu.rect.width;
+                let right_max_width = cols.saturating_sub(right_column);
+                let left_max_width = menu.rect.column;
                 let left_column = menu.rect.column.saturating_sub(width);
-                let column = if right_column + width <= cols || right_column >= menu.rect.column {
+                let column = if width <= right_max_width || right_max_width >= left_max_width {
                     right_column.min(cols.saturating_sub(width))
                 } else {
                     left_column
@@ -1083,6 +1085,30 @@ mod tests {
         assert_eq!(rect.rect.row, 5);
         assert_eq!(rect.rect.column, 22);
         assert_eq!(rect.top, bottom_overlay_top(240, 18, 6));
+    }
+
+    #[test]
+    fn menu_doc_info_uses_left_side_when_right_side_is_too_narrow() {
+        let info = InfoState {
+            title: Vec::new(),
+            content: vec![menu_item("help")],
+            anchor: Coord { line: 0, column: 0 },
+            face: Face::default(),
+            style: InfoStyle::MenuDoc,
+        };
+        let menu = PopupRect {
+            rect: CellRect {
+                row: 2,
+                column: 24,
+                width: 6,
+                height: 3,
+            },
+            top: 0,
+        };
+
+        let rect = info_rect_with_window(&info, Some(menu), 30, 10, 10, 4, 240, 18);
+        assert_eq!(rect.rect.row, 2);
+        assert_eq!(rect.rect.column, 14);
     }
 
     #[test]
