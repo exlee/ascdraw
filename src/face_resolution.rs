@@ -254,18 +254,33 @@ fn alpha_blend(base: Rgba, color: Rgba) -> Rgba {
     }
 }
 
+fn named_color(color: &str) -> Option<Rgba> {
+    Some(match color {
+        "black" => Rgba::rgb(0x00, 0x00, 0x00),
+        "red" => Rgba::rgb(0xcd, 0x00, 0x00),
+        "green" => Rgba::rgb(0x00, 0xcd, 0x00),
+        "yellow" => Rgba::rgb(0xcd, 0xcd, 0x00),
+        "blue" => Rgba::rgb(0x00, 0x00, 0xee),
+        "magenta" => Rgba::rgb(0xcd, 0x00, 0xcd),
+        "cyan" => Rgba::rgb(0x00, 0xcd, 0xcd),
+        "white" => Rgba::rgb(0xe5, 0xe5, 0xe5),
+        "bright-black" => Rgba::rgb(0x7f, 0x7f, 0x7f),
+        "bright-red" => Rgba::rgb(0xff, 0x00, 0x00),
+        "bright-green" => Rgba::rgb(0x00, 0xff, 0x00),
+        "bright-yellow" => Rgba::rgb(0xff, 0xff, 0x00),
+        "bright-blue" => Rgba::rgb(0x5c, 0x5c, 0xff),
+        "bright-magenta" => Rgba::rgb(0xff, 0x00, 0xff),
+        "bright-cyan" => Rgba::rgb(0x00, 0xff, 0xff),
+        "bright-white" => Rgba::rgb(0xff, 0xff, 0xff),
+        _ => return None,
+    })
+}
+
 fn parse_color(color: &str) -> FaceColor {
     match color {
         "" | "default" => FaceColor::Default,
-        "black" => FaceColor::Rgba(Rgba::rgb(0x00, 0x00, 0x00)),
-        "white" => FaceColor::Rgba(Rgba::rgb(0xff, 0xff, 0xff)),
-        "red" => FaceColor::Rgba(Rgba::rgb(0xff, 0x55, 0x55)),
-        "green" => FaceColor::Rgba(Rgba::rgb(0x50, 0xfa, 0x7b)),
-        "yellow" => FaceColor::Rgba(Rgba::rgb(0xf1, 0xfa, 0x8c)),
-        "blue" => FaceColor::Rgba(Rgba::rgb(0x62, 0xd6, 0xe8)),
-        "magenta" => FaceColor::Rgba(Rgba::rgb(0xff, 0x79, 0xc6)),
-        "cyan" => FaceColor::Rgba(Rgba::rgb(0x8b, 0xe9, 0xfd)),
-        value => parse_prefixed_color(value)
+        value => named_color(value)
+            .or_else(|| parse_prefixed_color(value))
             .map(FaceColor::Rgba)
             .unwrap_or(FaceColor::Default),
     }
@@ -331,8 +346,8 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.fg, Rgba::rgb(0xff, 0xff, 0xff));
-        assert_eq!(resolved.bg, Rgba::rgb(0x62, 0xd6, 0xe8));
+        assert_eq!(resolved.fg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.bg, Rgba::rgb(0x00, 0x00, 0xee));
     }
 
     #[test]
@@ -345,7 +360,7 @@ mod tests {
         );
 
         assert_eq!(resolved.fg, Rgba::rgb(0x00, 0x00, 0x00));
-        assert_eq!(resolved.bg, Rgba::rgb(0xf1, 0xfa, 0x8c));
+        assert_eq!(resolved.bg, Rgba::rgb(0xcd, 0xcd, 0x00));
     }
 
     #[test]
@@ -357,8 +372,8 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.fg, Rgba::rgb(0xff, 0xff, 0xff));
-        assert_eq!(resolved.bg, Rgba::rgb(0xf1, 0xfa, 0x8c));
+        assert_eq!(resolved.fg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.bg, Rgba::rgb(0xcd, 0xcd, 0x00));
     }
 
     #[test]
@@ -395,8 +410,8 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.bg, Rgba::rgb(0xff, 0xff, 0xff));
-        assert_eq!(resolved.fg, Rgba::rgb(0x31, 0x6b, 0x74));
+        assert_eq!(resolved.bg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.fg, Rgba::rgb(0x00, 0x00, 0x77));
     }
 
     #[test]
@@ -408,7 +423,31 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.underline, Some(Rgba::rgb(0xff, 0x55, 0x55)));
+        assert_eq!(resolved.underline, Some(Rgba::rgb(0xcd, 0x00, 0x00)));
         assert_eq!(resolved.underline_style, Some(UnderlineStyle::Double));
+    }
+
+    #[test]
+    fn bright_named_colors_do_not_fall_back_to_default() {
+        let resolved = resolve_root_face(
+            &face("bright-black", "bright-white", "default", &[]),
+            Rgba::rgb(1, 2, 3),
+            Rgba::rgb(4, 5, 6),
+        );
+
+        assert_eq!(resolved.fg, Rgba::rgb(0x7f, 0x7f, 0x7f));
+        assert_eq!(resolved.bg, Rgba::rgb(0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn unknown_named_colors_still_fall_back_to_default() {
+        let resolved = resolve_root_face(
+            &face("not-a-color", "also-not-a-color", "default", &[]),
+            Rgba::rgb(1, 2, 3),
+            Rgba::rgb(4, 5, 6),
+        );
+
+        assert_eq!(resolved.fg, Rgba::rgb(1, 2, 3));
+        assert_eq!(resolved.bg, Rgba::rgb(4, 5, 6));
     }
 }
