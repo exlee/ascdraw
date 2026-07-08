@@ -672,7 +672,9 @@ fn render_framed_info(
     } else {
         let title = truncate_atoms(&info.title, inner_width.saturating_sub(2));
         let title_width = line_display_width(&title);
-        let dash_width = inner_width.saturating_sub(title_width + 2);
+        let dash_width = inner_width.saturating_sub(title_width.saturating_add(2));
+        let top_width = top.chars().count();
+        let max_columns = rect.column.saturating_add(rect.width);
         top.push_str(&"─".repeat(dash_width / 2));
         top.push('┤');
         if matches!(info.style, InfoStyle::Prompt) {
@@ -681,8 +683,8 @@ fn render_framed_info(
                 canvas,
                 LineRenderPosition {
                     row: 0,
-                    start_column: rect.column + top.chars().count(),
-                    max_columns: rect.column + rect.width,
+                    start_column: rect.column.saturating_add(top_width),
+                    max_columns,
                 },
                 &title,
                 &info.face,
@@ -703,8 +705,8 @@ fn render_framed_info(
                 canvas,
                 LineRenderPosition {
                     row: rect.row,
-                    start_column: rect.column + top.chars().count(),
-                    max_columns: rect.column + rect.width,
+                    start_column: rect.column.saturating_add(top_width),
+                    max_columns,
                 },
                 &title,
                 &info.face,
@@ -715,10 +717,13 @@ fn render_framed_info(
         let mut right = String::from("├");
         right.push_str(&"─".repeat(dash_width - dash_width / 2));
         right.push_str("─╮");
+        let right_column = rect
+            .column
+            .saturating_add(rect.width.saturating_sub(right.chars().count()));
         if matches!(info.style, InfoStyle::Prompt) {
             render_string_line_at_top(
                 canvas,
-                rect.column + rect.width.saturating_sub(right.chars().count()),
+                right_column,
                 &right,
                 &info.face,
                 metrics,
@@ -728,7 +733,7 @@ fn render_framed_info(
             render_string_line(
                 canvas,
                 rect.row,
-                rect.column + rect.width.saturating_sub(right.chars().count()),
+                right_column,
                 &right,
                 &info.face,
                 metrics,
@@ -764,9 +769,13 @@ fn render_framed_info_body(
     let rect = layout.rect;
     let inner_width = rect.width.saturating_sub(4);
     let body_rows = rect.height.saturating_sub(2);
+    let content_start = rect.column.saturating_add(2);
+    let right_border_column = rect.column.saturating_add(rect.width.saturating_sub(2));
     for row_offset in 0..body_rows {
-        let row = rect.row + 1 + row_offset;
-        let row_top = layout.top + (row_offset + 1) * metrics.cell_height;
+        let row = rect.row.saturating_add(1).saturating_add(row_offset);
+        let row_top = layout
+            .top
+            .saturating_add(row_offset.saturating_add(1).saturating_mul(metrics.cell_height));
         if let Some(line) = info.content.get(row_offset) {
             if matches!(info.style, InfoStyle::Prompt) {
                 render_string_line_at_top(canvas, rect.column, "│ ", &info.face, metrics, row_top);
@@ -774,8 +783,8 @@ fn render_framed_info_body(
                     canvas,
                     LineRenderPosition {
                         row: 0,
-                        start_column: rect.column + 2,
-                        max_columns: rect.column + 2 + inner_width,
+                        start_column: content_start,
+                        max_columns: content_start.saturating_add(inner_width),
                     },
                     line,
                     &info.face,
@@ -784,7 +793,7 @@ fn render_framed_info_body(
                 );
                 render_string_line_at_top(
                     canvas,
-                    rect.column + rect.width.saturating_sub(2),
+                    right_border_column,
                     " │",
                     &info.face,
                     metrics,
@@ -804,8 +813,8 @@ fn render_framed_info_body(
                     canvas,
                     LineRenderPosition {
                         row,
-                        start_column: rect.column + 2,
-                        max_columns: rect.column + 2 + inner_width,
+                        start_column: content_start,
+                        max_columns: content_start.saturating_add(inner_width),
                     },
                     line,
                     &info.face,
@@ -815,7 +824,7 @@ fn render_framed_info_body(
                 render_string_line(
                     canvas,
                     row,
-                    rect.column + rect.width.saturating_sub(2),
+                    right_border_column,
                     " │",
                     &info.face,
                     metrics,
@@ -855,12 +864,16 @@ fn render_framed_info_body(
             &bottom,
             &info.face,
             metrics,
-            layout.top + rect.height.saturating_sub(1) * metrics.cell_height,
+            layout.top.saturating_add(
+                rect.height
+                    .saturating_sub(1)
+                    .saturating_mul(metrics.cell_height),
+            ),
         );
     } else {
         render_string_line(
             canvas,
-            rect.row + rect.height.saturating_sub(1),
+            rect.row.saturating_add(rect.height.saturating_sub(1)),
             rect.column,
             &bottom,
             &info.face,
@@ -1127,6 +1140,43 @@ mod tests {
 
         assert_eq!(layout_small.top + layout_small.rect.height * 18, 210);
         assert_eq!(layout_large.top + layout_large.rect.height * 24, 204);
+    }
+
+    #[test]
+    fn framed_prompt_math_uses_saturating_column_arithmetic() {
+        let rect = CellRect {
+            row: usize::MAX - 2,
+            column: usize::MAX - 3,
+            width: 4,
+            height: 3,
+        };
+        let max_columns = rect.column.saturating_add(rect.width);
+        let content_start = rect.column.saturating_add(2);
+
+        assert_eq!(max_columns, usize::MAX);
+        assert_eq!(content_start, usize::MAX - 1);
+        assert_eq!(content_start.saturating_add(rect.width.saturating_sub(4)), usize::MAX - 1);
+    }
+
+    #[test]
+    fn framed_prompt_border_columns_saturate_at_usize_max() {
+        let rect = CellRect {
+            row: usize::MAX - 1,
+            column: usize::MAX - 2,
+            width: 4,
+            height: 3,
+        };
+        let right = "├─╮";
+
+        let title_border = rect
+            .column
+            .saturating_add(rect.width.saturating_sub(right.chars().count()));
+        let body_border = rect.column.saturating_add(rect.width.saturating_sub(2));
+        let bottom_row = rect.row.saturating_add(rect.height.saturating_sub(1));
+
+        assert_eq!(title_border, usize::MAX - 1);
+        assert_eq!(body_border, usize::MAX);
+        assert_eq!(bottom_row, usize::MAX);
     }
 
     fn menu_item(text: &str) -> Vec<Atom> {
