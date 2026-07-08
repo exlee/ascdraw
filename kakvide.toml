@@ -4,6 +4,7 @@ mouse-scroll-rate = 0.25
 transparent-menubar = true
 single-session = false
 session-name = "kakvide"
+kak-extra-config = ""
 
 [cell]
 underline-offset = 0.0

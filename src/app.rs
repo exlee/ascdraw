@@ -39,6 +39,7 @@ pub struct AppConfig {
     pub transparent_menubar: bool,
     pub single_session: bool,
     pub session_name: String,
+    pub kak_extra_config: String,
     pub cell: CellConfig,
     pub display: DisplayConfig,
     pub macos: MacosConfig,
@@ -369,6 +370,11 @@ fn bundled_default_config() -> AppConfig {
             .and_then(Value::as_str)
             .expect("bundled kakvide.toml should set session-name")
             .to_string(),
+        kak_extra_config: value
+            .get("kak-extra-config")
+            .and_then(Value::as_str)
+            .expect("bundled kakvide.toml should set kak-extra-config")
+            .to_string(),
         cell: bundled_default_cell_config(),
         display: bundled_default_display_config(),
         macos: bundled_default_macos_config(),
@@ -691,6 +697,7 @@ mod tests {
         assert!(config.transparent_menubar);
         assert!(!config.single_session);
         assert_eq!(config.session_name, "kakvide");
+        assert_eq!(config.kak_extra_config, "");
         assert_eq!(config.cell, CellConfig::default());
         assert_eq!(config.cell.underline_offset, 0.0);
         assert_eq!(config.display, DisplayConfig::default());
@@ -776,6 +783,10 @@ mod tests {
         assert_eq!(config.cell, AppConfig::default().cell);
         assert_eq!(config.display, AppConfig::default().display);
         assert_eq!(config.macos, AppConfig::default().macos);
+        assert_eq!(
+            config.kak_extra_config,
+            AppConfig::default().kak_extra_config
+        );
         assert_eq!(config.keys, AppConfig::default().keys);
     }
 
@@ -788,6 +799,7 @@ font-size = 18.0
 transparent-menubar = false
 single-session = true
 session-name = "shared"
+kak-extra-config = "set global ui_options terminal_status_on_top=true"
 
 [cell]
 underline-offset = 1.5
@@ -812,6 +824,10 @@ window-new = "Cmd-Shift-N"
         assert!(!config.transparent_menubar);
         assert!(config.single_session);
         assert_eq!(config.session_name, "shared");
+        assert_eq!(
+            config.kak_extra_config,
+            "set global ui_options terminal_status_on_top=true"
+        );
         assert_eq!(config.cell.underline_offset, 1.5);
         assert_eq!(config.display.cursor_shape.normal, None);
         assert_eq!(config.display.cursor_shape.insert, Some(CursorShape::Beam));
@@ -828,6 +844,7 @@ window-new = "Cmd-Shift-N"
             transparent_menubar: false,
             single_session: true,
             session_name: "shared".to_string(),
+            kak_extra_config: "set global ui_options terminal_status_on_top=true".to_string(),
             macos: MacosConfig {
                 color_space: MacosColorSpace::Srgb,
             },
@@ -840,6 +857,7 @@ window-new = "Cmd-Shift-N"
         assert!(output.contains("transparent-menubar = false"));
         assert!(output.contains("single-session = true"));
         assert!(output.contains("session-name = \"shared\""));
+        assert!(output.contains("kak-extra-config = \"set global ui_options"));
         assert!(output.contains("[cell]"));
         assert!(output.contains("[macos]"));
         assert!(output.contains("color-space = \"srgb\""));

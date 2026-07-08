@@ -17,16 +17,18 @@ use anyhow::{Context, Result};
 use winit::event_loop::EventLoopProxy;
 use winit::window::WindowId;
 
-use crate::app::{AppEvent, Args};
+use crate::app::{AppConfig, AppEvent, Args};
 use crate::diagnostics::log_error;
 use crate::kakoune_messages::parse_notification;
 
 pub fn spawn_kakoune(
     args: &Args,
+    config: &AppConfig,
     proxy: EventLoopProxy<AppEvent>,
     window_id: WindowId,
 ) -> Result<Child> {
-    let mut command = build_kakoune_command(args);
+    let add_kak_extra_config = should_add_kak_extra_config(args, config);
+    let mut command = build_kakoune_command(args, config, add_kak_extra_config);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -182,8 +184,8 @@ fn trim_line_ending(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
-fn build_kakoune_command(args: &Args) -> Command {
-    platform_kakoune_command(args)
+fn build_kakoune_command(args: &Args, config: &AppConfig, add_kak_extra_config: bool) -> Command {
+    platform_kakoune_command(args, config, add_kak_extra_config)
 }
 
 pub fn build_kakoune_help_command(kak_bin: &OsStr) -> Command {
@@ -211,21 +213,93 @@ fn parse_kakoune_sessions(output: &[u8]) -> Vec<OsString> {
         .collect()
 }
 
-fn append_kakoune_json_ui_args(command: &mut Command, args: &Args) {
-    command.arg("-ui").arg("json").args(&args.kak_args);
+fn append_kakoune_json_ui_args(
+    command: &mut Command,
+    args: &Args,
+    config: &AppConfig,
+    add_kak_extra_config: bool,
+) {
+    command.arg("-ui").arg("json");
+    if add_kak_extra_config && let Some(command_text) = kak_extra_config_command(config) {
+        command.arg("-e").arg(command_text);
+    }
+    command.args(&args.kak_args);
+}
+
+fn kak_extra_config_command(config: &AppConfig) -> Option<String> {
+    if config.kak_extra_config.trim().is_empty() {
+        None
+    } else {
+        Some(format!("eval %{{\n{}\n}}", config.kak_extra_config))
+    }
+}
+
+fn should_add_kak_extra_config(args: &Args, config: &AppConfig) -> bool {
+    if kak_extra_config_command(config).is_none() {
+        return false;
+    }
+
+    match kakoune_launch_mode(&args.kak_args) {
+        KakouneLaunchMode::NewSession => true,
+        KakouneLaunchMode::ConnectToExistingSession => false,
+        KakouneLaunchMode::ConnectOrCreateSession(session) => {
+            match list_kakoune_sessions(&args.kak_bin) {
+                Ok(sessions) => !sessions.iter().any(|existing| existing == session),
+                Err(error) => {
+                    log_error(format!(
+                        "session list failed while checking kak-extra-config launch mode: {error:#}"
+                    ));
+                    false
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KakouneLaunchMode<'a> {
+    NewSession,
+    ConnectToExistingSession,
+    ConnectOrCreateSession(&'a OsStr),
+}
+
+fn kakoune_launch_mode(kak_args: &[OsString]) -> KakouneLaunchMode<'_> {
+    let mut args = kak_args.iter();
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("-c") => return KakouneLaunchMode::ConnectToExistingSession,
+            Some("-C") => {
+                return args
+                    .next()
+                    .map(OsString::as_os_str)
+                    .map(KakouneLaunchMode::ConnectOrCreateSession)
+                    .unwrap_or(KakouneLaunchMode::ConnectToExistingSession);
+            }
+            Some("-s" | "-e") => {
+                let _ = args.next();
+            }
+            _ => {}
+        }
+    }
+
+    KakouneLaunchMode::NewSession
 }
 
 #[cfg(unix)]
-fn platform_kakoune_command(args: &Args) -> Command {
+fn platform_kakoune_command(
+    args: &Args,
+    config: &AppConfig,
+    add_kak_extra_config: bool,
+) -> Command {
     if let Some(shell) = user_shell() {
         let mut command = shell_command(shell, OsStr::new(&args.kak_bin));
-        append_kakoune_json_ui_args(&mut command, args);
+        append_kakoune_json_ui_args(&mut command, args, config, add_kak_extra_config);
         command
     } else {
         let (program, constrained_path) = constrained_app_program(OsStr::new(&args.kak_bin));
         let mut command = Command::new(program);
         apply_constrained_app_path(&mut command, constrained_path);
-        append_kakoune_json_ui_args(&mut command, args);
+        append_kakoune_json_ui_args(&mut command, args, config, add_kak_extra_config);
         command
     }
 }
@@ -261,9 +335,13 @@ fn platform_kakoune_list_sessions_command(kak_bin: &OsStr) -> Command {
 }
 
 #[cfg(windows)]
-fn platform_kakoune_command(args: &Args) -> Command {
+fn platform_kakoune_command(
+    args: &Args,
+    config: &AppConfig,
+    add_kak_extra_config: bool,
+) -> Command {
     let mut command = Command::new(&args.kak_bin);
-    append_kakoune_json_ui_args(&mut command, args);
+    append_kakoune_json_ui_args(&mut command, args, config, add_kak_extra_config);
     command
 }
 
@@ -412,11 +490,18 @@ pub fn spawn_stdin_writer(child: &mut Child) -> Result<Sender<String>> {
 mod tests {
     use std::ffi::{OsStr, OsString};
     use std::fs;
+
+    use crate::app::{AppConfig, Args};
     use crate::kakoune_messages::KakouneNotification;
 
     use super::build_kakoune_command;
-    #[cfg(windows)]
-    use crate::app::Args;
+
+    fn config_with_kak_extra_config(kak_extra_config: &str) -> AppConfig {
+        AppConfig {
+            kak_extra_config: kak_extra_config.to_string(),
+            ..AppConfig::default()
+        }
+    }
 
     #[test]
     fn json_ui_line_decoder_accepts_valid_utf8_line() {
@@ -472,6 +557,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn kak_extra_config_command_wraps_non_empty_config_in_eval_block() {
+        let config = config_with_kak_extra_config(
+            "set global tabstop 4\nhook global BufCreate .* %{ echo hi }",
+        );
+
+        assert_eq!(
+            super::kak_extra_config_command(&config),
+            Some(
+                "eval %{\nset global tabstop 4\nhook global BufCreate .* %{ echo hi }\n}"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn kak_extra_config_command_ignores_blank_config() {
+        let config = config_with_kak_extra_config(" \n\t");
+
+        assert_eq!(super::kak_extra_config_command(&config), None);
+    }
+
+    #[test]
+    fn kakoune_launch_mode_treats_plain_launch_as_new_session() {
+        assert_eq!(
+            super::kakoune_launch_mode(&[OsString::from("file.txt")]),
+            super::KakouneLaunchMode::NewSession
+        );
+    }
+
+    #[test]
+    fn kakoune_launch_mode_treats_server_session_as_new_session() {
+        assert_eq!(
+            super::kakoune_launch_mode(&[
+                OsString::from("-s"),
+                OsString::from("work"),
+                OsString::from("file.txt"),
+            ]),
+            super::KakouneLaunchMode::NewSession
+        );
+    }
+
+    #[test]
+    fn kakoune_launch_mode_detects_existing_session_connect() {
+        assert_eq!(
+            super::kakoune_launch_mode(&[
+                OsString::from("-c"),
+                OsString::from("work"),
+                OsString::from("file.txt"),
+            ]),
+            super::KakouneLaunchMode::ConnectToExistingSession
+        );
+    }
+
+    #[test]
+    fn kakoune_launch_mode_detects_connect_or_create_session() {
+        assert_eq!(
+            super::kakoune_launch_mode(&[
+                OsString::from("-C"),
+                OsString::from("work"),
+                OsString::from("file.txt"),
+            ]),
+            super::KakouneLaunchMode::ConnectOrCreateSession(OsStr::new("work"))
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn build_kakoune_command_includes_json_ui_before_forwarded_args() {
@@ -486,7 +637,8 @@ mod tests {
             ],
         };
 
-        let command = build_kakoune_command(&args);
+        let config = AppConfig::default();
+        let command = build_kakoune_command(&args, &config, false);
         let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
 
         assert_eq!(
@@ -505,12 +657,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_shell_command_runs_kak_through_shell_lc() {
-        let args = crate::app::Args {
+        let args = Args {
             show_config: false,
             kak_bin: "kak".to_string(),
             kak_args: vec![OsString::from("file.txt")],
         };
-        let command = build_kakoune_command(&args);
+        let config = AppConfig::default();
+        let command = build_kakoune_command(&args, &config, false);
         let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
 
         assert_eq!(
@@ -522,6 +675,34 @@ mod tests {
                 OsString::from("kak"),
                 OsString::from("-ui"),
                 OsString::from("json"),
+                OsString::from("file.txt"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_shell_command_includes_kak_extra_config_before_forwarded_args() {
+        let args = Args {
+            show_config: false,
+            kak_bin: "kak".to_string(),
+            kak_args: vec![OsString::from("file.txt")],
+        };
+        let config = config_with_kak_extra_config("set global tabstop 4");
+        let command = build_kakoune_command(&args, &config, true);
+        let actual_args: Vec<_> = command.get_args().map(OsString::from).collect();
+
+        assert_eq!(
+            actual_args,
+            vec![
+                OsString::from("-lc"),
+                OsString::from("exec \"$@\""),
+                OsString::from("kakvide-kak"),
+                OsString::from("kak"),
+                OsString::from("-ui"),
+                OsString::from("json"),
+                OsString::from("-e"),
+                OsString::from("eval %{\nset global tabstop 4\n}"),
                 OsString::from("file.txt"),
             ]
         );

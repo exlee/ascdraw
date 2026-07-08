@@ -81,7 +81,7 @@ pub fn create_client_window(
     resize_surface(&mut surface, window.inner_size())?;
 
     let renderer = load_renderer(config);
-    let mut child = spawn_kakoune(args, proxy, window.id())?;
+    let mut child = spawn_kakoune(args, config, proxy, window.id())?;
     let command_tx = spawn_stdin_writer(&mut child)?;
 
     let client = ClientWindow {
@@ -202,7 +202,8 @@ pub struct RuntimeContext<'a> {
 
 impl RuntimeContext<'_> {
     pub fn open_session_window(&mut self, session: &OsStr, paths: &[PathBuf], log_label: &str) {
-        let open_args = crate::runtime::startup::connected_kakoune_args(self.kak_bin, session, paths);
+        let open_args =
+            crate::runtime::startup::connected_kakoune_args(self.kak_bin, session, paths);
         match create_active_client_window(
             self.elwt,
             &open_args,
