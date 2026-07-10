@@ -6,7 +6,7 @@ transparent-menubar = true
 underline-offset = 0.0
 
 [display.cursor-shape]
-# normal = "block"
+# move-draw = "block"
 # insert = "beam"
 # replace = "underline"
 

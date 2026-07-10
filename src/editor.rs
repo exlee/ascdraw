@@ -2,7 +2,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{CursorMode, ThemeConfig};
-use crate::model::{Atom, Coord, Face};
+use crate::drawing::glyph_with_connection;
+use crate::model::{Atom, Coord, Direction, Face};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -30,7 +31,7 @@ impl EditorState {
                 cursor_face: theme.cursor.clone(),
             },
             window_title: window_title.into(),
-            cursor_mode: CursorMode::Insert,
+            cursor_mode: CursorMode::MoveDraw,
             cursor_index: 0,
         }
     }
@@ -159,10 +160,102 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
+    pub fn move_cursor(&mut self, direction: Direction) {
+        if self.cursor_mode == CursorMode::MoveDraw {
+            self.move_or_draw(direction, false);
+            return;
+        }
+
+        match direction {
+            Direction::Up => self.move_up(),
+            Direction::Right => self.move_right(),
+            Direction::Down => self.move_down(),
+            Direction::Left => self.move_left(),
+        }
+    }
+
+    pub fn move_or_draw(&mut self, direction: Direction, draw: bool) {
+        let from = self.grid.cursor_pos;
+        let Some(to) = adjacent_coord(from, direction) else {
+            return;
+        };
+
+        if draw {
+            self.add_connection(from, direction);
+        }
+        self.move_to(to);
+        if draw {
+            self.add_connection(to, direction.opposite());
+        }
+    }
+
+    fn add_connection(&mut self, coord: Coord, direction: Direction) {
+        let line = &mut self.grid.lines[coord.line];
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+
+        if column < coord.column {
+            line.extend((column..coord.column).map(|_| blank_atom()));
+        }
+
+        if let Some(atom) = line.get_mut(index) {
+            if atom_width(atom) == 1
+                && let Some(glyph) = glyph_with_connection(&atom.contents, direction)
+            {
+                atom.contents = glyph.to_string();
+            }
+        } else {
+            line.push(Atom {
+                face: Face::default(),
+                contents: glyph_with_connection(" ", direction)
+                    .expect("blank cells accept line connections")
+                    .to_string(),
+            });
+        }
+    }
+
     fn sync_cursor_column(&mut self) {
         self.grid.cursor_pos.column =
             display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
     }
+}
+
+fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord> {
+    match direction {
+        Direction::Up => Some(Coord {
+            line: coord.line.checked_sub(1)?,
+            column: coord.column,
+        }),
+        Direction::Right => Some(Coord {
+            line: coord.line,
+            column: coord.column.checked_add(1)?,
+        }),
+        Direction::Down => Some(Coord {
+            line: coord.line.checked_add(1)?,
+            column: coord.column,
+        }),
+        Direction::Left => Some(Coord {
+            line: coord.line,
+            column: coord.column.checked_sub(1)?,
+        }),
+    }
+}
+
+fn blank_atom() -> Atom {
+    Atom {
+        face: Face::default(),
+        contents: " ".to_string(),
+    }
+}
+
+fn index_and_column_for_coord(atoms: &[Atom], target_column: usize) -> (usize, usize) {
+    let mut column = 0;
+    for (index, atom) in atoms.iter().enumerate() {
+        if target_column < column + atom_width(atom) {
+            return (index, column);
+        }
+        column += atom_width(atom);
+    }
+    (atoms.len(), column)
 }
 
 fn atom_width(atom: &Atom) -> usize {
@@ -221,5 +314,54 @@ mod tests {
         assert_eq!(state.grid.lines.len(), 3);
         assert_eq!(state.grid.lines[2].len(), 4);
         assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 4 });
+    }
+
+    #[test]
+    fn move_draw_uses_grid_movement_without_wrapping() {
+        let mut state = state();
+        state.move_or_draw(Direction::Right, false);
+        state.move_or_draw(Direction::Down, false);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 1 });
+        assert_eq!(state.grid.lines.len(), 2);
+        assert_eq!(contents(&state.grid.lines[0]), " ");
+        assert_eq!(contents(&state.grid.lines[1]), " ");
+    }
+
+    #[test]
+    fn draw_connects_straights_and_rounded_corners() {
+        let mut state = state();
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "╶─╮");
+        assert_eq!(contents(&state.grid.lines[1]), "  ╵");
+    }
+
+    #[test]
+    fn draw_connects_crossing_lines() {
+        let mut state = state();
+        state.move_to(Coord { line: 0, column: 1 });
+        state.move_or_draw(Direction::Down, true);
+        state.move_or_draw(Direction::Down, true);
+        state.move_to(Coord { line: 1, column: 0 });
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+
+        assert_eq!(contents(&state.grid.lines[1]), "╶┼╴");
+    }
+
+    #[test]
+    fn draw_preserves_non_line_text() {
+        let mut state = state();
+        state.insert("x");
+        state.move_to(Coord { line: 0, column: 0 });
+        state.move_or_draw(Direction::Right, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "x╴");
+    }
+
+    fn contents(line: &[Atom]) -> String {
+        line.iter().map(|atom| atom.contents.as_str()).collect()
     }
 }

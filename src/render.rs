@@ -434,7 +434,7 @@ fn render_underline_cursor(
 
 fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> CursorShape {
     match mode {
-        CursorMode::Normal => config.normal.unwrap_or(CursorShape::Block),
+        CursorMode::MoveDraw => config.move_draw.unwrap_or(CursorShape::Block),
         CursorMode::Insert => config.insert.unwrap_or(CursorShape::Block),
         CursorMode::Replace => config.replace.unwrap_or(CursorShape::Block),
     }
@@ -1055,14 +1055,14 @@ mod tests {
     fn cursor_shape_uses_mode_specific_override_when_present() {
         let mut config = AppConfig::default();
         config.display.cursor_shape.insert = Some(CursorShape::Beam);
-        config.display.cursor_shape.normal = Some(CursorShape::Underline);
+        config.display.cursor_shape.move_draw = Some(CursorShape::Underline);
 
         assert_eq!(
             cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Insert),
             CursorShape::Beam
         );
         assert_eq!(
-            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Normal),
+            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::MoveDraw),
             CursorShape::Underline
         );
     }

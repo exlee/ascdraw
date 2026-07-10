@@ -10,6 +10,7 @@ use winit::window::WindowId;
 
 mod app;
 mod diagnostics;
+mod drawing;
 mod editor;
 mod face_resolution;
 mod input;
@@ -145,6 +146,7 @@ fn try_main() -> Result<ExitCode> {
                         }
                         WindowEvent::Ime(Ime::Commit(text)) => {
                             if !text.is_empty()
+                                && editor.state.cursor_mode.accepts_text()
                                 && !editor.modifiers.control_key()
                                 && !editor.modifiers.alt_key()
                                 && !editor.modifiers.super_key()
@@ -160,10 +162,13 @@ fn try_main() -> Result<ExitCode> {
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
                                 pending_command = Some(app_command_from_user_action(action));
-                            } else if let Some(command) = edit_command(&event, editor.modifiers) {
+                            } else if let Some(command) =
+                                edit_command(&event, editor.modifiers, editor.state.cursor_mode)
+                            {
                                 apply_edit_command(&mut editor.state, command);
                                 editor.request_redraw();
                             } else if !editor.modifiers.control_key()
+                                && editor.state.cursor_mode.accepts_text()
                                 && !editor.modifiers.alt_key()
                                 && !editor.modifiers.super_key()
                                 && let Some(text) = event.text
@@ -220,10 +225,8 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
 
 fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
     match command {
-        EditCommand::MoveLeft => state.move_left(),
-        EditCommand::MoveRight => state.move_right(),
-        EditCommand::MoveUp => state.move_up(),
-        EditCommand::MoveDown => state.move_down(),
+        EditCommand::Move(direction) => state.move_cursor(direction),
+        EditCommand::Draw(direction) => state.move_or_draw(direction, true),
         EditCommand::Home => state.move_home(),
         EditCommand::End => state.move_end(),
         EditCommand::Backspace => state.backspace(),

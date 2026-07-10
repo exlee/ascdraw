@@ -65,7 +65,8 @@ impl Default for DisplayConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct CursorShapeConfig {
-    pub normal: Option<CursorShape>,
+    #[serde(alias = "normal")]
+    pub move_draw: Option<CursorShape>,
     pub insert: Option<CursorShape>,
     pub replace: Option<CursorShape>,
 }
@@ -87,10 +88,16 @@ pub enum CursorShape {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum CursorMode {
-    Normal,
     #[default]
+    MoveDraw,
     Insert,
     Replace,
+}
+
+impl CursorMode {
+    pub fn accepts_text(self) -> bool {
+        matches!(self, Self::Insert | Self::Replace)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
