@@ -21,6 +21,7 @@ mod model;
 mod render;
 mod runtime;
 mod title_policy;
+mod toolbar;
 mod user_keys;
 
 use app::{
@@ -136,6 +137,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.state,
                                 &editor.renderer,
                                 &config,
+                                editor.viewport,
                             ) {
                                 log_error(format!("render failed: {error:#}"));
                                 should_close = true;
@@ -162,6 +164,12 @@ fn try_main() -> Result<ExitCode> {
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
                                 pending_command = Some(app_command_from_user_action(action));
+                            } else if editor
+                                .state
+                                .toolbar
+                                .cycle_shortcut(&event.logical_key, editor.modifiers)
+                            {
+                                editor.request_redraw();
                             } else if let Some(command) =
                                 edit_command(&event, editor.modifiers, editor.state.cursor_mode)
                             {
@@ -185,6 +193,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.renderer,
                                 editor.window.scale_factor(),
                                 &config,
+                                editor.viewport,
                             );
                         }
                         WindowEvent::MouseInput {
@@ -192,8 +201,10 @@ fn try_main() -> Result<ExitCode> {
                             button: MouseButton::Left,
                             ..
                         } => {
-                            editor.state.move_to(editor.mouse_cell);
-                            editor.request_redraw();
+                            if let Some(coord) = editor.mouse_cell {
+                                editor.state.move_to(coord);
+                                editor.request_redraw();
+                            }
                         }
                         WindowEvent::ScaleFactorChanged { .. } => editor.request_redraw(),
                         _ => {}

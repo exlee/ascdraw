@@ -3,7 +3,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::app::AppConfig;
 use crate::app::CursorMode;
-use crate::layout::{PADDING, content_top_padding};
+use crate::layout::{PADDING, ViewportOffset, content_top_padding};
 use crate::model::{Coord, Direction};
 use crate::render::Renderer;
 
@@ -81,14 +81,20 @@ pub fn pointer_position_to_coord(
     renderer: &Renderer,
     scale_factor: f64,
     config: &AppConfig,
-) -> Coord {
+    viewport: ViewportOffset,
+) -> Option<Coord> {
     let metrics = renderer.metrics(scale_factor);
-    let top_padding = content_top_padding(scale_factor, config.transparent_menubar);
-    let column =
-        ((x - PADDING as f64).max(0.0) / metrics.cell_width.max(1) as f64).floor() as usize;
-    let line =
-        ((y - top_padding as f64).max(0.0) / metrics.cell_height.max(1) as f64).floor() as usize;
-    Coord { line, column }
+    let toolbar_metrics = renderer.title_metrics(scale_factor);
+    let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
+        + crate::toolbar::TOOLBAR_ROWS * toolbar_metrics.cell_height;
+    let grid_x = x - PADDING as f64 - viewport.x as f64;
+    let grid_y = y - grid_top as f64 - viewport.y as f64;
+    if grid_x < 0.0 || grid_y < 0.0 {
+        return None;
+    }
+    let column = (grid_x / metrics.cell_width.max(1) as f64).floor() as usize;
+    let line = (grid_y / metrics.cell_height.max(1) as f64).floor() as usize;
+    Some(Coord { line, column })
 }
 
 #[cfg(test)]

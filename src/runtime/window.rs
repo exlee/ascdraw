@@ -10,6 +10,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::editor::EditorState;
+use crate::layout::{ViewportOffset, content_top_padding};
 #[cfg(target_os = "macos")]
 use crate::macos;
 use crate::model::Coord;
@@ -21,9 +22,11 @@ pub struct EditorWindow {
     pub window: Rc<Window>,
     pub surface: Surface<Rc<Window>, Rc<Window>>,
     pub modifiers: ModifiersState,
-    pub mouse_cell: Coord,
+    pub mouse_cell: Option<Coord>,
     pub state: EditorState,
     pub renderer: Renderer,
+    pub viewport: ViewportOffset,
+    transparent_menubar: bool,
 }
 
 impl EditorWindow {
@@ -36,7 +39,30 @@ impl EditorWindow {
     }
 
     pub fn apply_config(&mut self, config: &AppConfig) {
+        let scale_factor = self.window.scale_factor();
+        let old_metrics = self.renderer.metrics(scale_factor);
+        let old_toolbar_metrics = self.renderer.title_metrics(scale_factor);
+        let old_grid_top = grid_top(
+            scale_factor,
+            self.transparent_menubar,
+            old_toolbar_metrics.cell_height,
+        );
         self.renderer.apply_config(config);
+        let new_metrics = self.renderer.metrics(scale_factor);
+        let new_toolbar_metrics = self.renderer.title_metrics(scale_factor);
+        let new_grid_top = grid_top(
+            scale_factor,
+            config.transparent_menubar,
+            new_toolbar_metrics.cell_height,
+        );
+        self.viewport.reanchor_cursor(
+            self.state.grid.cursor_pos,
+            (old_metrics.cell_width, old_metrics.cell_height),
+            (new_metrics.cell_width, new_metrics.cell_height),
+            old_grid_top,
+            new_grid_top,
+        );
+        self.transparent_menubar = config.transparent_menubar;
         self.state.apply_theme(&config.theme);
         #[cfg(target_os = "macos")]
         if let Err(error) = macos::apply_window_color_space(self.window.as_ref(), &config.macos) {
@@ -65,9 +91,11 @@ pub fn create_editor_window(elwt: &ActiveEventLoop, config: &AppConfig) -> Resul
         window,
         surface,
         modifiers: ModifiersState::empty(),
-        mouse_cell: Coord::default(),
+        mouse_cell: Some(Coord::default()),
         state: EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE),
         renderer: load_renderer(config),
+        viewport: ViewportOffset::default(),
+        transparent_menubar: config.transparent_menubar,
     };
     editor.request_redraw();
     Ok(editor)
@@ -114,9 +142,15 @@ pub fn handle_command(
                 close_window(windows, window_id, elwt);
             }
         }
-        AppCommand::FontScaleUp => adjust_font_size(windows, target, FontSizeAction::Increase),
-        AppCommand::FontScaleDown => adjust_font_size(windows, target, FontSizeAction::Decrease),
-        AppCommand::FontScaleReset => adjust_font_size(windows, target, FontSizeAction::Reset),
+        AppCommand::FontScaleUp => {
+            adjust_font_size(windows, target, FontSizeAction::Increase, config)
+        }
+        AppCommand::FontScaleDown => {
+            adjust_font_size(windows, target, FontSizeAction::Decrease, config)
+        }
+        AppCommand::FontScaleReset => {
+            adjust_font_size(windows, target, FontSizeAction::Reset, config)
+        }
     }
 }
 
@@ -124,16 +158,38 @@ fn adjust_font_size(
     windows: &mut HashMap<WindowId, EditorWindow>,
     target: Option<WindowId>,
     action: FontSizeAction,
+    config: &AppConfig,
 ) {
     let Some(editor) = target.and_then(|window_id| windows.get_mut(&window_id)) else {
         return;
     };
+    let scale_factor = editor.window.scale_factor();
+    let old_metrics = editor.renderer.metrics(scale_factor);
+    let toolbar_metrics = editor.renderer.title_metrics(scale_factor);
+    let grid_top = grid_top(
+        scale_factor,
+        config.transparent_menubar,
+        toolbar_metrics.cell_height,
+    );
     let changed = match action {
         FontSizeAction::Increase => editor.renderer.adjust_font_size(1.0),
         FontSizeAction::Decrease => editor.renderer.adjust_font_size(-1.0),
         FontSizeAction::Reset => editor.renderer.reset_font_size(),
     };
     if changed {
+        let new_metrics = editor.renderer.metrics(scale_factor);
+        editor.viewport.reanchor_cursor(
+            editor.state.grid.cursor_pos,
+            (old_metrics.cell_width, old_metrics.cell_height),
+            (new_metrics.cell_width, new_metrics.cell_height),
+            grid_top,
+            grid_top,
+        );
         editor.request_redraw();
     }
+}
+
+fn grid_top(scale_factor: f64, transparent_menubar: bool, toolbar_cell_height: usize) -> usize {
+    content_top_padding(scale_factor, transparent_menubar)
+        + crate::toolbar::TOOLBAR_ROWS * toolbar_cell_height
 }

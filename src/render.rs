@@ -18,7 +18,7 @@ use crate::editor::{EditorState, GridState};
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
-use crate::layout::{LayoutMetrics, PADDING, layout_metrics};
+use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, layout_metrics};
 use crate::model::{Atom, Face};
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
@@ -75,12 +75,22 @@ enum DrawOrigin {
     Grid { top_padding: usize },
 }
 
+struct RenderFrame<'a> {
+    metrics: &'a CellMetrics,
+    toolbar_metrics: &'a CellMetrics,
+    layout: LayoutMetrics,
+    width: usize,
+    height: usize,
+    viewport: ViewportOffset,
+}
+
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
     state: &EditorState,
     renderer: &Renderer,
     config: &AppConfig,
+    viewport: ViewportOffset,
 ) -> Result<()> {
     let size = window.inner_size();
     let width = size.width.max(1) as usize;
@@ -111,16 +121,21 @@ pub fn render(
         canvas,
         state,
         config,
-        &metrics,
-        &title_metrics,
-        layout_metrics(
+        RenderFrame {
+            metrics: &metrics,
+            toolbar_metrics: &title_metrics,
+            layout: layout_metrics(
+                width,
+                height,
+                &metrics,
+                title_metrics.cell_height,
+                config.transparent_menubar,
+                window.scale_factor(),
+            ),
             width,
             height,
-            &metrics,
-            config.transparent_menubar,
-            window.scale_factor(),
-        ),
-        width,
+            viewport,
+        },
     );
 
     buffer
@@ -129,41 +144,52 @@ pub fn render(
     Ok(())
 }
 
-fn render_canvas(
-    canvas: &Canvas,
-    state: &EditorState,
-    config: &AppConfig,
-    metrics: &CellMetrics,
-    title_metrics: &CellMetrics,
-    layout: LayoutMetrics,
-    width: usize,
-) {
+fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame: RenderFrame<'_>) {
+    let RenderFrame {
+        metrics,
+        toolbar_metrics,
+        layout,
+        width,
+        height,
+        viewport,
+    } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
     render_window_title(
         canvas,
         &state.window_title,
         &state.grid.default_face,
-        title_metrics,
+        toolbar_metrics,
         layout,
         width,
         config.transparent_menubar,
     );
+    render_toolbar(canvas, state, toolbar_metrics, layout.top_padding, width);
 
-    let cols = layout.cols;
-    let rows = layout.rows;
-    let content_rows = rows;
+    let grid_layout = visible_grid_layout(layout, metrics, viewport);
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_xywh(
+            0.0,
+            layout.grid_top as f32,
+            width as f32,
+            height.saturating_sub(layout.grid_top) as f32,
+        ),
+        None,
+        false,
+    );
+    canvas.translate((viewport.x as f32, viewport.y as f32));
 
-    for (row_index, line) in state.grid.lines.iter().take(content_rows).enumerate() {
+    for (row_index, line) in state.grid.lines.iter().take(grid_layout.rows).enumerate() {
         render_line(
             canvas,
             row_index,
             line,
             &state.grid.default_face,
-            cols,
+            grid_layout.cols,
             metrics,
             DrawOrigin::Grid {
-                top_padding: layout.top_padding,
+                top_padding: layout.grid_top,
             },
         );
     }
@@ -173,9 +199,81 @@ fn render_canvas(
         &state.grid,
         state.cursor_mode,
         &config.display.cursor_shape,
-        layout,
+        grid_layout,
         metrics,
     );
+    canvas.restore();
+}
+
+fn render_toolbar(
+    canvas: &Canvas,
+    state: &EditorState,
+    metrics: &CellMetrics,
+    top_padding: usize,
+    width: usize,
+) {
+    let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let header = [Atom {
+        face: Face::default(),
+        contents: state.toolbar.header_line(),
+    }];
+    render_line(
+        canvas,
+        0,
+        &header,
+        &state.grid.default_face,
+        max_columns,
+        metrics,
+        DrawOrigin::Grid { top_padding },
+    );
+
+    let values: Vec<_> = state
+        .toolbar
+        .value_spans()
+        .into_iter()
+        .map(|span| Atom {
+            face: if span.selected {
+                state.grid.cursor_face.clone()
+            } else {
+                Face::default()
+            },
+            contents: span.contents,
+        })
+        .collect();
+    render_line(
+        canvas,
+        1,
+        &values,
+        &state.grid.default_face,
+        max_columns,
+        metrics,
+        DrawOrigin::Grid { top_padding },
+    );
+}
+
+fn visible_grid_layout(
+    mut layout: LayoutMetrics,
+    metrics: &CellMetrics,
+    viewport: ViewportOffset,
+) -> LayoutMetrics {
+    layout.cols = layout
+        .cols
+        .saturating_add(hidden_leading_cells(viewport.x, metrics.cell_width));
+    layout.rows = layout
+        .rows
+        .saturating_add(hidden_leading_cells(viewport.y, metrics.cell_height));
+    layout
+}
+
+fn hidden_leading_cells(offset: i64, cell_size: usize) -> usize {
+    if offset >= 0 {
+        return 0;
+    }
+    usize::try_from(offset.saturating_abs())
+        .unwrap_or(usize::MAX)
+        .checked_div(cell_size.max(1))
+        .unwrap_or(0)
+        .saturating_add(2)
 }
 
 fn render_window_title(
@@ -323,7 +421,7 @@ fn render_grid_cursor(
         FALLBACK_FG,
         FALLBACK_BG,
     );
-    let top = row_top(cursor.line, metrics, layout.top_padding);
+    let top = row_top(cursor.line, metrics, layout.grid_top);
     match cursor_shape_for_mode(cursor_shape_config, cursor_mode) {
         CursorShape::Block => {
             render_block_cursor(canvas, cursor.column, top, &cell, metrics, &cursor_resolved)

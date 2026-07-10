@@ -4,6 +4,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{CursorMode, ThemeConfig};
 use crate::drawing::glyph_with_connection;
 use crate::model::{Atom, Coord, Direction, Face};
+use crate::toolbar::ToolbarState;
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -18,6 +19,7 @@ pub struct EditorState {
     pub grid: GridState,
     pub window_title: String,
     pub cursor_mode: CursorMode,
+    pub toolbar: ToolbarState,
     cursor_index: usize,
 }
 
@@ -32,6 +34,7 @@ impl EditorState {
             },
             window_title: window_title.into(),
             cursor_mode: CursorMode::MoveDraw,
+            toolbar: ToolbarState::default(),
             cursor_index: 0,
         }
     }
@@ -179,17 +182,23 @@ impl EditorState {
         let Some(to) = adjacent_coord(from, direction) else {
             return;
         };
+        let line_style = self.toolbar.line_style();
 
         if draw {
-            self.add_connection(from, direction);
+            self.add_connection(from, direction, line_style);
         }
         self.move_to(to);
         if draw {
-            self.add_connection(to, direction.opposite());
+            self.add_connection(to, direction.opposite(), line_style);
         }
     }
 
-    fn add_connection(&mut self, coord: Coord, direction: Direction) {
+    fn add_connection(
+        &mut self,
+        coord: Coord,
+        direction: Direction,
+        line_style: crate::drawing::LineStyle,
+    ) {
         let line = &mut self.grid.lines[coord.line];
         let (index, column) = index_and_column_for_coord(line, coord.column);
 
@@ -199,14 +208,14 @@ impl EditorState {
 
         if let Some(atom) = line.get_mut(index) {
             if atom_width(atom) == 1
-                && let Some(glyph) = glyph_with_connection(&atom.contents, direction)
+                && let Some(glyph) = glyph_with_connection(&atom.contents, direction, line_style)
             {
                 atom.contents = glyph.to_string();
             }
         } else {
             line.push(Atom {
                 face: Face::default(),
-                contents: glyph_with_connection(" ", direction)
+                contents: glyph_with_connection(" ", direction, line_style)
                     .expect("blank cells accept line connections")
                     .to_string(),
             });
