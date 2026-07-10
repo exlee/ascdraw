@@ -1,37 +1,21 @@
-# Kakvide
+# ascdraw
 
-![Kakvide header](assets/kakvide_with_caption.png)
+ascdraw is a work-in-progress native ASCII drawing editor inspired by Monodraw and Emacs Uniline.
 
-Kakvide is a Neovide-inspired GUI for [Kakoune](https://kakoune.org/).
+The current foundation provides:
 
-The spark for the project was a simple need: to open a Kakoune-like editor in a GUI window when there wasn't really one available.
+- A standalone editable cell grid with no external editor process
+- Grapheme-aware text insertion, deletion, cursor movement, and mouse positioning
+- Skia-based fixed-cell rendering with system-font fallback
+- Face-based foreground, background, underline, and text-attribute resolution
+- Configurable block, beam, and underline cursors
+- Live font size controls and configuration reload
+- Native multi-window and macOS menu integration
 
-It is built around Kakoune's `kak -ui json` mode, which made implementing the editor integration much faster than expected.
+The checked-in [`ascdraw.toml`](ascdraw.toml) contains bundled defaults. User overrides are loaded from `~/.config/ascdraw/config.toml`, or `$XDG_CONFIG_HOME/ascdraw/config.toml` when `XDG_CONFIG_HOME` is set.
 
-The overall architecture idea was taken directly from Neovide, including using `gl` for windows and `skia-safe` for cell rendering.
+Run `ascdraw --show-config` to print the merged configuration.
 
-## Features
+## Status
 
-- Native GUI for Kakoune powered by `kak -ui json`
-- Neovide-inspired rendering architecture using `gl` and `skia-safe`
-- Kakoune-compatible face and color resolution
-- Completion menus, prompt overlays, and modal UI rendering
-- Live font size controls with keyboard shortcuts and reset
-- Mouse forwarding and improved input handling
-- Multi-window support for opening external files
-- macOS app integration, including menus, document opening and file associations
-- Custom app and window icons
-
-## Work-in-progress
-
-This is work in progress.
-
-Some features aren't yet documented (e.g. see `kakvide.toml`), bugs are inevitable.
-
-Kakvide uses the checked-in `kakvide.toml` as its bundled default config. Users can override any subset of settings with `~/.config/kakvide/config.toml`, or `$XDG_CONFIG_HOME/kakvide/config.toml` when `XDG_CONFIG_HOME` is set.
-
-Use `kakvide --show-config` to print the full effective config, including bundled defaults plus any user overrides.
-
-## LLM disclaimer
-
-The code was developed with Codex/ChatGPT 5.4, with an adequate amount of handholding.
+The drawing-specific tools and document format are not implemented yet. This first stage establishes a standalone editor and retains the cell, face, and cursor rendering foundation.

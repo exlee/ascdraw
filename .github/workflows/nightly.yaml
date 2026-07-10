@@ -20,9 +20,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact_name: kakvide-macos
+            artifact_name: ascdraw-macos
           - os: ubuntu-latest
-            artifact_name: kakvide-linux
+            artifact_name: ascdraw-linux
 
     steps:
       - name: Check out source
@@ -54,7 +54,7 @@ jobs:
       - name: Stage binary
         run: |
           mkdir -p dist
-          tar -czf "dist/${{ matrix.artifact_name }}.tar.gz" -C target/release kakvide
+          tar -czf "dist/${{ matrix.artifact_name }}.tar.gz" -C target/release ascdraw
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -95,9 +95,6 @@ jobs:
         if: steps.cache-cargo-bundle.outputs.cache-hit != 'true'
         run: cargo install cargo-bundle --version 0.11.0 --locked
 
-      - name: Generate macOS icon
-        run: rake icon
-
       - name: Build macOS app bundle
         run: rake bundle
 
@@ -105,20 +102,20 @@ jobs:
         run: |
           mkdir -p dist
           create-dmg \
-            --volname "Kakvide" \
+            --volname "ascdraw" \
             --window-pos 200 120 \
             --window-size 640 420 \
             --icon-size 96 \
-            --icon "Kakvide.app" 180 170 \
+            --icon "ascdraw.app" 180 170 \
             --app-drop-link 460 170 \
-            "dist/Kakvide.dmg" \
-            "target/release/bundle/osx/Kakvide.app"
+            "dist/ascdraw.dmg" \
+            "target/release/bundle/osx/ascdraw.app"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: kakvide-macos-dmg
-          path: dist/Kakvide.dmg
+          name: ascdraw-macos-dmg
+          path: dist/ascdraw.dmg
           if-no-files-found: error
 
   release-nightly:
@@ -148,6 +145,6 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            dist/kakvide-linux/kakvide-linux.tar.gz
-            dist/kakvide-macos/kakvide-macos.tar.gz
-            dist/kakvide-macos-dmg/Kakvide.dmg
+            dist/ascdraw-linux/ascdraw-linux.tar.gz
+            dist/ascdraw-macos/ascdraw-macos.tar.gz
+            dist/ascdraw-macos-dmg/ascdraw.dmg

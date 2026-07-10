@@ -13,21 +13,16 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use winit::window::Window;
 
-mod popup;
-
-use popup::{render_info, render_menu};
-
-use crate::app::{
-    AppConfig, AppState, CursorMode, CursorShape, CursorShapeConfig, GridState, StatusState,
-};
+use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
+use crate::editor::{EditorState, GridState};
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
-use crate::kakoune_messages::{Atom, Face};
-use crate::layout::{LayoutMetrics, PADDING, bottom_overlay_top, layout_metrics};
+use crate::layout::{LayoutMetrics, PADDING, layout_metrics};
+use crate::model::{Atom, Face};
 
-const FALLBACK_BG: Rgba = Rgba::rgb(0x1e, 0x1e, 0x2e);
-const FALLBACK_FG: Rgba = Rgba::rgb(0xdd, 0xdd, 0xdd);
+const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -69,22 +64,21 @@ struct FallbackFontKey {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::render) struct LineRenderPosition {
+struct LineRenderPosition {
     pub row: usize,
     pub start_column: usize,
     pub max_columns: usize,
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::render) enum DrawOrigin {
+enum DrawOrigin {
     Grid { top_padding: usize },
-    Top { top: usize },
 }
 
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
-    state: &AppState,
+    state: &EditorState,
     renderer: &Renderer,
     config: &AppConfig,
 ) -> Result<()> {
@@ -127,8 +121,6 @@ pub fn render(
             window.scale_factor(),
         ),
         width,
-        height,
-        config.transparent_menubar,
     );
 
     buffer
@@ -139,14 +131,12 @@ pub fn render(
 
 fn render_canvas(
     canvas: &Canvas,
-    state: &AppState,
+    state: &EditorState,
     config: &AppConfig,
     metrics: &CellMetrics,
     title_metrics: &CellMetrics,
     layout: LayoutMetrics,
     width: usize,
-    height: usize,
-    transparent_menubar: bool,
 ) {
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
@@ -157,13 +147,12 @@ fn render_canvas(
         title_metrics,
         layout,
         width,
-        transparent_menubar,
+        config.transparent_menubar,
     );
 
     let cols = layout.cols;
     let rows = layout.rows;
-    let status_rows = usize::from(state.status.is_some());
-    let content_rows = rows.saturating_sub(status_rows);
+    let content_rows = rows;
 
     for (row_index, line) in state.grid.lines.iter().take(content_rows).enumerate() {
         render_line(
@@ -184,40 +173,9 @@ fn render_canvas(
         &state.grid,
         state.cursor_mode,
         &config.display.cursor_shape,
-        cols,
-        content_rows,
+        layout,
         metrics,
-        layout.top_padding,
     );
-
-    if let Some(status) = &state.status {
-        render_status(canvas, cols, status, metrics, height);
-    }
-
-    let menu_rect = state.menu.as_ref().and_then(|menu| {
-        render_menu(
-            canvas,
-            menu,
-            cols,
-            content_rows,
-            metrics,
-            layout.top_padding,
-            height,
-        )
-    });
-
-    if let Some(info) = &state.info {
-        render_info(
-            canvas,
-            info,
-            menu_rect,
-            cols,
-            content_rows,
-            metrics,
-            layout.top_padding,
-            height,
-        );
-    }
 }
 
 fn render_window_title(
@@ -257,58 +215,6 @@ fn render_window_title(
     canvas.draw_str(title, (left, baseline), &metrics.font, &paint);
 }
 
-fn render_status(
-    canvas: &Canvas,
-    cols: usize,
-    status: &StatusState,
-    metrics: &CellMetrics,
-    window_height: usize,
-) {
-    let top = bottom_overlay_top(window_height, metrics.cell_height, 1);
-    fill_line_background_at_top(canvas, cols, &status.default_face, metrics, top);
-
-    let mut prompt_line = status.prompt.clone();
-    prompt_line.extend(status.content.clone());
-
-    let mode_width = line_display_width(&status.mode_line);
-    let right_start = cols.saturating_sub(mode_width);
-    let prompt_limit = if prompt_line.is_empty() {
-        cols
-    } else {
-        right_start
-    };
-
-    if !prompt_line.is_empty() {
-        render_line_at(
-            canvas,
-            LineRenderPosition {
-                row: 0,
-                start_column: 0,
-                max_columns: prompt_limit,
-            },
-            &prompt_line,
-            &status.default_face,
-            metrics,
-            DrawOrigin::Top { top },
-        );
-    }
-
-    if !status.mode_line.is_empty() {
-        render_line_at(
-            canvas,
-            LineRenderPosition {
-                row: 0,
-                start_column: right_start,
-                max_columns: cols,
-            },
-            &status.mode_line,
-            &status.default_face,
-            metrics,
-            DrawOrigin::Top { top },
-        );
-    }
-}
-
 fn render_line(
     canvas: &Canvas,
     row: usize,
@@ -332,7 +238,7 @@ fn render_line(
     );
 }
 
-pub(in crate::render) fn render_line_at(
+fn render_line_at(
     canvas: &Canvas,
     position: LineRenderPosition,
     line: &[Atom],
@@ -386,11 +292,11 @@ fn render_grid_cursor(
     grid: &GridState,
     cursor_mode: CursorMode,
     cursor_shape_config: &CursorShapeConfig,
-    cols: usize,
-    rows: usize,
+    layout: LayoutMetrics,
     metrics: &CellMetrics,
-    top_padding: usize,
 ) {
+    let cols = layout.cols;
+    let rows = layout.rows;
     if cols == 0 || rows == 0 {
         return;
     }
@@ -409,12 +315,18 @@ fn render_grid_cursor(
         text: Some(" ".to_string()),
     });
 
-    let resolved = resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
-    let base_resolved = resolve_root_face(&grid.default_face, FALLBACK_FG, FALLBACK_BG);
-    let top = row_top(cursor.line, metrics, top_padding);
+    let cell_resolved =
+        resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
+    let cursor_resolved = resolve_derived_face(
+        &grid.default_face,
+        &grid.cursor_face,
+        FALLBACK_FG,
+        FALLBACK_BG,
+    );
+    let top = row_top(cursor.line, metrics, layout.top_padding);
     match cursor_shape_for_mode(cursor_shape_config, cursor_mode) {
         CursorShape::Block => {
-            render_block_cursor(canvas, cursor.column, top, &cell, metrics, &resolved)
+            render_block_cursor(canvas, cursor.column, top, &cell, metrics, &cursor_resolved)
         }
         CursorShape::Beam => render_beam_cursor(
             canvas,
@@ -422,8 +334,8 @@ fn render_grid_cursor(
             top,
             &cell,
             metrics,
-            &base_resolved,
-            &resolved,
+            &cell_resolved,
+            &cursor_resolved,
         ),
         CursorShape::Underline => render_underline_cursor(
             canvas,
@@ -431,8 +343,8 @@ fn render_grid_cursor(
             top,
             &cell,
             metrics,
-            &base_resolved,
-            &resolved,
+            &cell_resolved,
+            &cursor_resolved,
         ),
     }
 }
@@ -525,12 +437,7 @@ fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> Cursor
         CursorMode::Normal => config.normal.unwrap_or(CursorShape::Block),
         CursorMode::Insert => config.insert.unwrap_or(CursorShape::Block),
         CursorMode::Replace => config.replace.unwrap_or(CursorShape::Block),
-        CursorMode::Unknown => CursorShape::Block,
     }
-}
-
-fn cursor_shape_fill_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
-    cursor_indicator_color(shape, resolved)
 }
 
 fn cursor_indicator_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
@@ -602,102 +509,7 @@ pub fn atom_display_width(contents: &str) -> usize {
         .sum()
 }
 
-pub fn line_display_width(line: &[Atom]) -> usize {
-    line.iter()
-        .map(|atom| atom_display_width(&atom.contents))
-        .sum()
-}
-
-pub(in crate::render) fn fill_line_background_at_top(
-    canvas: &Canvas,
-    cols: usize,
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
-    let bg = resolve_root_face(default_face, FALLBACK_FG, FALLBACK_BG)
-        .bg
-        .to_color();
-    let mut paint = Paint::default();
-    paint.set_anti_alias(false).set_color(bg);
-    fill_cells(canvas, 0, top, cols, metrics, &paint);
-}
-
-pub(in crate::render) fn fill_line_segment(
-    canvas: &Canvas,
-    row: usize,
-    column: usize,
-    width: usize,
-    face: &Face,
-    metrics: &CellMetrics,
-    origin: DrawOrigin,
-) {
-    let top = line_top(origin, row, metrics);
-    let bg = resolve_root_face(face, FALLBACK_FG, FALLBACK_BG)
-        .bg
-        .to_color();
-    let mut paint = Paint::default();
-    paint.set_anti_alias(false).set_color(bg);
-    fill_cells(canvas, column, top, width, metrics, &paint);
-}
-
-pub(in crate::render) fn fill_rect(
-    canvas: &Canvas,
-    rect: popup::CellRect,
-    face: &Face,
-    metrics: &CellMetrics,
-    origin: DrawOrigin,
-) {
-    for row_offset in 0..rect.height {
-        let row = match origin {
-            DrawOrigin::Grid { .. } => rect.row + row_offset,
-            DrawOrigin::Top { .. } => row_offset,
-        };
-        fill_line_segment(
-            canvas,
-            row,
-            rect.column,
-            rect.width,
-            face,
-            metrics,
-            match origin {
-                DrawOrigin::Grid { top_padding } => DrawOrigin::Grid { top_padding },
-                DrawOrigin::Top { top } => DrawOrigin::Top { top },
-            },
-        );
-    }
-}
-
-pub(in crate::render) fn fill_rect_at_top(
-    canvas: &Canvas,
-    rect: popup::CellRect,
-    face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
-    fill_rect(canvas, rect, face, metrics, DrawOrigin::Top { top });
-}
-
-pub(in crate::render) fn fill_line_segment_at_top(
-    canvas: &Canvas,
-    column: usize,
-    width: usize,
-    face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
-    fill_line_segment(
-        canvas,
-        0,
-        column,
-        width,
-        face,
-        metrics,
-        DrawOrigin::Top { top },
-    );
-}
-
-pub(in crate::render) fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
+fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
     let mut remaining = max_width;
     let mut result = Vec::new();
 
@@ -741,74 +553,6 @@ fn truncate_title(title: &str, max_width: usize) -> String {
         .collect()
 }
 
-pub(in crate::render) fn render_string_line(
-    canvas: &Canvas,
-    row: usize,
-    column: usize,
-    text: &str,
-    default_face: &Face,
-    metrics: &CellMetrics,
-    origin: DrawOrigin,
-) {
-    if text.is_empty() {
-        return;
-    }
-
-    let atoms = [Atom {
-        face: Face::default(),
-        contents: text.to_string(),
-    }];
-    render_line_at(
-        canvas,
-        LineRenderPosition {
-            row,
-            start_column: column,
-            max_columns: column + atom_display_width(text),
-        },
-        &atoms,
-        default_face,
-        metrics,
-        origin,
-    );
-}
-
-pub(in crate::render) fn render_string_line_at_top(
-    canvas: &Canvas,
-    column: usize,
-    text: &str,
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
-    render_string_line(
-        canvas,
-        0,
-        column,
-        text,
-        default_face,
-        metrics,
-        DrawOrigin::Top { top },
-    );
-}
-
-pub(in crate::render) fn render_line_at_top(
-    canvas: &Canvas,
-    position: LineRenderPosition,
-    line: &[Atom],
-    default_face: &Face,
-    metrics: &CellMetrics,
-    top: usize,
-) {
-    render_line_at(
-        canvas,
-        position,
-        line,
-        default_face,
-        metrics,
-        DrawOrigin::Top { top },
-    );
-}
-
 fn row_top(row: usize, metrics: &CellMetrics, top_padding: usize) -> usize {
     top_padding + row * metrics.cell_height
 }
@@ -816,7 +560,6 @@ fn row_top(row: usize, metrics: &CellMetrics, top_padding: usize) -> usize {
 fn line_top(origin: DrawOrigin, row: usize, metrics: &CellMetrics) -> usize {
     match origin {
         DrawOrigin::Grid { top_padding } => row_top(row, metrics, top_padding),
-        DrawOrigin::Top { top } => top + row * metrics.cell_height,
     }
 }
 
@@ -1162,69 +905,24 @@ pub fn resize_surface(
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{AppConfig, CursorMode, CursorShape, StatusState};
-    use crate::kakoune_messages::StatusStyle;
+    use crate::app::{AppConfig, CursorMode, CursorShape};
 
     use super::*;
 
     #[test]
-    fn status_uses_mode_line_and_prompt_rows() {
-        let status = StatusState {
-            prompt: vec![Atom {
-                face: Face::default(),
-                contents: ":".into(),
-            }],
-            content: vec![Atom {
-                face: Face::default(),
-                contents: "w".into(),
-            }],
-            cursor_pos: 1,
-            mode_line: vec![Atom {
-                face: Face::default(),
-                contents: "status".into(),
-            }],
-            default_face: Face::default(),
-            style: StatusStyle::Status,
-        };
-        let mut prompt_line = status.prompt.clone();
-        prompt_line.extend(status.content.clone());
-        assert_eq!(line_display_width(&prompt_line), 2);
-        assert_eq!(line_display_width(&status.mode_line), 6);
-    }
-
-    #[test]
-    fn line_display_width_ignores_empty_spacer_atoms() {
-        let line = vec![
-            Atom {
-                face: Face::default(),
-                contents: "left".into(),
-            },
-            Atom {
-                face: Face::default(),
-                contents: "".into(),
-            },
-            Atom {
-                face: Face::default(),
-                contents: "right".into(),
-            },
-        ];
-
-        assert_eq!(atom_display_width(&line[1].contents), 0);
-        assert_eq!(line_display_width(&line), 9);
-    }
-
-    #[test]
     fn title_truncation_limits_display_width() {
-        let title = truncate_title("kakvide - /tmp/long/path.txt", 12);
+        let title = truncate_title("ascdraw - /tmp/long/path.txt", 12);
 
-        assert_eq!(title, "kakvide - /t");
+        assert_eq!(title, "ascdraw - /t");
         assert_eq!(atom_display_width(&title), 12);
     }
 
     #[test]
     fn title_metrics_stay_at_default_size_when_content_font_changes() {
-        let mut config = AppConfig::default();
-        config.font_size = 12.0;
+        let config = AppConfig {
+            font_size: 12.0,
+            ..AppConfig::default()
+        };
         let renderer = load_renderer(&config);
 
         let original_title_metrics = renderer.title_metrics(1.0);
@@ -1344,13 +1042,9 @@ mod tests {
     }
 
     #[test]
-    fn cursor_shape_uses_block_fallback_for_unknown_or_missing_modes() {
+    fn cursor_shape_uses_block_fallback_for_missing_modes() {
         let config = AppConfig::default();
 
-        assert_eq!(
-            cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Unknown),
-            CursorShape::Block
-        );
         assert_eq!(
             cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Insert),
             CursorShape::Block
@@ -1388,14 +1082,6 @@ mod tests {
             strikethrough: false,
         };
 
-        assert_eq!(
-            cursor_shape_fill_color(CursorShape::Beam, &resolved),
-            resolved.bg
-        );
-        assert_eq!(
-            cursor_shape_fill_color(CursorShape::Underline, &resolved),
-            resolved.bg
-        );
         assert_eq!(
             cursor_indicator_color(CursorShape::Beam, &resolved),
             resolved.bg

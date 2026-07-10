@@ -1,24 +1,19 @@
 [package]
-name = "kakvide"
+name = "ascdraw"
 version = "0.1.0"
 edition = "2024"
 
 [package.metadata.bundle]
-name = "Kakvide"
-identifier = "sh.axk.kakvide"
-icon = ["target/generated/kakvide.icns"]
+name = "ascdraw"
+identifier = "sh.axk.ascdraw"
 version = "0.1.0"
-resources = ["assets/kakvide.png"]
-category = "Developer Tool"
-short_description = "A Neovide-inspired GUI for Kakoune."
-osx_info_plist_exts = ["assets/macos-document-types.plist"]
+category = "Graphics and Design"
+short_description = "A native ASCII drawing editor."
 
 [dependencies]
 anyhow = "=1.0.100"
 clap = { version = "=4.6.1", features = ["derive"] }
-image = { version = "=0.25.10", default-features = false, features = ["png"] }
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.150"
 skia-safe = { version = "=0.97.2", features = ["textlayout"] }
 softbuffer = "=0.4.8"
 toml = "=0.9.7"

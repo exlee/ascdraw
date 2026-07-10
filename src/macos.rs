@@ -1,28 +1,20 @@
 use std::cell::RefCell;
-use std::ffi::{CString, OsString};
-use std::path::PathBuf;
+use std::ffi::CString;
 
 use anyhow::{Context, Result, anyhow};
 use objc2::rc::Retained;
-use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
-use objc2::{MainThreadMarker, ProtocolType, msg_send, sel};
-use objc2_app_kit::{NSApplication, NSColorSpace, NSMenu, NSMenuDelegate, NSMenuItem, NSView};
-use objc2_foundation::{NSArray, NSString};
+use objc2::{MainThreadMarker, sel};
+use objc2_app_kit::{NSApplication, NSColorSpace, NSMenu, NSMenuItem, NSView};
+use objc2_foundation::NSString;
 use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 use crate::app::{AppCommand, AppEvent, MacosColorSpace, MacosConfig};
-use crate::diagnostics::log_error;
-use crate::kakoune_process::list_kakoune_sessions;
-
-const CONNECT_SESSIONS_MENU: &str = "Connect to Session";
-const SWITCH_SESSIONS_MENU: &str = "Switch to Session";
 
 thread_local! {
     static APP_PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
-    static KAK_BIN: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn apply_window_color_space(window: &Window, config: &MacosConfig) -> Result<()> {
@@ -42,20 +34,14 @@ pub fn apply_window_color_space(window: &Window, config: &MacosConfig) -> Result
     Ok(())
 }
 
-pub fn install(proxy: EventLoopProxy<AppEvent>, kak_bin: String) -> Result<()> {
-    APP_PROXY.with(|slot| {
-        *slot.borrow_mut() = Some(proxy);
-    });
-    KAK_BIN.with(|slot| {
-        *slot.borrow_mut() = Some(kak_bin);
-    });
+pub fn install(proxy: EventLoopProxy<AppEvent>) -> Result<()> {
+    APP_PROXY.with(|slot| *slot.borrow_mut() = Some(proxy));
 
     let mtm = MainThreadMarker::new().context("macOS integration must run on the main thread")?;
     let app = NSApplication::sharedApplication(mtm);
     let delegate = app.delegate().context("missing NSApplication delegate")?;
     install_delegate_methods(delegate.as_ref())?;
     install_menus()?;
-
     Ok(())
 }
 
@@ -70,17 +56,9 @@ pub fn install_menus() -> Result<()> {
 
 fn install_delegate_methods(delegate: &AnyObject) -> Result<()> {
     let delegate_class = AnyObject::class(delegate);
-    let class_name = CString::new("KakvideApplicationDelegate")?;
-
+    let class_name = CString::new("AscdrawApplicationDelegate")?;
     let class = if let Some(mut builder) = ClassBuilder::new(&class_name, delegate_class) {
-        builder.add_protocol(
-            <dyn NSMenuDelegate>::protocol().context("missing NSMenuDelegate protocol")?,
-        );
         unsafe {
-            builder.add_method(
-                sel!(application:openFiles:),
-                handle_open_files as unsafe extern "C-unwind" fn(_, _, _, _),
-            );
             builder.add_method(
                 sel!(newWindow:),
                 handle_new_window as unsafe extern "C-unwind" fn(_, _, _),
@@ -101,46 +79,29 @@ fn install_delegate_methods(delegate: &AnyObject) -> Result<()> {
                 sel!(resetFontSize:),
                 handle_reset_font_size as unsafe extern "C-unwind" fn(_, _, _),
             );
-            builder.add_method(
-                sel!(connectToSession:),
-                handle_connect_to_session as unsafe extern "C-unwind" fn(_, _, _),
-            );
-            builder.add_method(
-                sel!(switchToSession:),
-                handle_switch_to_session as unsafe extern "C-unwind" fn(_, _, _),
-            );
-            builder.add_method(
-                sel!(menuNeedsUpdate:),
-                handle_menu_needs_update as unsafe extern "C-unwind" fn(_, _, _),
-            );
         }
         builder.register()
     } else {
-        AnyClass::get(&class_name).context("failed to register KakvideApplicationDelegate")?
+        AnyClass::get(&class_name).context("failed to register AscdrawApplicationDelegate")?
     };
 
-    unsafe {
-        AnyObject::set_class(delegate, class);
-    }
-
+    unsafe { AnyObject::set_class(delegate, class) };
     Ok(())
 }
 
 fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication, target: &AnyObject) {
     let main_menu = menu(mtm, "");
-    let app_menu = menu(mtm, "Kakvide");
+    let app_menu = menu(mtm, "ascdraw");
     let file_menu = menu(mtm, "File");
     let view_menu = menu(mtm, "View");
-    let sessions_menu = menu(mtm, "Sessions");
     let window_menu = menu(mtm, "Window");
 
-    append_submenu(&main_menu, "Kakvide", &app_menu, mtm);
+    append_submenu(&main_menu, "ascdraw", &app_menu, mtm);
     append_submenu(&main_menu, "File", &file_menu, mtm);
     append_submenu(&main_menu, "View", &view_menu, mtm);
-    append_submenu(&main_menu, "Sessions", &sessions_menu, mtm);
     append_submenu(&main_menu, "Window", &window_menu, mtm);
 
-    add_item(&app_menu, "Hide Kakvide", "h", Some(sel!(hide:)), None);
+    add_item(&app_menu, "Hide ascdraw", "h", Some(sel!(hide:)), None);
     add_item(
         &app_menu,
         "Hide Others",
@@ -156,7 +117,7 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication, target: &AnyObj
         None,
     );
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add_item(&app_menu, "Quit Kakvide", "q", Some(sel!(terminate:)), None);
+    add_item(&app_menu, "Quit ascdraw", "q", Some(sel!(terminate:)), None);
 
     add_item(
         &file_menu,
@@ -172,7 +133,6 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication, target: &AnyObj
         Some(sel!(closeWindow:)),
         Some(target),
     );
-
     add_item(
         &view_menu,
         "Increase Font Size",
@@ -195,15 +155,6 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication, target: &AnyObj
         Some(target),
     );
 
-    let connect_menu = menu(mtm, CONNECT_SESSIONS_MENU);
-    let switch_menu = menu(mtm, SWITCH_SESSIONS_MENU);
-    unsafe {
-        let _: () = msg_send![&*connect_menu, setDelegate: target];
-        let _: () = msg_send![&*switch_menu, setDelegate: target];
-    }
-    append_submenu(&sessions_menu, CONNECT_SESSIONS_MENU, &connect_menu, mtm);
-    append_submenu(&sessions_menu, SWITCH_SESSIONS_MENU, &switch_menu, mtm);
-
     add_item(
         &window_menu,
         "Minimize",
@@ -225,7 +176,7 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication, target: &AnyObj
     app.setWindowsMenu(Some(&window_menu));
 }
 
-fn menu(mtm: MainThreadMarker, title: &str) -> objc2::rc::Retained<NSMenu> {
+fn menu(mtm: MainThreadMarker, title: &str) -> Retained<NSMenu> {
     let menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(title));
     menu.setAutoenablesItems(false);
     menu
@@ -250,7 +201,7 @@ fn add_item(
     key: &str,
     action: Option<Sel>,
     target: Option<&AnyObject>,
-) -> objc2::rc::Retained<NSMenuItem> {
+) -> Retained<NSMenuItem> {
     let item = unsafe {
         menu.addItemWithTitle_action_keyEquivalent(
             &NSString::from_str(title),
@@ -259,29 +210,9 @@ fn add_item(
         )
     };
     if let Some(target) = target {
-        unsafe {
-            item.setTarget(Some(target));
-        }
+        unsafe { item.setTarget(Some(target)) };
     }
     item
-}
-
-fn add_disabled_item(menu: &NSMenu, title: &str) {
-    let item = add_item(menu, title, "", None, None);
-    item.setEnabled(false);
-}
-
-unsafe extern "C-unwind" fn handle_open_files(
-    _this: &mut AnyObject,
-    _sel: Sel,
-    _sender: &AnyObject,
-    filenames: &NSArray<NSString>,
-) {
-    let paths = filenames_to_paths(filenames);
-    if paths.is_empty() {
-        return;
-    }
-    send_event(AppEvent::OpenFiles(paths));
 }
 
 unsafe extern "C-unwind" fn handle_new_window(
@@ -324,92 +255,12 @@ unsafe extern "C-unwind" fn handle_reset_font_size(
     send_command(AppCommand::FontScaleReset);
 }
 
-unsafe extern "C-unwind" fn handle_connect_to_session(
-    _this: &mut AnyObject,
-    _sel: Sel,
-    sender: &NSMenuItem,
-) {
-    send_command(AppCommand::ConnectToSession(session_from_item(sender)));
-}
-
-unsafe extern "C-unwind" fn handle_switch_to_session(
-    _this: &mut AnyObject,
-    _sel: Sel,
-    sender: &NSMenuItem,
-) {
-    send_command(AppCommand::SwitchToSession(session_from_item(sender)));
-}
-
-unsafe extern "C-unwind" fn handle_menu_needs_update(
-    _this: &mut AnyObject,
-    _sel: Sel,
-    menu: &NSMenu,
-) {
-    let title = menu.title().to_string();
-    match title.as_str() {
-        CONNECT_SESSIONS_MENU => refresh_session_menu(menu, sel!(connectToSession:)),
-        SWITCH_SESSIONS_MENU => refresh_session_menu(menu, sel!(switchToSession:)),
-        _ => {}
-    }
-}
-
-fn refresh_session_menu(menu: &NSMenu, action: Sel) {
-    menu.removeAllItems();
-
-    let sessions = KAK_BIN.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(|kak_bin| list_kakoune_sessions(kak_bin))
-    });
-
-    match sessions {
-        Some(Ok(sessions)) if !sessions.is_empty() => {
-            let target = app_delegate_target();
-            for session in sessions {
-                let title = session.to_string_lossy();
-                add_item(menu, &title, "", Some(action), target.as_deref());
-            }
-        }
-        Some(Ok(_)) => add_disabled_item(menu, "No Sessions Available"),
-        Some(Err(error)) => {
-            log_error(format!("session list failed: {error:#}"));
-            add_disabled_item(menu, "Unable to List Sessions");
-        }
-        None => add_disabled_item(menu, "Unable to List Sessions"),
-    }
-}
-
-fn app_delegate_target() -> Option<Retained<AnyObject>> {
-    let mtm = MainThreadMarker::new()?;
-    NSApplication::sharedApplication(mtm)
-        .delegate()
-        .map(|delegate| unsafe { Retained::cast_unchecked(delegate) })
-}
-
-fn session_from_item(item: &NSMenuItem) -> OsString {
-    OsString::from(item.title().to_string())
-}
-
 fn send_command(command: AppCommand) {
-    send_event(AppEvent::Command(command));
-}
-
-fn send_event(event: AppEvent) {
     APP_PROXY.with(|slot| {
         if let Some(proxy) = slot.borrow().as_ref() {
-            let _ = proxy.send_event(event);
+            let _ = proxy.send_event(AppEvent::Command(command));
         }
     });
-}
-
-fn filenames_to_paths(filenames: &NSArray<NSString>) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(filenames.count());
-    for index in 0..filenames.count() {
-        let filename = unsafe { filenames.objectAtIndex_unchecked(index) };
-        let path = autoreleasepool(|pool| unsafe { filename.to_str(pool).to_owned() });
-        paths.push(PathBuf::from(path));
-    }
-    paths
 }
 
 fn color_space_for_config(color_space: MacosColorSpace) -> Retained<NSColorSpace> {
@@ -428,25 +279,13 @@ mod tests {
     fn p3_color_space_maps_to_display_p3() {
         let actual = color_space_for_config(MacosColorSpace::P3);
         let expected = objc2_app_kit::NSColorSpace::displayP3ColorSpace();
-
-        assert_eq!(
-            actual.localizedName().expect("actual should have a name"),
-            expected
-                .localizedName()
-                .expect("expected should have a name")
-        );
+        assert_eq!(actual.localizedName(), expected.localizedName());
     }
 
     #[test]
     fn srgb_color_space_maps_to_srgb() {
         let actual = color_space_for_config(MacosColorSpace::Srgb);
         let expected = objc2_app_kit::NSColorSpace::sRGBColorSpace();
-
-        assert_eq!(
-            actual.localizedName().expect("actual should have a name"),
-            expected
-                .localizedName()
-                .expect("expected should have a name")
-        );
+        assert_eq!(actual.localizedName(), expected.localizedName());
     }
 }

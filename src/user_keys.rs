@@ -21,7 +21,7 @@ pub enum UserAction {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub struct UserKeysConfig {
     pub font_scale_up: String,
     pub font_scale_down: String,

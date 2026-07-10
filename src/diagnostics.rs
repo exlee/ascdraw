@@ -152,31 +152,31 @@ fn log_path_for_platform(
     temp_dir: PathBuf,
     date: &str,
 ) -> PathBuf {
-    let filename = format!("kakvide.{date}.log");
+    let filename = format!("ascdraw.{date}.log");
     let directory = match platform {
         LogPlatform::Macos => env_var("HOME")
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
-            .map(|home| home.join("Library").join("Logs").join("Kakvide")),
+            .map(|home| home.join("Library").join("Logs").join("ascdraw")),
         LogPlatform::Linux => env_var("XDG_STATE_HOME")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .map(|path| path.join("kakvide"))
+            .map(|path| path.join("ascdraw"))
             .or_else(|| {
                 env_var("HOME")
                     .filter(|home| !home.is_empty())
                     .map(PathBuf::from)
-                    .map(|home| home.join(".local").join("state").join("kakvide"))
+                    .map(|home| home.join(".local").join("state").join("ascdraw"))
             }),
         LogPlatform::Windows => env_var("LOCALAPPDATA")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .map(|path| path.join("Kakvide")),
+            .map(|path| path.join("ascdraw")),
         LogPlatform::Other => None,
     };
 
     directory
-        .unwrap_or_else(|| temp_dir.join("kakvide"))
+        .unwrap_or_else(|| temp_dir.join("ascdraw"))
         .join(filename)
 }
 
@@ -404,7 +404,7 @@ mod tests {
 
         assert_eq!(
             path,
-            PathBuf::from("/Users/example/Library/Logs/Kakvide/kakvide.20260705.log")
+            PathBuf::from("/Users/example/Library/Logs/ascdraw/ascdraw.20260705.log")
         );
     }
 
@@ -419,7 +419,7 @@ mod tests {
 
         assert_eq!(
             path,
-            PathBuf::from("/tmp/state/kakvide/kakvide.20260705.log")
+            PathBuf::from("/tmp/state/ascdraw/ascdraw.20260705.log")
         );
     }
 
@@ -434,7 +434,7 @@ mod tests {
 
         assert_eq!(
             path,
-            PathBuf::from("/Users/example/.local/state/kakvide/kakvide.20260705.log")
+            PathBuf::from("/Users/example/.local/state/ascdraw/ascdraw.20260705.log")
         );
     }
 
@@ -450,8 +450,8 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from(r"C:\Users\example\AppData\Local")
-                .join("Kakvide")
-                .join("kakvide.20260705.log")
+                .join("ascdraw")
+                .join("ascdraw.20260705.log")
         );
     }
 
@@ -459,21 +459,21 @@ mod tests {
     fn missing_env_falls_back_to_temp_dir() {
         let path = test_log_path(LogPlatform::Macos, [], "/tmp", "20260705");
 
-        assert_eq!(path, PathBuf::from("/tmp/kakvide/kakvide.20260705.log"));
+        assert_eq!(path, PathBuf::from("/tmp/ascdraw/ascdraw.20260705.log"));
     }
 
     #[test]
     fn init_creates_parent_directories_and_appends_log_line() {
         let path = std::env::temp_dir()
             .join(format!(
-                "kakvide-diagnostics-test-{}",
+                "ascdraw-diagnostics-test-{}",
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("test time should be after unix epoch")
                     .as_nanos()
             ))
             .join("nested")
-            .join("kakvide.20260705.log");
+            .join("ascdraw.20260705.log");
 
         init_at(path.clone()).expect("diagnostics log should initialize");
         log_error("test diagnostic line");

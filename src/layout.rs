@@ -54,10 +54,6 @@ pub fn layout_rows(
     height.saturating_sub(top_padding + PADDING) / cell_height.max(1)
 }
 
-pub fn bottom_overlay_top(height: usize, cell_height: usize, row_count: usize) -> usize {
-    height.saturating_sub(PADDING + cell_height.saturating_mul(row_count))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,12 +76,5 @@ mod tests {
         let height = PADDING * 2 + 10 * 18;
         assert_eq!(layout_rows(height, 18, false, 1.0), 10);
         assert_eq!(layout_rows(height, 18, true, 1.0), 8);
-    }
-
-    #[test]
-    fn bottom_overlay_top_stays_anchored_to_bottom_padding() {
-        assert_eq!(bottom_overlay_top(240, 18, 1), 210);
-        assert_eq!(bottom_overlay_top(240, 24, 1), 204);
-        assert_eq!(bottom_overlay_top(240, 18, 3), 174);
     }
 }

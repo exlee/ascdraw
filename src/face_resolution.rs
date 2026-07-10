@@ -1,6 +1,6 @@
 use skia_safe::Color;
 
-use crate::kakoune_messages::Face;
+use crate::model::Face;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgba {
@@ -46,7 +46,7 @@ pub struct FaceAttributes {
 }
 
 impl FaceAttributes {
-    fn from_wire(attributes: &[String]) -> Self {
+    fn from_names(attributes: &[String]) -> Self {
         let mut parsed = Self::default();
         for attribute in attributes {
             match attribute.as_str() {
@@ -152,7 +152,7 @@ fn parse_face(face: &Face) -> FaceSpec {
         fg: parse_color(&face.fg),
         bg: parse_color(&face.bg),
         underline: parse_color(&face.underline),
-        attributes: FaceAttributes::from_wire(&face.attributes),
+        attributes: FaceAttributes::from_names(&face.attributes),
     }
 }
 
@@ -263,7 +263,7 @@ fn named_color(color: &str) -> Option<Rgba> {
         "blue" => Rgba::rgb(0x00, 0x00, 0xee),
         "magenta" => Rgba::rgb(0xcd, 0x00, 0xcd),
         "cyan" => Rgba::rgb(0x00, 0xcd, 0xcd),
-        "white" => Rgba::rgb(0xe5, 0xe5, 0xe5),
+        "white" => Rgba::rgb(0xff, 0xff, 0xff),
         "bright-black" => Rgba::rgb(0x7f, 0x7f, 0x7f),
         "bright-red" => Rgba::rgb(0xff, 0x00, 0x00),
         "bright-green" => Rgba::rgb(0x00, 0xff, 0x00),
@@ -346,7 +346,7 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.fg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.fg, Rgba::rgb(0xff, 0xff, 0xff));
         assert_eq!(resolved.bg, Rgba::rgb(0x00, 0x00, 0xee));
     }
 
@@ -372,7 +372,7 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.fg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.fg, Rgba::rgb(0xff, 0xff, 0xff));
         assert_eq!(resolved.bg, Rgba::rgb(0xcd, 0xcd, 0x00));
     }
 
@@ -410,7 +410,7 @@ mod tests {
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.bg, Rgba::rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(resolved.bg, Rgba::rgb(0xff, 0xff, 0xff));
         assert_eq!(resolved.fg, Rgba::rgb(0x00, 0x00, 0x77));
     }
 
