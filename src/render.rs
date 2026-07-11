@@ -24,6 +24,8 @@ use crate::model::{Atom, Face};
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION: Rgba = Rgba::rgb(0xff, 0x45, 0x00);
+const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
+const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -292,16 +294,20 @@ fn render_toolbar_spans(
     paint
         .set_anti_alias(false)
         .set_color(TOOLBAR_SELECTION.to_color())
-        .set_stroke_width(1.0);
+        .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
     let top = (row_top(row, metrics, top_padding)
-        + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32;
-    let bottom = top + metrics.cell_height.saturating_sub(1) as f32;
+        + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32
+        - TOOLBAR_SELECTION_PADDING;
+    let bottom =
+        top + metrics.cell_height.saturating_sub(1) as f32 + TOOLBAR_SELECTION_PADDING * 2.0;
     let mut column = 0;
     for span in spans {
         let span_width = UnicodeWidthStr::width(span.contents.as_str());
         if span.selected && span_width > 0 {
-            let left = (PADDING + column * metrics.cell_width) as f32;
-            let right = left + (span_width * metrics.cell_width).saturating_sub(1) as f32;
+            let left = (PADDING + column * metrics.cell_width) as f32 - TOOLBAR_SELECTION_PADDING;
+            let right = left
+                + (span_width * metrics.cell_width).saturating_sub(1) as f32
+                + TOOLBAR_SELECTION_PADDING * 2.0;
             canvas.draw_line((left, top), (right, top), &paint);
             canvas.draw_line((left, bottom), (right, bottom), &paint);
             canvas.draw_line((left, top), (left, bottom), &paint);
