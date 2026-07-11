@@ -51,12 +51,16 @@ fn edit_command_for_key(
         return None;
     }
 
+    if matches!(key, Key::Named(NamedKey::Backspace)) {
+        return Some(EditCommand::Clear);
+    }
+
+    if modifiers.alt_key() {
+        return direction_for_key(key).map(EditCommand::Erase);
+    }
+
     if mode == CursorMode::MoveDraw {
-        if modifiers.alt_key() {
-            return direction_for_key(key).map(EditCommand::Erase);
-        }
         return match key {
-            Key::Named(NamedKey::Backspace) => Some(EditCommand::Clear),
             _ if is_space_key(key) => Some(EditCommand::Clear),
             _ => direction_for_key(key).map(|direction| {
                 if modifiers.shift_key() {
@@ -68,13 +72,8 @@ fn edit_command_for_key(
         };
     }
 
-    if modifiers.alt_key() {
-        return None;
-    }
-
     if mode == CursorMode::Text {
         return match key {
-            Key::Named(NamedKey::Backspace) => Some(EditCommand::Backspace),
             Key::Named(NamedKey::Delete) => Some(EditCommand::Delete),
             Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
             _ => arrow_direction_for_key(key).map(EditCommand::Move),
@@ -207,7 +206,7 @@ mod tests {
                 ModifiersState::empty(),
                 CursorMode::Insert,
             ),
-            Some(EditCommand::Backspace)
+            Some(EditCommand::Clear)
         );
     }
 
@@ -224,13 +223,34 @@ mod tests {
     }
 
     #[test]
-    fn maps_backspace_and_space_to_clear_in_move_draw_mode() {
-        for key in [Key::Named(NamedKey::Backspace), Key::Character(" ".into())] {
+    fn maps_backspace_to_clear_in_every_mode() {
+        for mode in [
+            CursorMode::Insert,
+            CursorMode::Replace,
+            CursorMode::MoveDraw,
+            CursorMode::Text,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
             assert_eq!(
-                edit_command_for_key(&key, ModifiersState::empty(), CursorMode::MoveDraw),
+                edit_command_for_key(
+                    &Key::Named(NamedKey::Backspace),
+                    ModifiersState::empty(),
+                    mode,
+                ),
                 Some(EditCommand::Clear)
             );
         }
+
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Character(" ".into()),
+                ModifiersState::empty(),
+                CursorMode::MoveDraw,
+            ),
+            Some(EditCommand::Clear)
+        );
     }
 
     #[test]
@@ -262,15 +282,25 @@ mod tests {
     }
 
     #[test]
-    fn maps_alt_directions_to_line_erasing() {
-        for (key, direction) in [
-            (Key::Character("h".into()), Direction::Left),
-            (Key::Named(NamedKey::ArrowDown), Direction::Down),
+    fn maps_alt_directions_to_line_erasing_in_every_mode() {
+        for mode in [
+            CursorMode::Insert,
+            CursorMode::Replace,
+            CursorMode::MoveDraw,
+            CursorMode::Text,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
         ] {
-            assert_eq!(
-                edit_command_for_key(&key, ModifiersState::ALT, CursorMode::MoveDraw),
-                Some(EditCommand::Erase(direction))
-            );
+            for (key, direction) in [
+                (Key::Character("h".into()), Direction::Left),
+                (Key::Named(NamedKey::ArrowDown), Direction::Down),
+            ] {
+                assert_eq!(
+                    edit_command_for_key(&key, ModifiersState::ALT, mode),
+                    Some(EditCommand::Erase(direction))
+                );
+            }
         }
     }
 
