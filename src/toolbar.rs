@@ -118,14 +118,15 @@ struct MenuLayout<'a> {
 
 impl ToolbarState {
     pub fn cycle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        if modifiers.control_key() || modifiers.super_key() {
+        if modifiers.alt_key() {
             return false;
         }
 
         let Key::Character(text) = key else {
             return false;
         };
-        let Some(index) = toolbar_index(text, modifiers.shift_key(), modifiers.alt_key()) else {
+        let overflow_modifier = modifiers.control_key() || modifiers.super_key();
+        let Some(index) = toolbar_index(text, modifiers.shift_key(), overflow_modifier) else {
             return false;
         };
         let backwards = modifiers.shift_key();
@@ -393,7 +394,7 @@ impl ToolbarState {
     }
 }
 
-fn toolbar_index(text: &str, shifted: bool, alt: bool) -> Option<usize> {
+fn toolbar_index(text: &str, shifted: bool, overflow_modifier: bool) -> Option<usize> {
     let digit: usize = match (text, shifted) {
         ("1" | "!", true) | ("1", false) => 1,
         ("2" | "@", true) | ("2", false) => 2,
@@ -407,7 +408,7 @@ fn toolbar_index(text: &str, shifted: bool, alt: bool) -> Option<usize> {
         ("0" | ")", true) | ("0", false) => 0,
         _ => return None,
     };
-    if alt {
+    if overflow_modifier {
         (digit >= 2).then_some(8 + digit)
     } else if digit == 0 {
         Some(9)
@@ -429,7 +430,7 @@ fn submenu_shortcut_label(submenu: usize) -> String {
     if submenu < DIGITS.len() {
         format!("<{}>", DIGITS[submenu])
     } else {
-        format!("<A-{}>", DIGITS[(submenu - DIGITS.len()) % DIGITS.len()])
+        format!("<C-{}>", DIGITS[(submenu - DIGITS.len()) % DIGITS.len()])
     }
 }
 
@@ -566,7 +567,7 @@ mod tests {
             .iter()
             .map(|span| span.contents.as_str())
             .collect::<String>();
-        assert!(overflow.starts_with("<A-2> Blocks 3 ▜ ▄ ▙ ▟ █"));
+        assert!(overflow.starts_with("<C-2> Blocks 3 ▜ ▄ ▙ ▟ █"));
         assert_eq!(
             toolbar
                 .submenu_spans(1)
@@ -635,7 +636,7 @@ mod tests {
     fn rejects_unavailable_submenu_and_unrelated_modifiers() {
         let mut toolbar = ToolbarState::default();
         assert!(!toolbar.cycle_shortcut(&Key::Character("6".into()), ModifiersState::empty()));
-        assert!(!toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::SUPER));
+        assert!(!toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::ALT));
     }
 
     #[test]
@@ -651,12 +652,16 @@ mod tests {
     }
 
     #[test]
-    fn zero_and_alt_two_reach_the_ninth_and_tenth_stamp_groups() {
+    fn zero_and_control_or_command_two_reach_the_ninth_and_tenth_stamp_groups() {
         let mut toolbar = ToolbarState::default();
         cycle(&mut toolbar, "1");
         cycle(&mut toolbar, "0");
         assert_eq!(toolbar.stamp_active_submenu, 8);
-        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::ALT,));
+        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::CONTROL,));
+        assert_eq!(toolbar.stamp_active_submenu, 9);
+
+        toolbar.stamp_active_submenu = 8;
+        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::SUPER,));
         assert_eq!(toolbar.stamp_active_submenu, 9);
     }
 }

@@ -487,6 +487,31 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
+    pub fn draw_stamp(&mut self, direction: Direction) {
+        let Some(to) = adjacent_coord(self.grid.cursor_pos, direction) else {
+            return;
+        };
+        self.shape_preview = None;
+        self.place_stamp();
+        self.move_to_without_ending_stroke(to);
+        self.place_stamp();
+    }
+
+    pub fn erase(&mut self, direction: Direction) {
+        if self.cursor_mode == CursorMode::MoveDraw {
+            self.move_or_erase(direction);
+            return;
+        }
+
+        let Some(to) = adjacent_coord(self.grid.cursor_pos, direction) else {
+            return;
+        };
+        self.shape_preview = None;
+        self.clear_cell();
+        self.move_to_without_ending_stroke(to);
+        self.clear_cell();
+    }
+
     pub fn toggle_shape_preview(&mut self) {
         if self.cursor_mode != CursorMode::Shapes {
             return;
@@ -1023,6 +1048,36 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "█");
         assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn shift_drawing_in_stamp_mode_stamps_both_ends_of_the_move() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        state.draw_stamp(Direction::Right);
+
+        assert_eq!(contents(&state.grid.lines[0]), "○○");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+    }
+
+    #[test]
+    fn stamp_and_shape_erasers_clear_cells_while_moving() {
+        for mode in [MainMode::Stamp, MainMode::Shapes] {
+            let mut state = state();
+            state.apply_toolbar_action(ToolbarAction::SelectMain(mode));
+            replace_cell(&mut state.grid.lines, Coord::default(), "●".to_string());
+            replace_cell(
+                &mut state.grid.lines,
+                Coord { line: 0, column: 1 },
+                "◆".to_string(),
+            );
+
+            state.erase(Direction::Right);
+
+            assert_eq!(contents(&state.grid.lines[0]), "  ");
+            assert_eq!(state.grid.cursor_pos.column, 1);
+        }
     }
 
     #[test]

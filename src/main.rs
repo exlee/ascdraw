@@ -283,8 +283,12 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.move_or_draw(direction, true);
             true
         }
+        EditCommand::DrawStamp(direction) => {
+            state.draw_stamp(direction);
+            true
+        }
         EditCommand::Erase(direction) => {
-            state.move_or_erase(direction);
+            state.erase(direction);
             true
         }
         EditCommand::Clear => {
@@ -335,5 +339,46 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.insert("    ");
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::AppConfig;
+    use crate::model::Direction;
+    use crate::toolbar::{MainMode, ToolbarAction};
+
+    #[test]
+    fn shape_commands_start_preview_move_and_commit_a_rectangle() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+
+        assert!(!apply_edit_command(
+            &mut state,
+            EditCommand::ToggleShapePreview
+        ));
+        for command in [
+            EditCommand::Move(Direction::Right),
+            EditCommand::Move(Direction::Right),
+            EditCommand::Move(Direction::Right),
+            EditCommand::Move(Direction::Down),
+            EditCommand::Move(Direction::Down),
+        ] {
+            assert!(!apply_edit_command(&mut state, command));
+        }
+
+        let preview = state
+            .lines_with_shape_preview()
+            .expect("preview is visible");
+        assert_eq!(line_contents(&preview[0]), "┌──┐");
+        assert!(apply_edit_command(&mut state, EditCommand::ConfirmShape));
+        assert!(state.lines_with_shape_preview().is_none());
+        assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    fn line_contents(line: &[crate::model::Atom]) -> String {
+        line.iter().map(|atom| atom.contents.as_str()).collect()
     }
 }

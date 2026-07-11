@@ -11,6 +11,7 @@ use crate::render::Renderer;
 pub enum EditCommand {
     Move(Direction),
     Draw(Direction),
+    DrawStamp(Direction),
     Erase(Direction),
     Clear,
     ToggleTextEntry,
@@ -31,6 +32,9 @@ pub fn edit_command(
     modifiers: ModifiersState,
     mode: CursorMode,
 ) -> Option<EditCommand> {
+    if event.repeat && matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+        return None;
+    }
     edit_command_for_key(&event.logical_key, modifiers, mode)
 }
 
@@ -83,7 +87,13 @@ fn edit_command_for_key(
     if mode == CursorMode::Stamp {
         return match key {
             _ if is_space_key(key) => Some(EditCommand::PlaceStamp),
-            _ => direction_for_key(key).map(EditCommand::Move),
+            _ => direction_for_key(key).map(|direction| {
+                if modifiers.shift_key() {
+                    EditCommand::DrawStamp(direction)
+                } else {
+                    EditCommand::Move(direction)
+                }
+            }),
         };
     }
 
@@ -390,6 +400,19 @@ mod tests {
             assert_eq!(
                 edit_command_for_key(&key, ModifiersState::empty(), CursorMode::Stamp),
                 Some(EditCommand::PlaceStamp)
+            );
+        }
+    }
+
+    #[test]
+    fn shift_direction_draws_stamps() {
+        for (key, direction) in [
+            (Key::Character("l".into()), Direction::Right),
+            (Key::Named(NamedKey::ArrowDown), Direction::Down),
+        ] {
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::SHIFT, CursorMode::Stamp),
+                Some(EditCommand::DrawStamp(direction))
             );
         }
     }
