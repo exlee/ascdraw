@@ -204,6 +204,7 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
     render_grid_cursor(
         canvas,
         &state.grid,
+        lines,
         state.cursor_mode,
         &config.display.cursor_shape,
         grid_layout,
@@ -465,6 +466,7 @@ fn render_line_at(
 fn render_grid_cursor(
     canvas: &Canvas,
     grid: &GridState,
+    rendered_lines: &[Vec<Atom>],
     cursor_mode: CursorMode,
     cursor_shape_config: &CursorShapeConfig,
     layout: LayoutMetrics,
@@ -482,7 +484,7 @@ fn render_grid_cursor(
     }
 
     let cell = cursor_cell(
-        grid.lines.get(cursor.line).map(Vec::as_slice),
+        rendered_lines.get(cursor.line).map(Vec::as_slice),
         cursor.column,
     )
     .unwrap_or_else(|| CursorCell {
@@ -1121,6 +1123,9 @@ pub fn resize_surface(
 #[cfg(test)]
 mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape};
+    use crate::editor::EditorState;
+    use crate::model::Direction;
+    use crate::toolbar::{MainMode, ToolbarAction};
 
     use super::*;
 
@@ -1244,6 +1249,24 @@ mod tests {
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
         assert_eq!(cursor.text, Some("c".to_string()));
         assert_eq!(cursor.face.bg, "white");
+    }
+
+    #[test]
+    fn shape_preview_provides_the_cell_beneath_the_cursor() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        state.toggle_shape_preview();
+        state.move_cursor(Direction::Right);
+
+        let preview = state.lines_with_shape_preview().expect("preview is active");
+        let cell = cursor_cell(
+            preview.get(state.grid.cursor_pos.line).map(Vec::as_slice),
+            state.grid.cursor_pos.column,
+        )
+        .expect("preview cell exists beneath the cursor");
+
+        assert_eq!(cell.text, Some("┐".to_string()));
     }
 
     #[test]
