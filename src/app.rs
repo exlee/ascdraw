@@ -17,6 +17,7 @@ pub const DEFAULT_WINDOW_TITLE: &str = "ascdraw";
 pub struct Args {
     #[arg(long)]
     pub show_config: bool,
+    pub document: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

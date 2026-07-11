@@ -24,7 +24,7 @@ impl Default for Face {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Atom {
     pub face: Face,
     pub contents: String,

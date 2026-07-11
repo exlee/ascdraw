@@ -10,6 +10,7 @@ use winit::window::WindowId;
 
 mod app;
 mod diagnostics;
+mod document;
 mod drawing;
 mod editor;
 mod face_resolution;
@@ -56,6 +57,7 @@ fn main() -> ExitCode {
 #[allow(deprecated)]
 fn try_main() -> Result<ExitCode> {
     let args = Args::parse();
+    let document_path = args.document.unwrap_or_else(document::default_path);
     let mut config = load_config()?;
     if args.show_config {
         println!("Checked configuration paths:");
@@ -77,6 +79,7 @@ fn try_main() -> Result<ExitCode> {
     }
 
     let mut windows: HashMap<WindowId, EditorWindow> = HashMap::new();
+    let mut last_autosave_check = Instant::now();
     #[cfg(target_os = "macos")]
     let mut installed_macos_menus = false;
 
@@ -96,7 +99,7 @@ fn try_main() -> Result<ExitCode> {
                 }
 
                 if windows.is_empty() {
-                    match create_editor_window(elwt, &config) {
+                    match create_editor_window(elwt, &config, &document_path) {
                         Ok(editor) => {
                             windows.insert(editor.window_id(), editor);
                         }
@@ -112,11 +115,20 @@ fn try_main() -> Result<ExitCode> {
                 }
             }
             Event::UserEvent(AppEvent::Command(command)) => {
-                handle_command(command, None, &mut windows, elwt, &config);
+                handle_command(command, None, &mut windows, elwt, &config, &document_path);
             }
             Event::AboutToWait => {
                 if let Some(watch) = user_config_watch.as_mut() {
                     poll_user_config_updates(watch, &mut config, &mut user_keys, &mut windows);
+                }
+                let now = Instant::now();
+                if now.saturating_duration_since(last_autosave_check) >= Duration::from_secs(1) {
+                    for editor in windows.values_mut() {
+                        if let Err(error) = editor.autosave_if_idle(now) {
+                            log_error(format!("document autosave failed: {error:#}"));
+                        }
+                    }
+                    last_autosave_check = now;
                 }
             }
             Event::WindowEvent { window_id, event } => {
@@ -156,12 +168,14 @@ fn try_main() -> Result<ExitCode> {
                                 && !editor.modifiers.super_key()
                             {
                                 editor.state.write_text(&text);
+                                editor.mark_document_dirty();
                                 editor.request_redraw();
                             }
                         }
                         WindowEvent::KeyboardInput { event, .. }
                             if event.state == ElementState::Pressed =>
                         {
+                            editor.note_keypress(Instant::now());
                             if let Some(action) =
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
@@ -174,7 +188,9 @@ fn try_main() -> Result<ExitCode> {
                             } else if let Some(command) =
                                 edit_command(&event, editor.modifiers, editor.state.cursor_mode)
                             {
-                                apply_edit_command(&mut editor.state, command);
+                                if apply_edit_command(&mut editor.state, command) {
+                                    editor.mark_document_dirty();
+                                }
                                 editor.request_redraw();
                             } else if !editor.modifiers.control_key()
                                 && editor.state.cursor_mode.accepts_text()
@@ -184,6 +200,7 @@ fn try_main() -> Result<ExitCode> {
                                 && !text.chars().all(char::is_control)
                             {
                                 editor.state.write_text(&text);
+                                editor.mark_document_dirty();
                                 editor.request_redraw();
                             }
                         }
@@ -227,7 +244,14 @@ fn try_main() -> Result<ExitCode> {
                 }
 
                 if let Some(command) = pending_command {
-                    handle_command(command, Some(window_id), &mut windows, elwt, &config);
+                    handle_command(
+                        command,
+                        Some(window_id),
+                        &mut windows,
+                        elwt,
+                        &config,
+                        &document_path,
+                    );
                 } else if should_close {
                     close_window(&mut windows, window_id, elwt);
                 }
@@ -249,22 +273,67 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
-fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
+fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
     match command {
-        EditCommand::Move(direction) => state.move_cursor(direction),
-        EditCommand::Draw(direction) => state.move_or_draw(direction, true),
-        EditCommand::Erase(direction) => state.move_or_erase(direction),
-        EditCommand::Clear => state.clear_cell(),
-        EditCommand::ToggleTextEntry => state.toggle_text_entry(),
-        EditCommand::ToggleReplaceMode => state.toggle_replace_mode(),
-        EditCommand::PlaceStamp => state.place_stamp(),
-        EditCommand::ToggleShapePreview => state.toggle_shape_preview(),
-        EditCommand::ConfirmShape => state.confirm_shape(),
-        EditCommand::Home => state.move_home(),
-        EditCommand::End => state.move_end(),
-        EditCommand::Backspace => state.backspace(),
-        EditCommand::Delete => state.delete(),
-        EditCommand::Newline => state.newline(),
-        EditCommand::InsertTab => state.insert("    "),
+        EditCommand::Move(direction) => {
+            state.move_cursor(direction);
+            false
+        }
+        EditCommand::Draw(direction) => {
+            state.move_or_draw(direction, true);
+            true
+        }
+        EditCommand::Erase(direction) => {
+            state.move_or_erase(direction);
+            true
+        }
+        EditCommand::Clear => {
+            state.clear_cell();
+            true
+        }
+        EditCommand::ToggleTextEntry => {
+            state.toggle_text_entry();
+            false
+        }
+        EditCommand::ToggleReplaceMode => {
+            state.toggle_replace_mode();
+            false
+        }
+        EditCommand::PlaceStamp => {
+            state.place_stamp();
+            true
+        }
+        EditCommand::ToggleShapePreview => {
+            state.toggle_shape_preview();
+            false
+        }
+        EditCommand::ConfirmShape => {
+            state.confirm_shape();
+            true
+        }
+        EditCommand::Home => {
+            state.move_home();
+            false
+        }
+        EditCommand::End => {
+            state.move_end();
+            false
+        }
+        EditCommand::Backspace => {
+            state.backspace();
+            true
+        }
+        EditCommand::Delete => {
+            state.delete();
+            true
+        }
+        EditCommand::Newline => {
+            state.newline();
+            true
+        }
+        EditCommand::InsertTab => {
+            state.insert("    ");
+            true
+        }
     }
 }

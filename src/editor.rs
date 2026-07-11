@@ -1073,6 +1073,61 @@ mod tests {
         assert!(state.grid.lines[0].iter().all(|atom| atom.contents == " "));
     }
 
+    #[test]
+    fn rounded_shape_preview_uses_selected_fill() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 1,
+        });
+        state.toggle_shape_preview();
+        for direction in [
+            Direction::Right,
+            Direction::Right,
+            Direction::Right,
+            Direction::Down,
+            Direction::Down,
+        ] {
+            state.move_cursor(direction);
+        }
+
+        let preview = state.lines_with_shape_preview().unwrap();
+        assert_eq!(contents(&preview[0]), "╭──╮");
+        assert_eq!(contents(&preview[1]), "│░░│");
+        assert_eq!(contents(&preview[2]), "╰──╯");
+    }
+
+    #[test]
+    fn ellipse_preview_uses_the_selected_shape() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 2,
+        });
+        state.toggle_shape_preview();
+        for _ in 0..6 {
+            state.move_cursor(Direction::Right);
+        }
+        for _ in 0..4 {
+            state.move_cursor(Direction::Down);
+        }
+
+        let preview = state.lines_with_shape_preview().unwrap();
+        let non_blank = preview
+            .iter()
+            .flatten()
+            .filter(|atom| atom.contents != " ")
+            .count();
+        assert!(non_blank >= 8);
+        assert!(non_blank < 7 * 5);
+    }
+
     fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {
         for _ in 0..count {
             state.toolbar.cycle_shortcut(

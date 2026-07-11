@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use softbuffer::{Context as SoftContext, Surface};
@@ -9,6 +11,7 @@ use winit::window::{Window, WindowId};
 
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
+use crate::document;
 use crate::editor::EditorState;
 use crate::layout::{ViewportOffset, content_top_padding};
 #[cfg(target_os = "macos")]
@@ -28,6 +31,9 @@ pub struct EditorWindow {
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
     transparent_menubar: bool,
+    document_path: PathBuf,
+    document_dirty: bool,
+    last_keypress: Instant,
 }
 
 impl EditorWindow {
@@ -71,9 +77,38 @@ impl EditorWindow {
         }
         self.request_redraw();
     }
+
+    pub fn note_keypress(&mut self, now: Instant) {
+        self.last_keypress = now;
+    }
+
+    pub fn mark_document_dirty(&mut self) {
+        self.document_dirty = true;
+    }
+
+    pub fn autosave_if_idle(&mut self, now: Instant) -> Result<bool> {
+        if !should_autosave(self.document_dirty, self.last_keypress, now) {
+            return Ok(false);
+        }
+        self.save_document()?;
+        Ok(true)
+    }
+
+    pub fn save_document(&mut self) -> Result<bool> {
+        if !self.document_dirty {
+            return Ok(false);
+        }
+        document::save(&self.document_path, &self.state.grid.lines)?;
+        self.document_dirty = false;
+        Ok(true)
+    }
 }
 
-pub fn create_editor_window(elwt: &ActiveEventLoop, config: &AppConfig) -> Result<EditorWindow> {
+pub fn create_editor_window(
+    elwt: &ActiveEventLoop,
+    config: &AppConfig,
+    document_path: &Path,
+) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
     let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
     let mut surface =
@@ -88,16 +123,27 @@ pub fn create_editor_window(elwt: &ActiveEventLoop, config: &AppConfig) -> Resul
         window.focus_window();
     }
 
+    let mut state = EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE);
+    if let Some(document) = document::load(document_path)? {
+        state.grid.lines = if document.lines.is_empty() {
+            vec![Vec::new()]
+        } else {
+            document.lines
+        };
+    }
     let editor = EditorWindow {
         window,
         surface,
         modifiers: ModifiersState::empty(),
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
-        state: EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE),
+        state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
         transparent_menubar: config.transparent_menubar,
+        document_path: document_path.to_path_buf(),
+        document_dirty: false,
+        last_keypress: Instant::now(),
     };
     editor.request_redraw();
     Ok(editor)
@@ -115,10 +161,18 @@ pub fn close_window(
     window_id: WindowId,
     elwt: &ActiveEventLoop,
 ) {
-    windows.remove(&window_id);
+    if let Some(mut editor) = windows.remove(&window_id)
+        && let Err(error) = editor.save_document()
+    {
+        log_error(format!("document save on close failed: {error:#}"));
+    }
     if windows.is_empty() {
         elwt.exit();
     }
+}
+
+fn should_autosave(dirty: bool, last_keypress: Instant, now: Instant) -> bool {
+    dirty && now.saturating_duration_since(last_keypress) > Duration::from_secs(5)
 }
 
 pub fn handle_command(
@@ -127,13 +181,14 @@ pub fn handle_command(
     windows: &mut HashMap<WindowId, EditorWindow>,
     elwt: &ActiveEventLoop,
     config: &AppConfig,
+    document_path: &Path,
 ) {
     let target = source_window_id
         .filter(|window_id| windows.contains_key(window_id))
         .or_else(|| focused_window_id(windows));
 
     match command {
-        AppCommand::WindowNew => match create_editor_window(elwt, config) {
+        AppCommand::WindowNew => match create_editor_window(elwt, config, document_path) {
             Ok(editor) => {
                 windows.insert(editor.window_id(), editor);
             }
@@ -194,4 +249,29 @@ fn adjust_font_size(
 fn grid_top(scale_factor: f64, transparent_menubar: bool, toolbar_cell_height: usize) -> usize {
     content_top_padding(scale_factor, transparent_menubar)
         + crate::toolbar::toolbar_height(toolbar_cell_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autosave_requires_a_change_and_more_than_five_idle_seconds() {
+        let keypress = Instant::now();
+        assert!(!should_autosave(
+            true,
+            keypress,
+            keypress + Duration::from_secs(5)
+        ));
+        assert!(should_autosave(
+            true,
+            keypress,
+            keypress + Duration::from_millis(5_001)
+        ));
+        assert!(!should_autosave(
+            false,
+            keypress,
+            keypress + Duration::from_secs(10)
+        ));
+    }
 }

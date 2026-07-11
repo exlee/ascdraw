@@ -531,7 +531,7 @@ mod tests {
         cycle(&mut toolbar, "1");
         assert_eq!(
             toolbar.tooltip(),
-            "<Space> to start creating shape, <Space> to confirm"
+            "<Escape> to start shape preview, <Space> to confirm, <Escape> to cancel"
         );
 
         cycle(&mut toolbar, "1");
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn rejects_unavailable_submenu_and_unrelated_modifiers() {
         let mut toolbar = ToolbarState::default();
-        assert!(!toolbar.cycle_shortcut(&Key::Character("5".into()), ModifiersState::empty()));
+        assert!(!toolbar.cycle_shortcut(&Key::Character("6".into()), ModifiersState::empty()));
         assert!(!toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::SUPER));
     }
 }
