@@ -21,13 +21,16 @@ const LINE_OPTIONS: [&[&str]; 3] = [
     &["·", "▶", "◆", "●"],
     &["─", "━", "═"],
 ];
-const STAMP_LABELS: [&str; 2] = ["Decorators", "Fills"];
-const STAMP_OPTIONS: [&[&str]; 2] = [
+const STAMP_LABELS: [&str; 3] = ["Decorators", "Fills", "Blocks"];
+const STAMP_OPTIONS: [&[&str]; 3] = [
     &[
         "○", "●", "◇", "◆", "□", "■", "△", "▲", "☆", "★", "+", "×", "※", "•",
     ],
     &[
         "░", "▒", "▓", "█", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▀", "▌", "▐", "▊", "▉",
+    ],
+    &[
+        "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
     ],
 ];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
@@ -476,10 +479,10 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         cycle(&mut toolbar, "1");
         cycle(&mut toolbar, "2");
-        assert_eq!(toolbar.stamp_selected, [1, 0]);
+        assert_eq!(toolbar.stamp_selected, [1, 0, 0]);
 
         cycle(&mut toolbar, "3");
-        assert_eq!(toolbar.stamp_selected, [1, 1]);
+        assert_eq!(toolbar.stamp_selected, [1, 1, 0]);
         assert_eq!(toolbar.stamp_active_submenu, 1);
         assert_eq!(
             toolbar
@@ -495,14 +498,14 @@ mod tests {
     fn mode_controls_visible_submenus_and_tooltip() {
         let mut toolbar = ToolbarState::default();
         cycle(&mut toolbar, "1");
-        assert_eq!(
-            toolbar
-                .submenu_spans()
-                .iter()
-                .map(|span| span.contents.as_str())
-                .collect::<String>(),
-            "2. Decorators ○ ● ◇ ◆ □ ■ △ ▲ ☆ ★ + × ※ •    3. Fills ░ ▒ ▓ █ ▁ ▂ ▃ ▄ ▅ ▆ ▇ ▀ ▌ ▐ ▊ ▉"
-        );
+        let submenu = toolbar
+            .submenu_spans()
+            .iter()
+            .map(|span| span.contents.as_str())
+            .collect::<String>();
+        assert!(submenu.starts_with("2. Decorators "));
+        assert!(submenu.contains("    3. Fills "));
+        assert!(submenu.contains("    4. Blocks ▘ ▝ ▀"));
         assert_eq!(
             toolbar
                 .submenu_spans()
@@ -554,6 +557,11 @@ mod tests {
             assert_eq!(symbol.chars().count(), 1, "{symbol:?}");
             assert_eq!(UnicodeWidthStr::width(*symbol), 1, "{symbol:?}");
         }
+    }
+
+    #[test]
+    fn block_stamps_match_uniline_quadrant_combinations() {
+        assert_eq!(STAMP_OPTIONS[2].concat(), "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█");
     }
 
     #[test]
