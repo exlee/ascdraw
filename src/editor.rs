@@ -1,10 +1,13 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+use winit::keyboard::{Key, ModifiersState};
 
 use crate::app::{CursorMode, ThemeConfig};
-use crate::drawing::glyph_with_connection;
+use crate::drawing::{
+    LineEnding, LineStyle, glyph_with_connection, is_line_glyph, line_ending_glyph,
+};
 use crate::model::{Atom, Coord, Direction, Face};
-use crate::toolbar::ToolbarState;
+use crate::toolbar::{MainMode, ToolbarState};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -21,6 +24,22 @@ pub struct EditorState {
     pub cursor_mode: CursorMode,
     pub toolbar: ToolbarState,
     cursor_index: usize,
+    active_stroke: Option<ActiveStroke>,
+    line_markers: Vec<PlacedLineMarker>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveStroke {
+    end: Coord,
+    end_base_glyph: String,
+    moving_ending: LineEnding,
+}
+
+#[derive(Debug, Clone)]
+struct PlacedLineMarker {
+    coord: Coord,
+    ending: LineEnding,
+    base_glyph: String,
 }
 
 impl EditorState {
@@ -36,6 +55,8 @@ impl EditorState {
             cursor_mode: CursorMode::MoveDraw,
             toolbar: ToolbarState::default(),
             cursor_index: 0,
+            active_stroke: None,
+            line_markers: Vec::new(),
         }
     }
 
@@ -44,7 +65,38 @@ impl EditorState {
         self.grid.cursor_face = theme.cursor.clone();
     }
 
+    pub fn cycle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+        if self.cursor_mode == CursorMode::Text {
+            return false;
+        }
+        if !self.toolbar.cycle_shortcut(key, modifiers) {
+            return false;
+        }
+        self.end_stroke();
+        self.sync_cursor_mode_with_toolbar();
+        true
+    }
+
+    pub fn toggle_text_entry(&mut self) {
+        self.end_stroke();
+        if self.cursor_mode == CursorMode::Text {
+            self.sync_cursor_mode_with_toolbar();
+        } else {
+            self.cursor_mode = CursorMode::Text;
+        }
+    }
+
+    fn sync_cursor_mode_with_toolbar(&mut self) {
+        self.cursor_mode = match self.toolbar.main_mode() {
+            MainMode::Line => CursorMode::MoveDraw,
+            MainMode::Stamp => CursorMode::Stamp,
+            MainMode::Shapes => CursorMode::Shapes,
+            MainMode::Utilities => CursorMode::Utilities,
+        };
+    }
+
     pub fn insert(&mut self, text: &str) {
+        self.end_stroke();
         for part in text.split_inclusive('\n') {
             let content = part.strip_suffix('\n').unwrap_or(part);
             let atoms = UnicodeSegmentation::graphemes(content, true).map(|contents| Atom {
@@ -64,6 +116,7 @@ impl EditorState {
     }
 
     pub fn newline(&mut self) {
+        self.end_stroke();
         let remainder = self.grid.lines[self.grid.cursor_pos.line].split_off(self.cursor_index);
         self.grid.cursor_pos.line += 1;
         self.grid.lines.insert(self.grid.cursor_pos.line, remainder);
@@ -72,6 +125,7 @@ impl EditorState {
     }
 
     pub fn backspace(&mut self) {
+        self.end_stroke();
         if self.cursor_index > 0 {
             self.cursor_index -= 1;
             self.grid.lines[self.grid.cursor_pos.line].remove(self.cursor_index);
@@ -85,6 +139,7 @@ impl EditorState {
     }
 
     pub fn delete(&mut self) {
+        self.end_stroke();
         let line = self.grid.cursor_pos.line;
         if self.cursor_index < self.grid.lines[line].len() {
             self.grid.lines[line].remove(self.cursor_index);
@@ -96,6 +151,7 @@ impl EditorState {
     }
 
     pub fn move_left(&mut self) {
+        self.end_stroke();
         if self.cursor_index > 0 {
             self.cursor_index -= 1;
         } else if self.grid.cursor_pos.line > 0 {
@@ -106,6 +162,7 @@ impl EditorState {
     }
 
     pub fn move_right(&mut self) {
+        self.end_stroke();
         let line = self.grid.cursor_pos.line;
         if self.cursor_index < self.grid.lines[line].len() {
             self.cursor_index += 1;
@@ -117,6 +174,7 @@ impl EditorState {
     }
 
     pub fn move_up(&mut self) {
+        self.end_stroke();
         if self.grid.cursor_pos.line > 0 {
             let column = self.grid.cursor_pos.column;
             self.grid.cursor_pos.line -= 1;
@@ -127,6 +185,7 @@ impl EditorState {
     }
 
     pub fn move_down(&mut self) {
+        self.end_stroke();
         if self.grid.cursor_pos.line + 1 < self.grid.lines.len() {
             let column = self.grid.cursor_pos.column;
             self.grid.cursor_pos.line += 1;
@@ -137,16 +196,23 @@ impl EditorState {
     }
 
     pub fn move_home(&mut self) {
+        self.end_stroke();
         self.cursor_index = 0;
         self.sync_cursor_column();
     }
 
     pub fn move_end(&mut self) {
+        self.end_stroke();
         self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
         self.sync_cursor_column();
     }
 
     pub fn move_to(&mut self, coord: Coord) {
+        self.end_stroke();
+        self.move_to_without_ending_stroke(coord);
+    }
+
+    fn move_to_without_ending_stroke(&mut self, coord: Coord) {
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
         }
@@ -164,7 +230,7 @@ impl EditorState {
     }
 
     pub fn move_cursor(&mut self, direction: Direction) {
-        if self.cursor_mode == CursorMode::MoveDraw {
+        if matches!(self.cursor_mode, CursorMode::MoveDraw | CursorMode::Text) {
             self.move_or_draw(direction, false);
             return;
         }
@@ -184,21 +250,100 @@ impl EditorState {
         };
         let line_style = self.toolbar.line_style();
 
-        if draw {
-            self.add_connection(from, direction, line_style);
+        if !draw {
+            self.end_stroke();
+            self.move_to_without_ending_stroke(to);
+            return;
         }
-        self.move_to(to);
-        if draw {
-            self.add_connection(to, direction.opposite(), line_style);
+
+        let continuing_stroke = self
+            .active_stroke
+            .take()
+            .filter(|stroke| stroke.end == from);
+        let (from_was_existing_line, moving_ending) =
+            if let Some(stroke) = continuing_stroke.as_ref() {
+                self.take_line_marker(from);
+                self.set_cell_contents(from, stroke.end_base_glyph.clone());
+                (true, stroke.moving_ending)
+            } else if let Some(marker) = self.take_line_marker(from) {
+                self.set_cell_contents(from, marker.base_glyph);
+                (true, marker.ending)
+            } else {
+                (
+                    self.cell_contents(from).is_some_and(is_line_glyph),
+                    self.toolbar.line_end(),
+                )
+            };
+
+        let continuing_stroke = continuing_stroke.is_some();
+        if !continuing_stroke {
+            self.active_stroke = None;
         }
+
+        let from_base = self.add_connection(from, direction, line_style);
+        self.move_to_without_ending_stroke(to);
+        let to_was_existing_line = self.cell_contents(to).is_some_and(is_line_glyph);
+        let Some(end_base_glyph) = self.add_connection(to, direction.opposite(), line_style) else {
+            self.active_stroke = None;
+            return;
+        };
+
+        if !continuing_stroke
+            && !from_was_existing_line
+            && let Some(from_base) = from_base
+        {
+            self.apply_line_ending(
+                from,
+                self.toolbar.line_start(),
+                direction,
+                line_style,
+                &from_base,
+            );
+        }
+        if !to_was_existing_line {
+            self.apply_line_ending(
+                to,
+                moving_ending,
+                direction.opposite(),
+                line_style,
+                &end_base_glyph,
+            );
+        }
+        self.active_stroke = Some(ActiveStroke {
+            end: to,
+            end_base_glyph,
+            moving_ending,
+        });
+    }
+
+    fn cell_contents(&self, coord: Coord) -> Option<&str> {
+        let line = self.grid.lines.get(coord.line)?;
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        (column == coord.column)
+            .then(|| line.get(index))
+            .flatten()
+            .map(|atom| atom.contents.as_str())
+    }
+
+    fn take_line_marker(&mut self, coord: Coord) -> Option<PlacedLineMarker> {
+        let index = self
+            .line_markers
+            .iter()
+            .position(|marker| marker.coord == coord)?;
+        Some(self.line_markers.remove(index))
+    }
+
+    fn remove_line_marker(&mut self, coord: Coord) {
+        self.line_markers.retain(|marker| marker.coord != coord);
     }
 
     fn add_connection(
         &mut self,
         coord: Coord,
         direction: Direction,
-        line_style: crate::drawing::LineStyle,
-    ) {
+        line_style: LineStyle,
+    ) -> Option<String> {
+        self.remove_line_marker(coord);
         let line = &mut self.grid.lines[coord.line];
         let (index, column) = index_and_column_for_coord(line, coord.column);
 
@@ -211,15 +356,73 @@ impl EditorState {
                 && let Some(glyph) = glyph_with_connection(&atom.contents, direction, line_style)
             {
                 atom.contents = glyph.to_string();
+                return Some(atom.contents.clone());
             }
+            None
         } else {
+            let contents = glyph_with_connection(" ", direction, line_style)
+                .expect("blank cells accept line connections")
+                .to_string();
             line.push(Atom {
                 face: Face::default(),
-                contents: glyph_with_connection(" ", direction, line_style)
-                    .expect("blank cells accept line connections")
-                    .to_string(),
+                contents: contents.clone(),
+            });
+            Some(contents)
+        }
+    }
+
+    fn apply_line_ending(
+        &mut self,
+        coord: Coord,
+        ending: LineEnding,
+        connected_direction: Direction,
+        line_style: LineStyle,
+        base_glyph: &str,
+    ) {
+        self.remove_line_marker(coord);
+        self.set_cell_contents(
+            coord,
+            line_ending_glyph(ending, connected_direction, line_style).to_string(),
+        );
+        if ending != LineEnding::None {
+            self.line_markers.push(PlacedLineMarker {
+                coord,
+                ending,
+                base_glyph: base_glyph.to_string(),
             });
         }
+    }
+
+    fn set_cell_contents(&mut self, coord: Coord, contents: String) {
+        let line = &mut self.grid.lines[coord.line];
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        if column == coord.column
+            && let Some(atom) = line.get_mut(index)
+            && atom_width(atom) == 1
+        {
+            atom.contents = contents;
+        }
+    }
+
+    pub fn end_stroke(&mut self) {
+        self.active_stroke = None;
+    }
+
+    pub fn clear_cell(&mut self) {
+        self.end_stroke();
+        let coord = self.grid.cursor_pos;
+        self.remove_line_marker(coord);
+        let line = &mut self.grid.lines[coord.line];
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        if column != coord.column {
+            return;
+        }
+        let Some(width) = line.get(index).map(atom_width) else {
+            return;
+        };
+        line.splice(index..=index, (0..width).map(|_| blank_atom()));
+        self.cursor_index = index;
+        self.sync_cursor_column();
     }
 
     fn sync_cursor_column(&mut self) {
@@ -361,6 +564,23 @@ mod tests {
     }
 
     #[test]
+    fn ending_a_stroke_on_an_existing_line_keeps_the_full_tee() {
+        let mut state = state();
+        state.move_to(Coord { line: 2, column: 1 });
+        for direction in [
+            Direction::Right,
+            Direction::Right,
+            Direction::Up,
+            Direction::Left,
+            Direction::Down,
+        ] {
+            state.move_or_draw(direction, true);
+        }
+
+        assert_eq!(contents(&state.grid.lines[2]), " ╶┴╯");
+    }
+
+    #[test]
     fn draw_preserves_non_line_text() {
         let mut state = state();
         state.insert("x");
@@ -368,6 +588,125 @@ mod tests {
         state.move_or_draw(Direction::Right, true);
 
         assert_eq!(contents(&state.grid.lines[0]), "x╴");
+    }
+
+    #[test]
+    fn selected_line_endings_stay_at_the_stroke_endpoints() {
+        let mut state = state();
+        state.toolbar.cycle_shortcut(
+            &winit::keyboard::Key::Character("2".into()),
+            winit::keyboard::ModifiersState::empty(),
+        );
+        state.toolbar.cycle_shortcut(
+            &winit::keyboard::Key::Character("3".into()),
+            winit::keyboard::ModifiersState::empty(),
+        );
+
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "◀─╮");
+        assert_eq!(contents(&state.grid.lines[1]), "  ▼");
+    }
+
+    #[test]
+    fn unadorned_endings_use_the_selected_double_line_style() {
+        let mut state = state();
+        state.toolbar.cycle_shortcut(
+            &winit::keyboard::Key::Character("4".into()),
+            winit::keyboard::ModifiersState::empty(),
+        );
+        state.toolbar.cycle_shortcut(
+            &winit::keyboard::Key::Character("4".into()),
+            winit::keyboard::ModifiersState::empty(),
+        );
+
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "═══");
+    }
+
+    #[test]
+    fn drawing_from_an_existing_line_keeps_the_full_tee() {
+        let mut state = state();
+        state.insert("│");
+        state.move_to(Coord { line: 0, column: 0 });
+        select_toolbar_option(&mut state, "2", 1);
+
+        state.move_or_draw(Direction::Right, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "├╴");
+    }
+
+    #[test]
+    fn drawing_from_an_end_marker_moves_it_to_the_new_end() {
+        let mut state = state();
+        select_toolbar_option(&mut state, "3", 1);
+        state.move_or_draw(Direction::Right, true);
+        state.move_to(Coord { line: 0, column: 1 });
+
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "╶╮");
+        assert_eq!(contents(&state.grid.lines[1]), " ▼");
+    }
+
+    #[test]
+    fn drawing_from_a_start_marker_moves_it_to_the_new_end() {
+        let mut state = state();
+        select_toolbar_option(&mut state, "2", 1);
+        state.move_or_draw(Direction::Right, true);
+        state.move_to(Coord { line: 0, column: 0 });
+
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "╭╴");
+        assert_eq!(contents(&state.grid.lines[1]), "▼");
+    }
+
+    #[test]
+    fn clearing_a_cell_preserves_its_canvas_width() {
+        let mut state = state();
+        state.insert("😀x");
+        state.move_to(Coord { line: 0, column: 0 });
+
+        state.clear_cell();
+
+        assert_eq!(contents(&state.grid.lines[0]), "  x");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 0 });
+    }
+
+    #[test]
+    fn toolbar_main_mode_controls_editor_mode() {
+        let mut state = state();
+        state.toggle_text_entry();
+        assert_eq!(state.cursor_mode, CursorMode::Text);
+        assert!(!state.cycle_toolbar_shortcut(
+            &winit::keyboard::Key::Character("1".into()),
+            winit::keyboard::ModifiersState::empty(),
+        ));
+        state.move_cursor(Direction::Right);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+        state.toggle_text_entry();
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+
+        assert!(state.cycle_toolbar_shortcut(
+            &winit::keyboard::Key::Character("1".into()),
+            winit::keyboard::ModifiersState::empty(),
+        ));
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {
+        for _ in 0..count {
+            state.toolbar.cycle_shortcut(
+                &winit::keyboard::Key::Character(key.into()),
+                winit::keyboard::ModifiersState::empty(),
+            );
+        }
     }
 
     fn contents(line: &[Atom]) -> String {

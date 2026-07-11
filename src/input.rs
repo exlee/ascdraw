@@ -11,6 +11,8 @@ use crate::render::Renderer;
 pub enum EditCommand {
     Move(Direction),
     Draw(Direction),
+    Clear,
+    ToggleTextEntry,
     Home,
     End,
     Backspace,
@@ -32,18 +34,42 @@ fn edit_command_for_key(
     modifiers: ModifiersState,
     mode: CursorMode,
 ) -> Option<EditCommand> {
+    if matches!(key, Key::Named(NamedKey::Enter)) {
+        return Some(EditCommand::ToggleTextEntry);
+    }
+
     if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() {
         return None;
     }
 
     if mode == CursorMode::MoveDraw {
-        return direction_for_key(key).map(|direction| {
-            if modifiers.shift_key() {
-                EditCommand::Draw(direction)
-            } else {
-                EditCommand::Move(direction)
-            }
-        });
+        return match key {
+            Key::Named(NamedKey::Backspace) => Some(EditCommand::Clear),
+            Key::Character(text) if text == " " => Some(EditCommand::Clear),
+            _ => direction_for_key(key).map(|direction| {
+                if modifiers.shift_key() {
+                    EditCommand::Draw(direction)
+                } else {
+                    EditCommand::Move(direction)
+                }
+            }),
+        };
+    }
+
+    if mode == CursorMode::Text {
+        return match key {
+            Key::Named(NamedKey::Backspace) => Some(EditCommand::Backspace),
+            Key::Named(NamedKey::Delete) => Some(EditCommand::Delete),
+            Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
+            _ => direction_for_key(key).map(EditCommand::Move),
+        };
+    }
+
+    if matches!(
+        mode,
+        CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities
+    ) {
+        return direction_for_key(key).map(EditCommand::Move);
     }
 
     match key {
@@ -125,12 +151,22 @@ mod tests {
     fn move_draw_ignores_non_directional_editing_keys() {
         assert_eq!(
             edit_command_for_key(
-                &Key::Named(NamedKey::Backspace),
+                &Key::Named(NamedKey::Delete),
                 ModifiersState::empty(),
                 CursorMode::MoveDraw,
             ),
             None
         );
+    }
+
+    #[test]
+    fn maps_backspace_and_space_to_clear_in_move_draw_mode() {
+        for key in [Key::Named(NamedKey::Backspace), Key::Character(" ".into())] {
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::empty(), CursorMode::MoveDraw),
+                Some(EditCommand::Clear)
+            );
+        }
     }
 
     #[test]
@@ -171,5 +207,21 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn return_toggles_text_mode_from_every_canvas_mode() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Text,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            assert_eq!(
+                edit_command_for_key(&Key::Named(NamedKey::Enter), ModifiersState::empty(), mode,),
+                Some(EditCommand::ToggleTextEntry)
+            );
+        }
     }
 }

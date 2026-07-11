@@ -213,42 +213,96 @@ fn render_toolbar(
     width: usize,
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
-    let header = [Atom {
+    render_toolbar_spans(
+        canvas,
+        0,
+        &state.toolbar.main_spans(),
+        state,
+        max_columns,
+        metrics,
+        top_padding,
+    );
+    render_toolbar_spans(
+        canvas,
+        1,
+        &state.toolbar.submenu_spans(),
+        state,
+        max_columns,
+        metrics,
+        top_padding,
+    );
+
+    let tooltip = [Atom {
         face: Face::default(),
-        contents: state.toolbar.header_line(),
+        contents: if state.cursor_mode == CursorMode::Text {
+            "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
+        } else {
+            state.toolbar.tooltip().to_string()
+        },
     }];
     render_line(
         canvas,
-        0,
-        &header,
+        2,
+        &tooltip,
+        &state.grid.default_face,
+        max_columns,
+        metrics,
+        DrawOrigin::Grid { top_padding },
+    );
+}
+
+fn render_toolbar_spans(
+    canvas: &Canvas,
+    row: usize,
+    spans: &[crate::toolbar::ToolbarSpan],
+    state: &EditorState,
+    max_columns: usize,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    let atoms: Vec<_> = spans
+        .iter()
+        .map(|span| Atom {
+            face: Face::default(),
+            contents: span.contents.clone(),
+        })
+        .collect();
+    render_line(
+        canvas,
+        row,
+        &atoms,
         &state.grid.default_face,
         max_columns,
         metrics,
         DrawOrigin::Grid { top_padding },
     );
 
-    let values: Vec<_> = state
-        .toolbar
-        .value_spans()
-        .into_iter()
-        .map(|span| Atom {
-            face: if span.selected {
-                state.grid.cursor_face.clone()
-            } else {
-                Face::default()
-            },
-            contents: span.contents,
-        })
-        .collect();
-    render_line(
-        canvas,
-        1,
-        &values,
+    let cursor_face = resolve_derived_face(
         &state.grid.default_face,
-        max_columns,
-        metrics,
-        DrawOrigin::Grid { top_padding },
+        &state.grid.cursor_face,
+        FALLBACK_FG,
+        FALLBACK_BG,
     );
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(cursor_face.bg.to_color())
+        .set_stroke_width(1.0);
+    let top = row_top(row, metrics, top_padding) as f32;
+    let bottom = top + metrics.cell_height.saturating_sub(1) as f32;
+    let mut column = 0;
+    for span in spans {
+        let span_width = UnicodeWidthStr::width(span.contents.as_str());
+        if span.selected && span_width > 0 {
+            let left = (PADDING + column * metrics.cell_width) as f32;
+            let right = left + (span_width * metrics.cell_width).saturating_sub(1) as f32;
+            canvas.draw_line((left, top), (right, top), &paint);
+            canvas.draw_line((left, bottom), (right, bottom), &paint);
+            canvas.draw_line((left, top), (left, bottom), &paint);
+            canvas.draw_line((right, top), (right, bottom), &paint);
+        }
+        column += span_width;
+    }
 }
 
 fn visible_grid_layout(
@@ -535,6 +589,10 @@ fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> Cursor
         CursorMode::MoveDraw => config.move_draw.unwrap_or(CursorShape::Block),
         CursorMode::Insert => config.insert.unwrap_or(CursorShape::Block),
         CursorMode::Replace => config.replace.unwrap_or(CursorShape::Block),
+        CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities => {
+            config.move_draw.unwrap_or(CursorShape::Block)
+        }
+        CursorMode::Text => config.insert.unwrap_or(CursorShape::Block),
     }
 }
 

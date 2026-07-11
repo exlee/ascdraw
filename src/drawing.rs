@@ -24,6 +24,15 @@ pub enum LineStyle {
     Double,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LineEnding {
+    #[default]
+    None,
+    Arrow,
+    Diamond,
+    Circle,
+}
+
 pub fn connection(direction: Direction) -> u8 {
     match direction {
         Direction::Up => UP,
@@ -36,6 +45,36 @@ pub fn connection(direction: Direction) -> u8 {
 pub fn glyph_with_connection(glyph: &str, direction: Direction, style: LineStyle) -> Option<char> {
     let connections = connections_for_glyph(glyph)? | connection(direction);
     Some(glyph_for_connections(connections, style))
+}
+
+pub fn is_line_glyph(glyph: &str) -> bool {
+    connections_for_glyph(glyph).is_some_and(|connections| connections != 0)
+}
+
+pub fn line_ending_glyph(
+    ending: LineEnding,
+    connected_direction: Direction,
+    style: LineStyle,
+) -> char {
+    match ending {
+        LineEnding::None => match style {
+            LineStyle::Double => match connected_direction {
+                Direction::Up | Direction::Down => '║',
+                Direction::Right | Direction::Left => '═',
+            },
+            LineStyle::Thin | LineStyle::Heavy => {
+                glyph_for_connections(connection(connected_direction), style)
+            }
+        },
+        LineEnding::Arrow => match connected_direction.opposite() {
+            Direction::Up => '▲',
+            Direction::Right => '▶',
+            Direction::Down => '▼',
+            Direction::Left => '◀',
+        },
+        LineEnding::Diamond => '◆',
+        LineEnding::Circle => '●',
+    }
 }
 
 fn connections_for_glyph(glyph: &str) -> Option<u8> {
@@ -167,6 +206,13 @@ mod tests {
     }
 
     #[test]
+    fn distinguishes_lines_from_blanks_and_text() {
+        assert!(is_line_glyph("─"));
+        assert!(!is_line_glyph(" "));
+        assert!(!is_line_glyph("◆"));
+    }
+
+    #[test]
     fn selected_style_controls_the_connected_glyph() {
         assert_eq!(
             glyph_with_connection("━", Direction::Down, LineStyle::Heavy),
@@ -175,6 +221,26 @@ mod tests {
         assert_eq!(
             glyph_with_connection("═", Direction::Down, LineStyle::Double),
             Some('╦')
+        );
+    }
+
+    #[test]
+    fn endings_follow_direction_and_selected_style() {
+        assert_eq!(
+            line_ending_glyph(LineEnding::Arrow, Direction::Right, LineStyle::Thin),
+            '◀'
+        );
+        assert_eq!(
+            line_ending_glyph(LineEnding::Arrow, Direction::Up, LineStyle::Thin),
+            '▼'
+        );
+        assert_eq!(
+            line_ending_glyph(LineEnding::None, Direction::Left, LineStyle::Heavy),
+            '╸'
+        );
+        assert_eq!(
+            line_ending_glyph(LineEnding::None, Direction::Up, LineStyle::Double),
+            '║'
         );
     }
 }

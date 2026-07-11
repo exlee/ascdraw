@@ -90,13 +90,17 @@ pub enum CursorShape {
 pub enum CursorMode {
     #[default]
     MoveDraw,
+    Text,
     Insert,
     Replace,
+    Stamp,
+    Shapes,
+    Utilities,
 }
 
 impl CursorMode {
     pub fn accepts_text(self) -> bool {
-        matches!(self, Self::Insert | Self::Replace)
+        matches!(self, Self::Text | Self::Insert | Self::Replace)
     }
 }
 

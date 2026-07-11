@@ -166,8 +166,7 @@ fn try_main() -> Result<ExitCode> {
                                 pending_command = Some(app_command_from_user_action(action));
                             } else if editor
                                 .state
-                                .toolbar
-                                .cycle_shortcut(&event.logical_key, editor.modifiers)
+                                .cycle_toolbar_shortcut(&event.logical_key, editor.modifiers)
                             {
                                 editor.request_redraw();
                             } else if let Some(command) =
@@ -238,6 +237,8 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => state.move_or_draw(direction, true),
+        EditCommand::Clear => state.clear_cell(),
+        EditCommand::ToggleTextEntry => state.toggle_text_entry(),
         EditCommand::Home => state.move_home(),
         EditCommand::End => state.move_end(),
         EditCommand::Backspace => state.backspace(),
