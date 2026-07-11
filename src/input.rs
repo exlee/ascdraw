@@ -46,7 +46,7 @@ fn edit_command_for_key(
     if mode == CursorMode::MoveDraw {
         return match key {
             Key::Named(NamedKey::Backspace) => Some(EditCommand::Clear),
-            Key::Character(text) if text == " " => Some(EditCommand::Clear),
+            _ if is_space_key(key) => Some(EditCommand::Clear),
             _ => direction_for_key(key).map(|direction| {
                 if modifiers.shift_key() {
                     EditCommand::Draw(direction)
@@ -68,7 +68,7 @@ fn edit_command_for_key(
 
     if mode == CursorMode::Stamp {
         return match key {
-            Key::Character(text) if text == " " => Some(EditCommand::PlaceStamp),
+            _ if is_space_key(key) => Some(EditCommand::PlaceStamp),
             _ => direction_for_key(key).map(EditCommand::Move),
         };
     }
@@ -89,6 +89,14 @@ fn edit_command_for_key(
         Key::Named(NamedKey::Enter) => Some(EditCommand::Newline),
         Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
         _ => None,
+    }
+}
+
+fn is_space_key(key: &Key) -> bool {
+    match key {
+        Key::Named(NamedKey::Space) => true,
+        Key::Character(text) => text == " ",
+        _ => false,
     }
 }
 
@@ -280,13 +288,11 @@ mod tests {
 
     #[test]
     fn space_places_the_active_stamp() {
-        assert_eq!(
-            edit_command_for_key(
-                &Key::Character(" ".into()),
-                ModifiersState::empty(),
-                CursorMode::Stamp,
-            ),
-            Some(EditCommand::PlaceStamp)
-        );
+        for key in [Key::Character(" ".into()), Key::Named(NamedKey::Space)] {
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::empty(), CursorMode::Stamp),
+                Some(EditCommand::PlaceStamp)
+            );
+        }
     }
 }
