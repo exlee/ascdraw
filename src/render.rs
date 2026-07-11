@@ -181,7 +181,9 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
     );
     canvas.translate((viewport.x as f32, viewport.y as f32));
 
-    for (row_index, line) in state.grid.lines.iter().take(grid_layout.rows).enumerate() {
+    let preview_lines = state.lines_with_shape_preview();
+    let lines = preview_lines.as_ref().unwrap_or(&state.grid.lines);
+    for (row_index, line) in lines.iter().take(grid_layout.rows).enumerate() {
         render_line(
             canvas,
             row_index,

@@ -15,6 +15,8 @@ pub enum EditCommand {
     Clear,
     ToggleTextEntry,
     PlaceStamp,
+    ToggleShapePreview,
+    ConfirmShape,
     Home,
     End,
     Backspace,
@@ -81,7 +83,15 @@ fn edit_command_for_key(
         };
     }
 
-    if matches!(mode, CursorMode::Shapes | CursorMode::Utilities) {
+    if mode == CursorMode::Shapes {
+        return match key {
+            Key::Named(NamedKey::Escape) => Some(EditCommand::ToggleShapePreview),
+            _ if is_space_key(key) => Some(EditCommand::ConfirmShape),
+            _ => direction_for_key(key).map(EditCommand::Move),
+        };
+    }
+
+    if mode == CursorMode::Utilities {
         return direction_for_key(key).map(EditCommand::Move);
     }
 
@@ -257,6 +267,26 @@ mod tests {
                 Some(EditCommand::Erase(direction))
             );
         }
+    }
+
+    #[test]
+    fn shape_escape_toggles_preview_and_space_confirms() {
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::Escape),
+                ModifiersState::empty(),
+                CursorMode::Shapes,
+            ),
+            Some(EditCommand::ToggleShapePreview)
+        );
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                CursorMode::Shapes,
+            ),
+            Some(EditCommand::ConfirmShape)
+        );
     }
 
     #[test]

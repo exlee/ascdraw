@@ -8,7 +8,7 @@ use crate::drawing::{
     line_ending_glyph,
 };
 use crate::model::{Atom, Coord, Direction, Face};
-use crate::toolbar::{MainMode, ToolbarAction, ToolbarState};
+use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -27,6 +27,7 @@ pub struct EditorState {
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
+    shape_preview: Option<ShapePreview>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,12 @@ struct PlacedLineMarker {
     coord: Coord,
     ending: LineEnding,
     base_glyph: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShapePreview {
+    anchor: Coord,
+    end: Coord,
 }
 
 impl EditorState {
@@ -58,6 +65,7 @@ impl EditorState {
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
+            shape_preview: None,
         }
     }
 
@@ -74,6 +82,7 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.shape_preview = None;
         self.sync_cursor_mode_with_toolbar();
         true
     }
@@ -83,6 +92,7 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.shape_preview = None;
         self.sync_cursor_mode_with_toolbar();
         true
     }
@@ -175,6 +185,9 @@ impl EditorState {
     pub fn move_to(&mut self, coord: Coord) {
         self.end_stroke();
         self.move_to_without_ending_stroke(coord);
+        if let Some(preview) = self.shape_preview.as_mut() {
+            preview.end = self.grid.cursor_pos;
+        }
     }
 
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
@@ -196,6 +209,9 @@ impl EditorState {
 
     pub fn move_cursor(&mut self, direction: Direction) {
         self.move_or_draw(direction, false);
+        if let Some(preview) = self.shape_preview.as_mut() {
+            preview.end = self.grid.cursor_pos;
+        }
     }
 
     pub fn move_or_draw(&mut self, direction: Direction, draw: bool) {
@@ -415,25 +431,62 @@ impl EditorState {
         let coord = self.grid.cursor_pos;
         let stamp = self.toolbar.stamp().to_string();
         self.remove_line_marker(coord);
-        self.move_to_without_ending_stroke(coord);
-        let line = &mut self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        if column != coord.column {
+        replace_cell(&mut self.grid.lines, coord, stamp);
+        self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
+        self.sync_cursor_column();
+    }
+
+    pub fn toggle_shape_preview(&mut self) {
+        if self.cursor_mode != CursorMode::Shapes {
             return;
         }
-        let width = line.get(index).map(atom_width).unwrap_or(1);
-        let replacement = std::iter::once(Atom {
-            face: Face::default(),
-            contents: stamp,
-        })
-        .chain((1..width).map(|_| blank_atom()));
-        if index < line.len() {
-            line.splice(index..=index, replacement);
+        self.end_stroke();
+        self.shape_preview = if self.shape_preview.is_some() {
+            None
         } else {
-            line.extend(replacement);
+            Some(ShapePreview {
+                anchor: self.grid.cursor_pos,
+                end: self.grid.cursor_pos,
+            })
+        };
+    }
+
+    pub fn confirm_shape(&mut self) {
+        let Some(preview) = self.shape_preview.take() else {
+            return;
+        };
+        for (coord, contents) in self.shape_cells(preview) {
+            self.remove_line_marker(coord);
+            replace_cell(&mut self.grid.lines, coord, contents);
         }
-        self.cursor_index = index;
+        self.cursor_index = index_for_column(
+            &self.grid.lines[self.grid.cursor_pos.line],
+            self.grid.cursor_pos.column,
+        );
         self.sync_cursor_column();
+    }
+
+    pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
+        let preview = self.shape_preview?;
+        let mut lines = self.grid.lines.clone();
+        for (coord, contents) in self.shape_cells(preview) {
+            replace_cell(&mut lines, coord, contents);
+        }
+        Some(lines)
+    }
+
+    fn shape_cells(&self, preview: ShapePreview) -> Vec<(Coord, String)> {
+        let left = preview.anchor.column.min(preview.end.column);
+        let right = preview.anchor.column.max(preview.end.column);
+        let top = preview.anchor.line.min(preview.end.line);
+        let bottom = preview.anchor.line.max(preview.end.line);
+        let style = self.toolbar.shape_line_style();
+        let fill = self.toolbar.shape_fill();
+        match self.toolbar.shape_kind() {
+            ShapeKind::Rect => rectangle_cells(left, right, top, bottom, style, false, fill),
+            ShapeKind::RoundedRect => rectangle_cells(left, right, top, bottom, style, true, fill),
+            ShapeKind::Ellipse => ellipse_cells(left, right, top, bottom, style, fill),
+        }
     }
 
     fn sync_cursor_column(&mut self) {
@@ -468,6 +521,171 @@ fn blank_atom() -> Atom {
         face: Face::default(),
         contents: " ".to_string(),
     }
+}
+
+fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
+    while lines.len() <= coord.line {
+        lines.push(Vec::new());
+    }
+    let line = &mut lines[coord.line];
+    let (index, column) = index_and_column_for_coord(line, coord.column);
+    if column < coord.column && index == line.len() {
+        line.extend((column..coord.column).map(|_| blank_atom()));
+    }
+    let width = line.get(index).map(atom_width).unwrap_or(1);
+    let replacement = std::iter::once(Atom {
+        face: Face::default(),
+        contents,
+    })
+    .chain((1..width).map(|_| blank_atom()));
+    if index < line.len() {
+        line.splice(index..=index, replacement);
+    } else {
+        line.extend(replacement);
+    }
+}
+
+fn rectangle_cells(
+    left: usize,
+    right: usize,
+    top: usize,
+    bottom: usize,
+    style: LineStyle,
+    rounded: bool,
+    fill: Option<&str>,
+) -> Vec<(Coord, String)> {
+    let mut cells = Vec::new();
+    if left == right && top == bottom {
+        cells.push((
+            Coord {
+                line: top,
+                column: left,
+            },
+            fill.unwrap_or("□").to_string(),
+        ));
+        return cells;
+    }
+    for line in top..=bottom {
+        for column in left..=right {
+            let on_top = line == top;
+            let on_bottom = line == bottom;
+            let on_left = column == left;
+            let on_right = column == right;
+            let glyph = match (on_top, on_right, on_bottom, on_left) {
+                (true, true, _, true) | (true, false, true, true) => {
+                    line_glyph(&[Direction::Right, Direction::Down], style, rounded)
+                }
+                (true, true, true, false) => {
+                    line_glyph(&[Direction::Down, Direction::Left], style, rounded)
+                }
+                (false, true, true, true) => {
+                    line_glyph(&[Direction::Up, Direction::Right], style, rounded)
+                }
+                (true, true, false, false) => {
+                    line_glyph(&[Direction::Down, Direction::Left], style, rounded)
+                }
+                (false, true, true, false) => {
+                    line_glyph(&[Direction::Up, Direction::Left], style, rounded)
+                }
+                (false, false, true, true) => {
+                    line_glyph(&[Direction::Up, Direction::Right], style, rounded)
+                }
+                (true, false, false, true) => {
+                    line_glyph(&[Direction::Right, Direction::Down], style, rounded)
+                }
+                (true, false, _, false) | (false, false, true, false) => {
+                    line_glyph(&[Direction::Left, Direction::Right], style, rounded)
+                }
+                (false, true, false, _) | (false, false, false, true) => {
+                    line_glyph(&[Direction::Up, Direction::Down], style, rounded)
+                }
+                _ => match fill {
+                    Some(fill) => fill.chars().next().unwrap_or(' '),
+                    None => continue,
+                },
+            };
+            cells.push((Coord { line, column }, glyph.to_string()));
+        }
+    }
+    cells
+}
+
+fn ellipse_cells(
+    left: usize,
+    right: usize,
+    top: usize,
+    bottom: usize,
+    style: LineStyle,
+    fill: Option<&str>,
+) -> Vec<(Coord, String)> {
+    if right.saturating_sub(left) < 3 || bottom.saturating_sub(top) < 2 {
+        return rectangle_cells(left, right, top, bottom, style, true, fill);
+    }
+    let cx = (left + right) as f64 / 2.0;
+    let cy = (top + bottom) as f64 / 2.0;
+    let rx = (right - left) as f64 / 2.0;
+    let ry = (bottom - top) as f64 / 2.0;
+    let inside = |line: isize, column: isize| {
+        let dx = (column as f64 - cx) / rx;
+        let dy = (line as f64 - cy) / ry;
+        dx * dx + dy * dy <= 1.0
+    };
+    let mut cells = Vec::new();
+    for line in top..=bottom {
+        for column in left..=right {
+            if !inside(line as isize, column as isize) {
+                continue;
+            }
+            let boundary = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                .into_iter()
+                .any(|(dy, dx)| !inside(line as isize + dy, column as isize + dx));
+            let glyph = if boundary {
+                let nx = (column as f64 - cx) / rx;
+                let ny = (line as f64 - cy) / ry;
+                if (nx.abs() - ny.abs()).abs() < 0.35 {
+                    let directions = match (ny.is_sign_negative(), nx.is_sign_negative()) {
+                        (true, true) => [Direction::Right, Direction::Down],
+                        (true, false) => [Direction::Down, Direction::Left],
+                        (false, true) => [Direction::Up, Direction::Right],
+                        (false, false) => [Direction::Up, Direction::Left],
+                    };
+                    line_glyph(&directions, style, true)
+                } else if nx.abs() > ny.abs() {
+                    line_glyph(&[Direction::Up, Direction::Down], style, true)
+                } else {
+                    line_glyph(&[Direction::Left, Direction::Right], style, true)
+                }
+            } else if let Some(fill) = fill {
+                fill.chars().next().unwrap_or(' ')
+            } else {
+                continue;
+            };
+            cells.push((Coord { line, column }, glyph.to_string()));
+        }
+    }
+    cells
+}
+
+fn line_glyph(directions: &[Direction], style: LineStyle, rounded: bool) -> char {
+    if !rounded && style == LineStyle::Thin && directions.len() == 2 {
+        return match (directions[0], directions[1]) {
+            (Direction::Right, Direction::Down) | (Direction::Down, Direction::Right) => '┌',
+            (Direction::Down, Direction::Left) | (Direction::Left, Direction::Down) => '┐',
+            (Direction::Up, Direction::Right) | (Direction::Right, Direction::Up) => '└',
+            (Direction::Up, Direction::Left) | (Direction::Left, Direction::Up) => '┘',
+            _ => connected_glyph(directions, style),
+        };
+    }
+    connected_glyph(directions, style)
+}
+
+fn connected_glyph(directions: &[Direction], style: LineStyle) -> char {
+    let mut glyph = ' ';
+    for direction in directions {
+        glyph = glyph_with_connection(&glyph.to_string(), *direction, style)
+            .expect("generated line glyph accepts another connection");
+    }
+    glyph
 }
 
 fn index_and_column_for_coord(atoms: &[Atom], target_column: usize) -> (usize, usize) {
@@ -739,6 +957,54 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "█");
         assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.toggle_shape_preview();
+        for direction in [
+            Direction::Right,
+            Direction::Right,
+            Direction::Right,
+            Direction::Down,
+            Direction::Down,
+        ] {
+            state.move_cursor(direction);
+        }
+
+        let preview = state.lines_with_shape_preview().expect("preview is active");
+        assert_eq!(contents(&preview[0]), "┌──┐");
+        assert_eq!(contents(&preview[1]), "│  │");
+        assert_eq!(contents(&preview[2]), "└──┘");
+        assert!(
+            state
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.contents == " ")
+        );
+
+        state.confirm_shape();
+        assert!(state.lines_with_shape_preview().is_none());
+        assert_eq!(contents(&state.grid.lines[0]), "┌──┐");
+        assert_eq!(contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    #[test]
+    fn escape_cancels_an_active_shape_preview() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.toggle_shape_preview();
+        state.move_cursor(Direction::Right);
+        assert!(state.lines_with_shape_preview().is_some());
+
+        state.toggle_shape_preview();
+
+        assert!(state.lines_with_shape_preview().is_none());
+        assert!(state.grid.lines[0].iter().all(|atom| atom.contents == " "));
     }
 
     fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {

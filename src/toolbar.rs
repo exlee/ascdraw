@@ -32,7 +32,7 @@ const STAMP_OPTIONS: [&[&str]; 2] = [
 ];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
-    &["□", "○", "◇", "△"],
+    &["Rect", "Rnd Rect", "Ellipsis"],
     &["─", "━", "═"],
     &["·", "░", "▒", "▓", "█"],
 ];
@@ -46,6 +46,14 @@ pub enum MainMode {
     Stamp,
     Shapes,
     Utilities,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ShapeKind {
+    #[default]
+    Rect,
+    RoundedRect,
+    Ellipse,
 }
 
 impl MainMode {
@@ -209,7 +217,9 @@ impl ToolbarState {
             MainMode::Stamp => {
                 "<Space> to put stamp, <Shift> + direction to draw in line, <Ctrl>+direction - fill rectangle"
             }
-            MainMode::Shapes => "<Space> to start creating shape, <Space> to confirm",
+            MainMode::Shapes => {
+                "<Escape> to start shape preview, <Space> to confirm, <Escape> to cancel"
+            }
             MainMode::Utilities => {
                 "Space start, then Space confirm, Shift arrows - move selection, Backspace/Del clear selection"
             }
@@ -230,6 +240,25 @@ impl ToolbarState {
 
     pub fn stamp(&self) -> &'static str {
         STAMP_OPTIONS[self.stamp_active_submenu][self.stamp_selected[self.stamp_active_submenu]]
+    }
+
+    pub fn shape_kind(&self) -> ShapeKind {
+        match self.shape_selected[0] {
+            0 => ShapeKind::Rect,
+            1 => ShapeKind::RoundedRect,
+            2 => ShapeKind::Ellipse,
+            _ => unreachable!("shape selection is always normalized"),
+        }
+    }
+
+    pub fn shape_line_style(&self) -> LineStyle {
+        line_style(self.shape_selected[1])
+    }
+
+    pub fn shape_fill(&self) -> Option<&'static str> {
+        self.shape_selected[2]
+            .checked_sub(1)
+            .map(|index| SHAPE_OPTIONS[2][index + 1])
     }
 
     pub fn action_at(&self, row: usize, column: usize) -> Option<ToolbarAction> {

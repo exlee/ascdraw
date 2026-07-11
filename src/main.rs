@@ -257,6 +257,8 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
         EditCommand::Clear => state.clear_cell(),
         EditCommand::ToggleTextEntry => state.toggle_text_entry(),
         EditCommand::PlaceStamp => state.place_stamp(),
+        EditCommand::ToggleShapePreview => state.toggle_shape_preview(),
+        EditCommand::ConfirmShape => state.confirm_shape(),
         EditCommand::Home => state.move_home(),
         EditCommand::End => state.move_end(),
         EditCommand::Backspace => state.backspace(),
