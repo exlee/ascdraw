@@ -4,7 +4,8 @@ use winit::keyboard::{Key, ModifiersState};
 
 use crate::app::{CursorMode, ThemeConfig};
 use crate::drawing::{
-    LineEnding, LineStyle, glyph_with_connection, is_line_glyph, line_ending_glyph,
+    LineEnding, LineStyle, glyph_with_connection, glyph_without_connection, is_line_glyph,
+    line_ending_glyph,
 };
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::toolbar::{MainMode, ToolbarAction, ToolbarState};
@@ -268,6 +269,36 @@ impl EditorState {
             end_base_glyph,
             moving_ending,
         });
+    }
+
+    pub fn move_or_erase(&mut self, direction: Direction) {
+        self.end_stroke();
+        let from = self.grid.cursor_pos;
+        let Some(to) = adjacent_coord(from, direction) else {
+            return;
+        };
+        self.remove_connection(from, direction);
+        self.move_to_without_ending_stroke(to);
+        self.remove_connection(to, direction.opposite());
+    }
+
+    fn remove_connection(&mut self, coord: Coord, direction: Direction) {
+        if let Some(marker) = self.take_line_marker(coord) {
+            self.set_cell_contents(coord, marker.base_glyph);
+        }
+        let Some(line) = self.grid.lines.get_mut(coord.line) else {
+            return;
+        };
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        if column != coord.column {
+            return;
+        }
+        if let Some(atom) = line.get_mut(index)
+            && atom_width(atom) == 1
+            && let Some(glyph) = glyph_without_connection(&atom.contents, direction)
+        {
+            atom.contents = glyph.to_string();
+        }
     }
 
     fn cell_contents(&self, coord: Coord) -> Option<&str> {
@@ -558,6 +589,21 @@ mod tests {
         }
 
         assert_eq!(contents(&state.grid.lines[2]), " ╶┴╯");
+    }
+
+    #[test]
+    fn erasing_movement_removes_only_the_traversed_segments() {
+        let mut state = state();
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+
+        state.move_or_erase(Direction::Left);
+        assert_eq!(contents(&state.grid.lines[0]), "╶╴ ");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+
+        state.move_or_erase(Direction::Left);
+        assert_eq!(contents(&state.grid.lines[0]), "   ");
+        assert_eq!(state.grid.cursor_pos, Coord::default());
     }
 
     #[test]

@@ -253,6 +253,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => state.move_or_draw(direction, true),
+        EditCommand::Erase(direction) => state.move_or_erase(direction),
         EditCommand::Clear => state.clear_cell(),
         EditCommand::ToggleTextEntry => state.toggle_text_entry(),
         EditCommand::PlaceStamp => state.place_stamp(),

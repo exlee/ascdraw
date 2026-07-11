@@ -47,6 +47,11 @@ pub fn glyph_with_connection(glyph: &str, direction: Direction, style: LineStyle
     Some(glyph_for_connections(connections, style))
 }
 
+pub fn glyph_without_connection(glyph: &str, direction: Direction) -> Option<char> {
+    let connections = connections_for_glyph(glyph)? & !connection(direction);
+    Some(glyph_for_connections(connections, style_for_glyph(glyph)))
+}
+
 pub fn is_line_glyph(glyph: &str) -> bool {
     connections_for_glyph(glyph).is_some_and(|connections| connections != 0)
 }
@@ -97,6 +102,18 @@ fn connections_for_glyph(glyph: &str) -> Option<u8> {
         "┼" | "╋" | "╬" => UP | RIGHT | DOWN | LEFT,
         _ => return None,
     })
+}
+
+fn style_for_glyph(glyph: &str) -> LineStyle {
+    match glyph {
+        "╹" | "╺" | "╻" | "╸" | "┗" | "┃" | "┛" | "┏" | "━" | "┓" | "┣" | "┻" | "┫" | "┳" | "╋" => {
+            LineStyle::Heavy
+        }
+        "╚" | "║" | "╝" | "╔" | "═" | "╗" | "╠" | "╩" | "╣" | "╦" | "╬" => {
+            LineStyle::Double
+        }
+        _ => LineStyle::Thin,
+    }
 }
 
 fn glyph_for_connections(connections: u8, style: LineStyle) -> char {
@@ -242,5 +259,13 @@ mod tests {
             line_ending_glyph(LineEnding::None, Direction::Up, LineStyle::Double),
             '║'
         );
+    }
+
+    #[test]
+    fn erasing_one_connection_preserves_the_rest_and_the_style() {
+        assert_eq!(glyph_without_connection("┴", Direction::Left), Some('╰'));
+        assert_eq!(glyph_without_connection("╋", Direction::Left), Some('┣'));
+        assert_eq!(glyph_without_connection("═", Direction::Left), Some('╶'));
+        assert_eq!(glyph_without_connection("╴", Direction::Left), Some(' '));
     }
 }

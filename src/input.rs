@@ -11,6 +11,7 @@ use crate::render::Renderer;
 pub enum EditCommand {
     Move(Direction),
     Draw(Direction),
+    Erase(Direction),
     Clear,
     ToggleTextEntry,
     PlaceStamp,
@@ -39,11 +40,14 @@ fn edit_command_for_key(
         return Some(EditCommand::ToggleTextEntry);
     }
 
-    if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() {
+    if modifiers.control_key() || modifiers.super_key() {
         return None;
     }
 
     if mode == CursorMode::MoveDraw {
+        if modifiers.alt_key() {
+            return direction_for_key(key).map(EditCommand::Erase);
+        }
         return match key {
             Key::Named(NamedKey::Backspace) => Some(EditCommand::Clear),
             _ if is_space_key(key) => Some(EditCommand::Clear),
@@ -55,6 +59,10 @@ fn edit_command_for_key(
                 }
             }),
         };
+    }
+
+    if modifiers.alt_key() {
+        return None;
     }
 
     if mode == CursorMode::Text {
@@ -236,6 +244,19 @@ mod tests {
             ),
             Some(EditCommand::Draw(Direction::Right))
         );
+    }
+
+    #[test]
+    fn maps_alt_directions_to_line_erasing() {
+        for (key, direction) in [
+            (Key::Character("h".into()), Direction::Left),
+            (Key::Named(NamedKey::ArrowDown), Direction::Down),
+        ] {
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::ALT, CursorMode::MoveDraw),
+                Some(EditCommand::Erase(direction))
+            );
+        }
     }
 
     #[test]
