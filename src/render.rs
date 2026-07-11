@@ -237,10 +237,14 @@ fn render_toolbar(
 
     let tooltip = [Atom {
         face: Face::default(),
-        contents: if state.cursor_mode == CursorMode::Text {
-            "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
-        } else {
-            state.toolbar.tooltip().to_string()
+        contents: match state.cursor_mode {
+            CursorMode::Text => {
+                "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
+            }
+            CursorMode::Replace => {
+                "<Shift-Ret> to exit replace mode, arrows move freely over the canvas".to_string()
+            }
+            _ => state.toolbar.tooltip().to_string(),
         },
     }];
     render_line(

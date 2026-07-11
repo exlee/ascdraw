@@ -155,7 +155,7 @@ fn try_main() -> Result<ExitCode> {
                                 && !editor.modifiers.alt_key()
                                 && !editor.modifiers.super_key()
                             {
-                                editor.state.insert(&text);
+                                editor.state.write_text(&text);
                                 editor.request_redraw();
                             }
                         }
@@ -183,7 +183,7 @@ fn try_main() -> Result<ExitCode> {
                                 && let Some(text) = event.text
                                 && !text.chars().all(char::is_control)
                             {
-                                editor.state.insert(&text);
+                                editor.state.write_text(&text);
                                 editor.request_redraw();
                             }
                         }
@@ -256,6 +256,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
         EditCommand::Erase(direction) => state.move_or_erase(direction),
         EditCommand::Clear => state.clear_cell(),
         EditCommand::ToggleTextEntry => state.toggle_text_entry(),
+        EditCommand::ToggleReplaceMode => state.toggle_replace_mode(),
         EditCommand::PlaceStamp => state.place_stamp(),
         EditCommand::ToggleShapePreview => state.toggle_shape_preview(),
         EditCommand::ConfirmShape => state.confirm_shape(),

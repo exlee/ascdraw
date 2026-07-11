@@ -14,6 +14,7 @@ pub enum EditCommand {
     Erase(Direction),
     Clear,
     ToggleTextEntry,
+    ToggleReplaceMode,
     PlaceStamp,
     ToggleShapePreview,
     ConfirmShape,
@@ -39,7 +40,11 @@ fn edit_command_for_key(
     mode: CursorMode,
 ) -> Option<EditCommand> {
     if matches!(key, Key::Named(NamedKey::Enter)) {
-        return Some(EditCommand::ToggleTextEntry);
+        return Some(if modifiers.shift_key() {
+            EditCommand::ToggleReplaceMode
+        } else {
+            EditCommand::ToggleTextEntry
+        });
     }
 
     if modifiers.control_key() || modifiers.super_key() {
@@ -315,6 +320,18 @@ mod tests {
                 Some(EditCommand::ToggleTextEntry)
             );
         }
+    }
+
+    #[test]
+    fn shift_return_toggles_replace_mode() {
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::Enter),
+                ModifiersState::SHIFT,
+                CursorMode::MoveDraw,
+            ),
+            Some(EditCommand::ToggleReplaceMode)
+        );
     }
 
     #[test]

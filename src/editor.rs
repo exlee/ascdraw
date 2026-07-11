@@ -106,6 +106,15 @@ impl EditorState {
         }
     }
 
+    pub fn toggle_replace_mode(&mut self) {
+        self.end_stroke();
+        if self.cursor_mode == CursorMode::Replace {
+            self.sync_cursor_mode_with_toolbar();
+        } else {
+            self.cursor_mode = CursorMode::Replace;
+        }
+    }
+
     fn sync_cursor_mode_with_toolbar(&mut self) {
         self.cursor_mode = match self.toolbar.main_mode() {
             MainMode::Line => CursorMode::MoveDraw,
@@ -128,6 +137,38 @@ impl EditorState {
             self.cursor_index = self.grid.lines[self.grid.cursor_pos.line]
                 .len()
                 .min(self.cursor_index + UnicodeSegmentation::graphemes(content, true).count());
+            if part.ends_with('\n') {
+                self.newline();
+            }
+        }
+        self.sync_cursor_column();
+    }
+
+    pub fn write_text(&mut self, text: &str) {
+        if self.cursor_mode == CursorMode::Replace {
+            self.replace(text);
+        } else {
+            self.insert(text);
+        }
+    }
+
+    fn replace(&mut self, text: &str) {
+        self.end_stroke();
+        for part in text.split_inclusive('\n') {
+            let content = part.strip_suffix('\n').unwrap_or(part);
+            for grapheme in UnicodeSegmentation::graphemes(content, true) {
+                let line = &mut self.grid.lines[self.grid.cursor_pos.line];
+                let atom = Atom {
+                    face: Face::default(),
+                    contents: grapheme.to_string(),
+                };
+                if self.cursor_index < line.len() {
+                    line[self.cursor_index] = atom;
+                } else {
+                    line.push(atom);
+                }
+                self.cursor_index += 1;
+            }
             if part.ends_with('\n') {
                 self.newline();
             }
@@ -735,6 +776,21 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
         state.backspace();
         assert_eq!(state.grid.cursor_pos.column, 1);
+    }
+
+    #[test]
+    fn replace_mode_overwrites_instead_of_inserting() {
+        let mut state = state();
+        state.insert("abc");
+        state.move_to(Coord { line: 0, column: 1 });
+        state.toggle_replace_mode();
+
+        state.write_text("XY");
+
+        assert_eq!(contents(&state.grid.lines[0]), "aXY");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
+        state.toggle_replace_mode();
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
     }
 
     #[test]
