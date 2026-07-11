@@ -4,8 +4,8 @@ use winit::keyboard::{Key, ModifiersState};
 
 use crate::app::{CursorMode, ThemeConfig};
 use crate::drawing::{
-    LineEnding, LineStyle, glyph_with_connection, glyph_without_connection, is_line_glyph,
-    line_ending_glyph,
+    CornerStyle, LineEnding, LineStyle, glyph_with_connection, glyph_with_connection_and_corner,
+    glyph_without_connection, is_line_glyph, line_ending_glyph,
 };
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
@@ -261,6 +261,7 @@ impl EditorState {
             return;
         };
         let line_style = self.toolbar.line_style();
+        let corner_style = self.toolbar.line_corner();
 
         if !draw {
             self.end_stroke();
@@ -292,10 +293,12 @@ impl EditorState {
             self.active_stroke = None;
         }
 
-        let from_base = self.add_connection(from, direction, line_style);
+        let from_base = self.add_connection(from, direction, line_style, corner_style);
         self.move_to_without_ending_stroke(to);
         let to_was_existing_line = self.cell_contents(to).is_some_and(is_line_glyph);
-        let Some(end_base_glyph) = self.add_connection(to, direction.opposite(), line_style) else {
+        let Some(end_base_glyph) =
+            self.add_connection(to, direction.opposite(), line_style, corner_style)
+        else {
             self.active_stroke = None;
             return;
         };
@@ -384,6 +387,7 @@ impl EditorState {
         coord: Coord,
         direction: Direction,
         line_style: LineStyle,
+        corner_style: CornerStyle,
     ) -> Option<String> {
         self.remove_line_marker(coord);
         let line = &mut self.grid.lines[coord.line];
@@ -395,16 +399,22 @@ impl EditorState {
 
         if let Some(atom) = line.get_mut(index) {
             if atom_width(atom) == 1
-                && let Some(glyph) = glyph_with_connection(&atom.contents, direction, line_style)
+                && let Some(glyph) = glyph_with_connection_and_corner(
+                    &atom.contents,
+                    direction,
+                    line_style,
+                    corner_style,
+                )
             {
                 atom.contents = glyph.to_string();
                 return Some(atom.contents.clone());
             }
             None
         } else {
-            let contents = glyph_with_connection(" ", direction, line_style)
-                .expect("blank cells accept line connections")
-                .to_string();
+            let contents =
+                glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
+                    .expect("blank cells accept line connections")
+                    .to_string();
             line.push(Atom {
                 face: Face::default(),
                 contents: contents.clone(),

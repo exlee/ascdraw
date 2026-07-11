@@ -1,7 +1,7 @@
 use unicode_width::UnicodeWidthStr;
 use winit::keyboard::{Key, ModifiersState};
 
-use crate::drawing::{LineEnding, LineStyle};
+use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 
 pub const TOOLBAR_ROWS: usize = 3;
 pub const TOOLBAR_ROW_GAP: usize = 6;
@@ -15,11 +15,12 @@ pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
 }
 
 const GAP: &str = "    ";
-const LINE_LABELS: [&str; 3] = ["Line Start", "Line End", "Line Width"];
-const LINE_OPTIONS: [&[&str]; 3] = [
+const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
+const LINE_OPTIONS: [&[&str]; 4] = [
     &["·", "◀", "◆", "●"],
     &["·", "▶", "◆", "●"],
     &["─", "━", "═"],
+    &["Smooth", "Sharp"],
 ];
 const STAMP_LABELS: [&str; 3] = ["Decorators", "Fills", "Blocks"];
 const STAMP_OPTIONS: [&[&str]; 3] = [
@@ -241,6 +242,14 @@ impl ToolbarState {
         line_ending(self.line_selected[1])
     }
 
+    pub fn line_corner(&self) -> CornerStyle {
+        match self.line_selected[3] {
+            0 => CornerStyle::Smooth,
+            1 => CornerStyle::Sharp,
+            _ => unreachable!("line corner selection is always normalized"),
+        }
+    }
+
     pub fn stamp(&self) -> &'static str {
         STAMP_OPTIONS[self.stamp_active_submenu][self.stamp_selected[self.stamp_active_submenu]]
     }
@@ -376,6 +385,7 @@ fn toolbar_index(text: &str, shifted: bool) -> Option<usize> {
         ("2" | "@", true) | ("2", false) => 2,
         ("3" | "#", true) | ("3", false) => 3,
         ("4" | "$", true) | ("4", false) => 4,
+        ("5" | "%", true) | ("5", false) => 5,
         _ => return None,
     };
     digit.checked_sub(1)
@@ -460,17 +470,19 @@ mod tests {
         cycle(&mut toolbar, "2");
         cycle(&mut toolbar, "3");
         cycle(&mut toolbar, "4");
+        cycle(&mut toolbar, "5");
 
         assert_eq!(toolbar.line_start(), LineEnding::Arrow);
         assert_eq!(toolbar.line_end(), LineEnding::Arrow);
         assert_eq!(toolbar.line_style(), LineStyle::Heavy);
+        assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
         assert_eq!(
             toolbar
                 .submenu_spans()
                 .iter()
                 .map(|span| span.contents.as_str())
                 .collect::<String>(),
-            "2. Line Start · ◀ ◆ ●    3. Line End · ▶ ◆ ●    4. Line Width ─ ━ ═"
+            "2. Start · ◀ ◆ ●    3. End · ▶ ◆ ●    4. Width ─ ━ ═    5. Corner Smooth Sharp"
         );
     }
 

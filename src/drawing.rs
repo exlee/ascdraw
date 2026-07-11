@@ -33,6 +33,13 @@ pub enum LineEnding {
     Circle,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CornerStyle {
+    #[default]
+    Smooth,
+    Sharp,
+}
+
 pub fn connection(direction: Direction) -> u8 {
     match direction {
         Direction::Up => UP,
@@ -43,13 +50,26 @@ pub fn connection(direction: Direction) -> u8 {
 }
 
 pub fn glyph_with_connection(glyph: &str, direction: Direction, style: LineStyle) -> Option<char> {
+    glyph_with_connection_and_corner(glyph, direction, style, CornerStyle::Smooth)
+}
+
+pub fn glyph_with_connection_and_corner(
+    glyph: &str,
+    direction: Direction,
+    style: LineStyle,
+    corner_style: CornerStyle,
+) -> Option<char> {
     let connections = connections_for_glyph(glyph)? | connection(direction);
-    Some(glyph_for_connections(connections, style))
+    Some(glyph_for_connections(connections, style, corner_style))
 }
 
 pub fn glyph_without_connection(glyph: &str, direction: Direction) -> Option<char> {
     let connections = connections_for_glyph(glyph)? & !connection(direction);
-    Some(glyph_for_connections(connections, style_for_glyph(glyph)))
+    Some(glyph_for_connections(
+        connections,
+        style_for_glyph(glyph),
+        corner_style_for_glyph(glyph),
+    ))
 }
 
 pub fn is_line_glyph(glyph: &str) -> bool {
@@ -68,7 +88,7 @@ pub fn line_ending_glyph(
                 Direction::Right | Direction::Left => '═',
             },
             LineStyle::Thin | LineStyle::Heavy => {
-                glyph_for_connections(connection(connected_direction), style)
+                glyph_for_connections(connection(connected_direction), style, CornerStyle::Smooth)
             }
         },
         LineEnding::Arrow => match connected_direction.opposite() {
@@ -116,27 +136,46 @@ fn style_for_glyph(glyph: &str) -> LineStyle {
     }
 }
 
-fn glyph_for_connections(connections: u8, style: LineStyle) -> char {
+fn corner_style_for_glyph(glyph: &str) -> CornerStyle {
+    match glyph {
+        "┌" | "┐" | "└" | "┘" => CornerStyle::Sharp,
+        _ => CornerStyle::Smooth,
+    }
+}
+
+fn glyph_for_connections(connections: u8, style: LineStyle, corner_style: CornerStyle) -> char {
     match style {
-        LineStyle::Thin => thin_glyph_for_connections(connections),
+        LineStyle::Thin => thin_glyph_for_connections(connections, corner_style),
         LineStyle::Heavy => heavy_glyph_for_connections(connections),
         LineStyle::Double => double_glyph_for_connections(connections),
     }
 }
 
-fn thin_glyph_for_connections(connections: u8) -> char {
+fn thin_glyph_for_connections(connections: u8, corner_style: CornerStyle) -> char {
     match connections {
         0 => ' ',
         UP => '╵',
         RIGHT => '╶',
         DOWN => '╷',
         LEFT => '╴',
-        UP_RIGHT => '╰',
+        UP_RIGHT => match corner_style {
+            CornerStyle::Smooth => '╰',
+            CornerStyle::Sharp => '└',
+        },
         UP_DOWN => '│',
-        UP_LEFT => '╯',
-        RIGHT_DOWN => '╭',
+        UP_LEFT => match corner_style {
+            CornerStyle::Smooth => '╯',
+            CornerStyle::Sharp => '┘',
+        },
+        RIGHT_DOWN => match corner_style {
+            CornerStyle::Smooth => '╭',
+            CornerStyle::Sharp => '┌',
+        },
         RIGHT_LEFT => '─',
-        DOWN_LEFT => '╮',
+        DOWN_LEFT => match corner_style {
+            CornerStyle::Smooth => '╮',
+            CornerStyle::Sharp => '┐',
+        },
         UP_RIGHT_DOWN => '├',
         UP_RIGHT_LEFT => '┴',
         UP_DOWN_LEFT => '┤',
@@ -258,6 +297,28 @@ mod tests {
         assert_eq!(
             line_ending_glyph(LineEnding::None, Direction::Up, LineStyle::Double),
             '║'
+        );
+    }
+
+    #[test]
+    fn selected_corner_style_controls_thin_turns() {
+        assert_eq!(
+            glyph_with_connection_and_corner(
+                "╴",
+                Direction::Down,
+                LineStyle::Thin,
+                CornerStyle::Smooth,
+            ),
+            Some('╮')
+        );
+        assert_eq!(
+            glyph_with_connection_and_corner(
+                "╴",
+                Direction::Down,
+                LineStyle::Thin,
+                CornerStyle::Sharp,
+            ),
+            Some('┐')
         );
     }
 
