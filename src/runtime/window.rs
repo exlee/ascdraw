@@ -23,6 +23,7 @@ pub struct EditorWindow {
     pub surface: Surface<Rc<Window>, Rc<Window>>,
     pub modifiers: ModifiersState,
     pub mouse_cell: Option<Coord>,
+    pub mouse_toolbar_position: Option<(usize, usize)>,
     pub state: EditorState,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -92,6 +93,7 @@ pub fn create_editor_window(elwt: &ActiveEventLoop, config: &AppConfig) -> Resul
         surface,
         modifiers: ModifiersState::empty(),
         mouse_cell: Some(Coord::default()),
+        mouse_toolbar_position: None,
         state: EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE),
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
@@ -191,5 +193,5 @@ fn adjust_font_size(
 
 fn grid_top(scale_factor: f64, transparent_menubar: bool, toolbar_cell_height: usize) -> usize {
     content_top_padding(scale_factor, transparent_menubar)
-        + crate::toolbar::TOOLBAR_ROWS * toolbar_cell_height
+        + crate::toolbar::toolbar_height(toolbar_cell_height)
 }

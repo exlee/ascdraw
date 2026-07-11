@@ -1,8 +1,18 @@
+use unicode_width::UnicodeWidthStr;
 use winit::keyboard::{Key, ModifiersState};
 
 use crate::drawing::{LineEnding, LineStyle};
 
 pub const TOOLBAR_ROWS: usize = 3;
+pub const TOOLBAR_ROW_GAP: usize = 6;
+
+pub fn toolbar_height(cell_height: usize) -> usize {
+    TOOLBAR_ROWS * cell_height + (TOOLBAR_ROWS - 1) * TOOLBAR_ROW_GAP
+}
+
+pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
+    row * TOOLBAR_ROW_GAP
+}
 
 const GAP: &str = "    ";
 const LINE_LABELS: [&str; 3] = ["Line Start", "Line End", "Line Width"];
@@ -12,7 +22,10 @@ const LINE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
 ];
 const STAMP_LABELS: [&str; 2] = ["Decorators", "Fills"];
-const STAMP_OPTIONS: [&[&str]; 2] = [&["·", "○", "◇", "□"], &["·", "░", "▒", "▓", "█"]];
+const STAMP_OPTIONS: [&[&str]; 2] = [
+    &["○", "●", "◇", "◆", "□", "△", "☆", "•"],
+    &["░", "▒", "▓", "█", "▄", "▀", "▌", "▐"],
+];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["□", "○", "◇", "△"],
@@ -49,6 +62,7 @@ pub struct ToolbarState {
     main_mode: MainMode,
     line_selected: [usize; LINE_LABELS.len()],
     stamp_selected: [usize; STAMP_LABELS.len()],
+    stamp_active_submenu: usize,
     shape_selected: [usize; SHAPE_LABELS.len()],
 }
 
@@ -56,12 +70,22 @@ pub struct ToolbarState {
 pub struct ToolbarSpan {
     pub contents: String,
     pub selected: bool,
+    pub action: Option<ToolbarAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolbarAction {
+    CycleMain,
+    CycleSubmenu(usize),
+    SelectMain(MainMode),
+    SelectSubmenu { submenu: usize, option: usize },
 }
 
 struct MenuLayout<'a> {
     labels: &'a [&'a str],
     options: &'a [&'a [&'a str]],
     selected: &'a [usize],
+    exclusive_submenu: Option<usize>,
 }
 
 impl ToolbarState {
@@ -96,10 +120,7 @@ impl ToolbarState {
                 if !cycle_selected(&mut self.stamp_selected, &STAMP_OPTIONS, submenu, backwards) {
                     return false;
                 }
-                let selected = self.stamp_selected[submenu];
-                if selected != 0 {
-                    self.stamp_selected[1 - submenu] = 0;
-                }
+                self.stamp_active_submenu = submenu;
                 true
             }
             MainMode::Shapes => {
@@ -117,17 +138,20 @@ impl ToolbarState {
         let mut spans = vec![ToolbarSpan {
             contents: "1. ".to_string(),
             selected: false,
+            action: Some(ToolbarAction::CycleMain),
         }];
         for (index, mode) in MainMode::ALL.iter().enumerate() {
             if index > 0 {
                 spans.push(ToolbarSpan {
                     contents: " ".to_string(),
                     selected: false,
+                    action: None,
                 });
             }
             spans.push(ToolbarSpan {
                 contents: mode.label().to_string(),
                 selected: *mode == self.main_mode,
+                action: Some(ToolbarAction::SelectMain(*mode)),
             });
         }
         spans
@@ -141,22 +165,32 @@ impl ToolbarState {
                 spans.push(ToolbarSpan {
                     contents: GAP.to_string(),
                     selected: false,
+                    action: None,
                 });
             }
             spans.push(ToolbarSpan {
                 contents: format!("{}. {label} ", index + 2),
                 selected: false,
+                action: Some(ToolbarAction::CycleSubmenu(index)),
             });
             for (option_index, option) in layout.options[index].iter().enumerate() {
                 if option_index > 0 {
                     spans.push(ToolbarSpan {
                         contents: " ".to_string(),
                         selected: false,
+                        action: None,
                     });
                 }
                 spans.push(ToolbarSpan {
                     contents: (*option).to_string(),
-                    selected: option_index == layout.selected[index],
+                    selected: option_index == layout.selected[index]
+                        && layout
+                            .exclusive_submenu
+                            .is_none_or(|active| active == index),
+                    action: Some(ToolbarAction::SelectSubmenu {
+                        submenu: index,
+                        option: option_index,
+                    }),
                 });
             }
         }
@@ -190,27 +224,111 @@ impl ToolbarState {
         line_ending(self.line_selected[1])
     }
 
+    pub fn stamp(&self) -> &'static str {
+        STAMP_OPTIONS[self.stamp_active_submenu][self.stamp_selected[self.stamp_active_submenu]]
+    }
+
+    pub fn action_at(&self, row: usize, column: usize) -> Option<ToolbarAction> {
+        let spans = match row {
+            0 => self.main_spans(),
+            1 => self.submenu_spans(),
+            _ => return None,
+        };
+        let mut start = 0;
+        for span in spans {
+            let end = start + UnicodeWidthStr::width(span.contents.as_str());
+            if (start..end).contains(&column) {
+                return span.action;
+            }
+            start = end;
+        }
+        None
+    }
+
+    pub fn apply_action(&mut self, action: ToolbarAction) -> bool {
+        match action {
+            ToolbarAction::CycleMain => {
+                let current = MainMode::ALL
+                    .iter()
+                    .position(|mode| *mode == self.main_mode)
+                    .expect("main mode is in the mode list");
+                self.main_mode = MainMode::ALL[cycle_index(current, MainMode::ALL.len(), false)];
+                true
+            }
+            ToolbarAction::CycleSubmenu(submenu) => match self.main_mode {
+                MainMode::Line => {
+                    cycle_selected(&mut self.line_selected, &LINE_OPTIONS, submenu, false)
+                }
+                MainMode::Stamp => {
+                    if !cycle_selected(&mut self.stamp_selected, &STAMP_OPTIONS, submenu, false) {
+                        return false;
+                    }
+                    self.stamp_active_submenu = submenu;
+                    true
+                }
+                MainMode::Shapes => {
+                    cycle_selected(&mut self.shape_selected, &SHAPE_OPTIONS, submenu, false)
+                }
+                MainMode::Utilities => submenu == 0,
+            },
+            ToolbarAction::SelectMain(mode) => {
+                self.main_mode = mode;
+                true
+            }
+            ToolbarAction::SelectSubmenu { submenu, option } => {
+                let option_count = match self.main_mode {
+                    MainMode::Line => LINE_OPTIONS.get(submenu),
+                    MainMode::Stamp => STAMP_OPTIONS.get(submenu),
+                    MainMode::Shapes => SHAPE_OPTIONS.get(submenu),
+                    MainMode::Utilities => return submenu == 0 && option == 0,
+                }
+                .map(|options| options.len());
+                if option_count.is_none_or(|count| option >= count) {
+                    return false;
+                }
+                let selected = match self.main_mode {
+                    MainMode::Line => self.line_selected.get_mut(submenu),
+                    MainMode::Stamp => {
+                        self.stamp_active_submenu = submenu;
+                        self.stamp_selected.get_mut(submenu)
+                    }
+                    MainMode::Shapes => self.shape_selected.get_mut(submenu),
+                    MainMode::Utilities => unreachable!("utilities returned above"),
+                };
+                let Some(selected) = selected else {
+                    return false;
+                };
+                *selected = option;
+                true
+            }
+        }
+    }
+
     fn layout(&self) -> MenuLayout<'_> {
         match self.main_mode {
             MainMode::Line => MenuLayout {
                 labels: &LINE_LABELS,
                 options: &LINE_OPTIONS,
                 selected: &self.line_selected,
+                exclusive_submenu: None,
             },
             MainMode::Stamp => MenuLayout {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
+                exclusive_submenu: Some(self.stamp_active_submenu),
             },
             MainMode::Shapes => MenuLayout {
                 labels: &SHAPE_LABELS,
                 options: &SHAPE_OPTIONS,
                 selected: &self.shape_selected,
+                exclusive_submenu: None,
             },
             MainMode::Utilities => MenuLayout {
                 labels: &UTILITY_LABELS,
                 options: &UTILITY_OPTIONS,
                 selected: &[0],
+                exclusive_submenu: None,
             },
         }
     }
@@ -328,7 +446,16 @@ mod tests {
         assert_eq!(toolbar.stamp_selected, [1, 0]);
 
         cycle(&mut toolbar, "3");
-        assert_eq!(toolbar.stamp_selected, [0, 1]);
+        assert_eq!(toolbar.stamp_selected, [1, 1]);
+        assert_eq!(toolbar.stamp_active_submenu, 1);
+        assert_eq!(
+            toolbar
+                .submenu_spans()
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -341,7 +468,7 @@ mod tests {
                 .iter()
                 .map(|span| span.contents.as_str())
                 .collect::<String>(),
-            "2. Decorators · ○ ◇ □    3. Fills · ░ ▒ ▓ █"
+            "2. Decorators ○ ● ◇ ◆ □ △ ☆ •    3. Fills ░ ▒ ▓ █ ▄ ▀ ▌ ▐"
         );
         assert_eq!(
             toolbar
@@ -349,7 +476,7 @@ mod tests {
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
-            2
+            1
         );
         assert!(toolbar.tooltip().starts_with("<Space>"));
 
@@ -364,6 +491,27 @@ mod tests {
             toolbar
                 .tooltip()
                 .starts_with("Space start, then Space confirm")
+        );
+    }
+
+    #[test]
+    fn mouse_hit_testing_selects_main_modes_and_submenu_options() {
+        let mut toolbar = ToolbarState::default();
+        let action = toolbar.action_at(0, 8).expect("Stamp is clickable");
+        assert_eq!(action, ToolbarAction::SelectMain(MainMode::Stamp));
+        assert!(toolbar.apply_action(action));
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 7,
+        }));
+        assert_eq!(toolbar.stamp(), "▐");
+        assert_eq!(toolbar.stamp_active_submenu, 1);
+
+        assert_eq!(
+            toolbar.action_at(1, 0),
+            Some(ToolbarAction::CycleSubmenu(0))
         );
     }
 

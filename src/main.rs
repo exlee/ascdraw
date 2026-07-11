@@ -30,7 +30,9 @@ use app::{
 };
 use diagnostics::log_error;
 use editor::EditorState;
-use input::{EditCommand, edit_command, pointer_position_to_coord};
+use input::{
+    EditCommand, edit_command, pointer_position_to_coord, pointer_position_to_toolbar_position,
+};
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 use runtime::window::{EditorWindow, close_window, create_editor_window, handle_command};
@@ -186,6 +188,13 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
+                            editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
+                                position.x,
+                                position.y,
+                                &editor.renderer,
+                                editor.window.scale_factor(),
+                                &config,
+                            );
                             editor.mouse_cell = pointer_position_to_coord(
                                 position.x,
                                 position.y,
@@ -200,7 +209,14 @@ fn try_main() -> Result<ExitCode> {
                             button: MouseButton::Left,
                             ..
                         } => {
-                            if let Some(coord) = editor.mouse_cell {
+                            let toolbar_action =
+                                editor.mouse_toolbar_position.and_then(|(row, column)| {
+                                    editor.state.toolbar.action_at(row, column)
+                                });
+                            if let Some(action) = toolbar_action {
+                                editor.state.apply_toolbar_action(action);
+                                editor.request_redraw();
+                            } else if let Some(coord) = editor.mouse_cell {
                                 editor.state.move_to(coord);
                                 editor.request_redraw();
                             }
@@ -239,6 +255,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) {
         EditCommand::Draw(direction) => state.move_or_draw(direction, true),
         EditCommand::Clear => state.clear_cell(),
         EditCommand::ToggleTextEntry => state.toggle_text_entry(),
+        EditCommand::PlaceStamp => state.place_stamp(),
         EditCommand::Home => state.move_home(),
         EditCommand::End => state.move_end(),
         EditCommand::Backspace => state.backspace(),

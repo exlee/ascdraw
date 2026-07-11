@@ -23,6 +23,7 @@ use crate::model::{Atom, Face};
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
+const TOOLBAR_SELECTION: Rgba = Rgba::rgb(0xff, 0x45, 0x00);
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -247,7 +248,9 @@ fn render_toolbar(
         &state.grid.default_face,
         max_columns,
         metrics,
-        DrawOrigin::Grid { top_padding },
+        DrawOrigin::Grid {
+            top_padding: top_padding + crate::toolbar::toolbar_row_offset(2, metrics.cell_height),
+        },
     );
 }
 
@@ -274,21 +277,18 @@ fn render_toolbar_spans(
         &state.grid.default_face,
         max_columns,
         metrics,
-        DrawOrigin::Grid { top_padding },
+        DrawOrigin::Grid {
+            top_padding: top_padding + crate::toolbar::toolbar_row_offset(row, metrics.cell_height),
+        },
     );
 
-    let cursor_face = resolve_derived_face(
-        &state.grid.default_face,
-        &state.grid.cursor_face,
-        FALLBACK_FG,
-        FALLBACK_BG,
-    );
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
-        .set_color(cursor_face.bg.to_color())
+        .set_color(TOOLBAR_SELECTION.to_color())
         .set_stroke_width(1.0);
-    let top = row_top(row, metrics, top_padding) as f32;
+    let top = (row_top(row, metrics, top_padding)
+        + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32;
     let bottom = top + metrics.cell_height.saturating_sub(1) as f32;
     let mut column = 0;
     for span in spans {

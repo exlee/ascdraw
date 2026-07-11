@@ -13,6 +13,7 @@ pub enum EditCommand {
     Draw(Direction),
     Clear,
     ToggleTextEntry,
+    PlaceStamp,
     Home,
     End,
     Backspace,
@@ -61,14 +62,18 @@ fn edit_command_for_key(
             Key::Named(NamedKey::Backspace) => Some(EditCommand::Backspace),
             Key::Named(NamedKey::Delete) => Some(EditCommand::Delete),
             Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
+            _ => arrow_direction_for_key(key).map(EditCommand::Move),
+        };
+    }
+
+    if mode == CursorMode::Stamp {
+        return match key {
+            Key::Character(text) if text == " " => Some(EditCommand::PlaceStamp),
             _ => direction_for_key(key).map(EditCommand::Move),
         };
     }
 
-    if matches!(
-        mode,
-        CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities
-    ) {
+    if matches!(mode, CursorMode::Shapes | CursorMode::Utilities) {
         return direction_for_key(key).map(EditCommand::Move);
     }
 
@@ -88,15 +93,21 @@ fn edit_command_for_key(
 }
 
 fn direction_for_key(key: &Key) -> Option<Direction> {
+    arrow_direction_for_key(key).or_else(|| match key {
+        Key::Character(text) if text.eq_ignore_ascii_case("h") => Some(Direction::Left),
+        Key::Character(text) if text.eq_ignore_ascii_case("j") => Some(Direction::Down),
+        Key::Character(text) if text.eq_ignore_ascii_case("k") => Some(Direction::Up),
+        Key::Character(text) if text.eq_ignore_ascii_case("l") => Some(Direction::Right),
+        _ => None,
+    })
+}
+
+fn arrow_direction_for_key(key: &Key) -> Option<Direction> {
     match key {
         Key::Named(NamedKey::ArrowLeft) => Some(Direction::Left),
         Key::Named(NamedKey::ArrowRight) => Some(Direction::Right),
         Key::Named(NamedKey::ArrowUp) => Some(Direction::Up),
         Key::Named(NamedKey::ArrowDown) => Some(Direction::Down),
-        Key::Character(text) if text.eq_ignore_ascii_case("h") => Some(Direction::Left),
-        Key::Character(text) if text.eq_ignore_ascii_case("j") => Some(Direction::Down),
-        Key::Character(text) if text.eq_ignore_ascii_case("k") => Some(Direction::Up),
-        Key::Character(text) if text.eq_ignore_ascii_case("l") => Some(Direction::Right),
         _ => None,
     }
 }
@@ -112,7 +123,7 @@ pub fn pointer_position_to_coord(
     let metrics = renderer.metrics(scale_factor);
     let toolbar_metrics = renderer.title_metrics(scale_factor);
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
-        + crate::toolbar::TOOLBAR_ROWS * toolbar_metrics.cell_height;
+        + crate::toolbar::toolbar_height(toolbar_metrics.cell_height);
     let grid_x = x - PADDING as f64 - viewport.x as f64;
     let grid_y = y - grid_top as f64 - viewport.y as f64;
     if grid_x < 0.0 || grid_y < 0.0 {
@@ -121,6 +132,28 @@ pub fn pointer_position_to_coord(
     let column = (grid_x / metrics.cell_width.max(1) as f64).floor() as usize;
     let line = (grid_y / metrics.cell_height.max(1) as f64).floor() as usize;
     Some(Coord { line, column })
+}
+
+pub fn pointer_position_to_toolbar_position(
+    x: f64,
+    y: f64,
+    renderer: &Renderer,
+    scale_factor: f64,
+    config: &AppConfig,
+) -> Option<(usize, usize)> {
+    let metrics = renderer.title_metrics(scale_factor);
+    let toolbar_x = x - PADDING as f64;
+    let toolbar_y = y - content_top_padding(scale_factor, config.transparent_menubar) as f64;
+    if toolbar_x < 0.0 || toolbar_y < 0.0 {
+        return None;
+    }
+    let stride = metrics.cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
+    let row = (toolbar_y / stride as f64).floor() as usize;
+    if row >= crate::toolbar::TOOLBAR_ROWS || toolbar_y as usize % stride >= metrics.cell_height {
+        return None;
+    }
+    let column = (toolbar_x / metrics.cell_width.max(1) as f64).floor() as usize;
+    Some((row, column))
 }
 
 #[cfg(test)]
@@ -223,5 +256,37 @@ mod tests {
                 Some(EditCommand::ToggleTextEntry)
             );
         }
+    }
+
+    #[test]
+    fn text_mode_types_hjkl_and_moves_only_with_arrows() {
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Character("h".into()),
+                ModifiersState::empty(),
+                CursorMode::Text,
+            ),
+            None
+        );
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::ArrowLeft),
+                ModifiersState::empty(),
+                CursorMode::Text,
+            ),
+            Some(EditCommand::Move(Direction::Left))
+        );
+    }
+
+    #[test]
+    fn space_places_the_active_stamp() {
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Character(" ".into()),
+                ModifiersState::empty(),
+                CursorMode::Stamp,
+            ),
+            Some(EditCommand::PlaceStamp)
+        );
     }
 }

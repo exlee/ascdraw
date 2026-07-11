@@ -7,7 +7,7 @@ use crate::drawing::{
     LineEnding, LineStyle, glyph_with_connection, is_line_glyph, line_ending_glyph,
 };
 use crate::model::{Atom, Coord, Direction, Face};
-use crate::toolbar::{MainMode, ToolbarState};
+use crate::toolbar::{MainMode, ToolbarAction, ToolbarState};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -70,6 +70,15 @@ impl EditorState {
             return false;
         }
         if !self.toolbar.cycle_shortcut(key, modifiers) {
+            return false;
+        }
+        self.end_stroke();
+        self.sync_cursor_mode_with_toolbar();
+        true
+    }
+
+    pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
+        if !self.toolbar.apply_action(action) {
             return false;
         }
         self.end_stroke();
@@ -150,51 +159,6 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
-    pub fn move_left(&mut self) {
-        self.end_stroke();
-        if self.cursor_index > 0 {
-            self.cursor_index -= 1;
-        } else if self.grid.cursor_pos.line > 0 {
-            self.grid.cursor_pos.line -= 1;
-            self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
-        }
-        self.sync_cursor_column();
-    }
-
-    pub fn move_right(&mut self) {
-        self.end_stroke();
-        let line = self.grid.cursor_pos.line;
-        if self.cursor_index < self.grid.lines[line].len() {
-            self.cursor_index += 1;
-        } else if line + 1 < self.grid.lines.len() {
-            self.grid.cursor_pos.line += 1;
-            self.cursor_index = 0;
-        }
-        self.sync_cursor_column();
-    }
-
-    pub fn move_up(&mut self) {
-        self.end_stroke();
-        if self.grid.cursor_pos.line > 0 {
-            let column = self.grid.cursor_pos.column;
-            self.grid.cursor_pos.line -= 1;
-            self.cursor_index =
-                index_for_column(&self.grid.lines[self.grid.cursor_pos.line], column);
-            self.sync_cursor_column();
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        self.end_stroke();
-        if self.grid.cursor_pos.line + 1 < self.grid.lines.len() {
-            let column = self.grid.cursor_pos.column;
-            self.grid.cursor_pos.line += 1;
-            self.cursor_index =
-                index_for_column(&self.grid.lines[self.grid.cursor_pos.line], column);
-            self.sync_cursor_column();
-        }
-    }
-
     pub fn move_home(&mut self) {
         self.end_stroke();
         self.cursor_index = 0;
@@ -219,7 +183,7 @@ impl EditorState {
         self.grid.cursor_pos.line = coord.line;
         self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
         let current_width = display_width(&self.grid.lines[coord.line][..self.cursor_index]);
-        if current_width < coord.column {
+        if current_width < coord.column && self.cursor_index == self.grid.lines[coord.line].len() {
             self.grid.lines[coord.line].extend((current_width..coord.column).map(|_| Atom {
                 face: Face::default(),
                 contents: " ".to_string(),
@@ -230,17 +194,7 @@ impl EditorState {
     }
 
     pub fn move_cursor(&mut self, direction: Direction) {
-        if matches!(self.cursor_mode, CursorMode::MoveDraw | CursorMode::Text) {
-            self.move_or_draw(direction, false);
-            return;
-        }
-
-        match direction {
-            Direction::Up => self.move_up(),
-            Direction::Right => self.move_right(),
-            Direction::Down => self.move_down(),
-            Direction::Left => self.move_left(),
-        }
+        self.move_or_draw(direction, false);
     }
 
     pub fn move_or_draw(&mut self, direction: Direction, draw: bool) {
@@ -425,6 +379,32 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
+    pub fn place_stamp(&mut self) {
+        self.end_stroke();
+        let coord = self.grid.cursor_pos;
+        let stamp = self.toolbar.stamp().to_string();
+        self.remove_line_marker(coord);
+        self.move_to_without_ending_stroke(coord);
+        let line = &mut self.grid.lines[coord.line];
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        if column != coord.column {
+            return;
+        }
+        let width = line.get(index).map(atom_width).unwrap_or(1);
+        let replacement = std::iter::once(Atom {
+            face: Face::default(),
+            contents: stamp,
+        })
+        .chain((1..width).map(|_| blank_atom()));
+        if index < line.len() {
+            line.splice(index..=index, replacement);
+        } else {
+            line.extend(replacement);
+        }
+        self.cursor_index = index;
+        self.sync_cursor_column();
+    }
+
     fn sync_cursor_column(&mut self) {
         self.grid.cursor_pos.column =
             display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
@@ -513,9 +493,9 @@ mod tests {
         let mut state = state();
         state.insert("😀x");
         assert_eq!(state.grid.cursor_pos.column, 3);
-        state.move_left();
+        state.move_cursor(Direction::Left);
         assert_eq!(state.grid.cursor_pos.column, 2);
-        state.move_left();
+        state.move_cursor(Direction::Left);
         assert_eq!(state.grid.cursor_pos.column, 0);
     }
 
@@ -698,6 +678,21 @@ mod tests {
         ));
         assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
         assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
+    fn stamp_mode_places_the_exclusively_selected_stamp() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 3,
+        });
+
+        state.place_stamp();
+
+        assert_eq!(contents(&state.grid.lines[0]), "█");
+        assert_eq!(state.grid.cursor_pos, Coord::default());
     }
 
     fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {

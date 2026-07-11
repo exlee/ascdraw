@@ -1,7 +1,7 @@
 use crate::model::Coord;
 use crate::render::CellMetrics;
 
-pub const PADDING: usize = 12;
+pub const PADDING: usize = 20;
 const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -67,7 +67,7 @@ pub fn layout_metrics(
     scale_factor: f64,
 ) -> LayoutMetrics {
     let top_padding = content_top_padding(scale_factor, transparent_menubar);
-    let grid_top = top_padding + crate::toolbar::TOOLBAR_ROWS * toolbar_cell_height;
+    let grid_top = top_padding + crate::toolbar::toolbar_height(toolbar_cell_height);
     let cols = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let rows = height.saturating_sub(grid_top + PADDING) / metrics.cell_height.max(1);
     LayoutMetrics {
