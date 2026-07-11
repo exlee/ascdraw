@@ -1,25 +1,70 @@
 # ascdraw
 
-ascdraw is a work-in-progress native ASCII drawing editor inspired by Monodraw and Emacs Uniline.
+ascdraw is a native editor for drawing diagrams with Unicode text and line characters. It is inspired by Monodraw and Emacs Uniline and is currently under active development.
 
-The current foundation provides:
+## Quick start
 
-- A standalone editable cell grid with no external editor process
-- Move/Draw mode with `h`/`j`/`k`/`l` and arrow-key movement
-- Shift-movement drawing with connected Unicode lines, corners, tees, and crossings
-- Grapheme-aware text insertion, deletion, cursor movement, and mouse positioning
-- Skia-based fixed-cell rendering with system-font fallback
-- Face-based foreground, background, underline, and text-attribute resolution
-- Configurable block, beam, and underline cursors
-- Live font size controls and configuration reload
-- Native multi-window and macOS menu integration
+The editor opens in **Line** mode.
 
-The checked-in [`ascdraw.toml`](ascdraw.toml) contains bundled defaults. User overrides are loaded from `~/.config/ascdraw/config.toml`, or `$XDG_CONFIG_HOME/ascdraw/config.toml` when `XDG_CONFIG_HOME` is set.
+| Action | Keys |
+| --- | --- |
+| Move the cursor | Arrow keys or `h` `j` `k` `l` |
+| Draw a line | Shift + direction |
+| Clear the current cell | Space or Backspace |
+| Enter or leave text entry | Return |
+| Choose the next tool | `1` |
+| Choose the previous tool | Shift + `1` |
+| Cycle a tool option | `2`–`4` |
+| Cycle an option backwards | Shift + `2`–`4` |
 
-Run `ascdraw --show-config` to print the merged configuration.
+Lines connect automatically into corners, tees, and crossings. Starting a stroke on an existing line extends that connection; starting on an endpoint marker moves the marker to the new endpoint.
 
-## Move/Draw mode
+## Toolbar
 
-The editor starts in Move/Draw mode. Use `h`, `j`, `k`, `l`, or the arrow keys to move one cell. Hold Shift while moving to draw a thin line. New segments connect to existing lines using Uniline-style rounded corners, tees, and crossings without overwriting ordinary text.
+The first row selects a tool. Press `1` to cycle through **Line**, **Stamp**, **Shape**, and **Utils**. The second row shows the active tool's options; use the number printed beside an option to cycle its values, or Shift + number to cycle backwards.
 
-Insert mode, Replace mode, the remaining drawing tools, and a document format are not implemented yet.
+### Line
+
+Line mode is fully usable. Its options control:
+
+- **Line Start** — none, arrow, diamond, or circle
+- **Line End** — none, arrow, diamond, or circle
+- **Line Width** — thin, heavy, or double
+
+Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw. Move without Shift to navigate.
+
+### Text entry
+
+Text entry is independent of the selected toolbar tool. Press Return to enter it and Return again to return to the selected tool. Type to insert text; the arrow keys or `h` `j` `k` `l` move freely over the canvas. Backspace and Delete edit text, and Tab inserts four spaces.
+
+### Stamp, Shape, and Utils
+
+These tools expose their planned options and canvas navigation, but their editing actions are not implemented yet.
+
+## Configuration
+
+Bundled defaults live in [`ascdraw.toml`](ascdraw.toml). Put personal overrides in:
+
+```text
+~/.config/ascdraw/config.toml
+```
+
+If `XDG_CONFIG_HOME` is set, ascdraw reads `$XDG_CONFIG_HOME/ascdraw/config.toml` instead. Run `ascdraw --show-config` to print the merged configuration.
+
+Default application shortcuts:
+
+| Action | macOS shortcut |
+| --- | --- |
+| Increase font size | Command + `=` |
+| Decrease font size | Command + `-` |
+| Reset font size | Command + `0` |
+| New window | Command + `N` |
+| Close window | Command + `W` |
+
+All shortcuts can be changed in the `[keys]` section of the configuration file.
+
+## Current scope
+
+ascdraw currently provides an editable grapheme-aware cell grid, connected Unicode line drawing, text entry, font fallback, configurable themes and cursor shapes, live font scaling, multiple native windows, and macOS menu integration.
+
+Document save/load and the Stamp, Shape, and Utils editing operations are still to come.
