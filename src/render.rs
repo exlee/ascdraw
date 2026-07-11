@@ -26,6 +26,8 @@ const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION: Rgba = Rgba::rgb(0xff, 0x45, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
+const DRAWING_CURSOR: Rgba = Rgba::rgb(0x00, 0x00, 0x8b);
+const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -488,6 +490,10 @@ fn render_grid_cursor(
         FALLBACK_BG,
     );
     let top = row_top(cursor.line, metrics, layout.grid_top);
+    if is_drawing_mode(cursor_mode) {
+        render_hollow_drawing_cursor(canvas, cursor.column, top, &cell, metrics, &cell_resolved);
+        return;
+    }
     match cursor_shape_for_mode(cursor_shape_config, cursor_mode) {
         CursorShape::Block => {
             render_block_cursor(canvas, cursor.column, top, &cell, metrics, &cursor_resolved)
@@ -511,6 +517,38 @@ fn render_grid_cursor(
             &cursor_resolved,
         ),
     }
+}
+
+fn is_drawing_mode(mode: CursorMode) -> bool {
+    matches!(
+        mode,
+        CursorMode::MoveDraw | CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities
+    )
+}
+
+fn render_hollow_drawing_cursor(
+    canvas: &Canvas,
+    column: usize,
+    top: usize,
+    cell: &CursorCell,
+    metrics: &CellMetrics,
+    resolved: &ResolvedFace,
+) {
+    render_cursor_base_cell(canvas, column, top, cell, metrics, resolved);
+
+    let left = (PADDING + column * metrics.cell_width) as f32 + 1.0;
+    let right = (PADDING + (column + 1) * metrics.cell_width) as f32 - 1.0;
+    let top = top as f32 + 1.0;
+    let bottom = top + metrics.cell_height.saturating_sub(2) as f32;
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(DRAWING_CURSOR.to_color())
+        .set_stroke_width(DRAWING_CURSOR_STROKE_WIDTH);
+    canvas.draw_line((left, top), (right, top), &paint);
+    canvas.draw_line((left, bottom), (right, bottom), &paint);
+    canvas.draw_line((left, top), (left, bottom), &paint);
+    canvas.draw_line((right, top), (right, bottom), &paint);
 }
 
 fn render_block_cursor(
@@ -1217,6 +1255,21 @@ mod tests {
             cursor_shape_for_mode(&config.display.cursor_shape, CursorMode::Insert),
             CursorShape::Block
         );
+    }
+
+    #[test]
+    fn drawing_modes_use_the_hollow_drawing_cursor() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            assert!(is_drawing_mode(mode));
+        }
+        for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
+            assert!(!is_drawing_mode(mode));
+        }
     }
 
     #[test]
