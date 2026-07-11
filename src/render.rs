@@ -232,7 +232,16 @@ fn render_toolbar(
     render_toolbar_spans(
         canvas,
         1,
-        &state.toolbar.submenu_spans(),
+        &state.toolbar.submenu_spans(1),
+        state,
+        max_columns,
+        metrics,
+        top_padding,
+    );
+    render_toolbar_spans(
+        canvas,
+        2,
+        &state.toolbar.submenu_spans(2),
         state,
         max_columns,
         metrics,
@@ -253,13 +262,13 @@ fn render_toolbar(
     }];
     render_line(
         canvas,
-        2,
+        3,
         &tooltip,
         &state.grid.default_face,
         max_columns,
         metrics,
         DrawOrigin::Grid {
-            top_padding: top_padding + crate::toolbar::toolbar_row_offset(2, metrics.cell_height),
+            top_padding: top_padding + crate::toolbar::toolbar_row_offset(3, metrics.cell_height),
         },
     );
 }

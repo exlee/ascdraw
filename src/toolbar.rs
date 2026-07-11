@@ -3,7 +3,7 @@ use winit::keyboard::{Key, ModifiersState};
 
 use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 
-pub const TOOLBAR_ROWS: usize = 3;
+pub const TOOLBAR_ROWS: usize = 4;
 pub const TOOLBAR_ROW_GAP: usize = 6;
 
 pub fn toolbar_height(cell_height: usize) -> usize {
@@ -22,17 +22,29 @@ const LINE_OPTIONS: [&[&str]; 4] = [
     &["─", "━", "═"],
     &["Smooth", "Sharp"],
 ];
-const STAMP_LABELS: [&str; 3] = ["Decorators", "Fills", "Blocks"];
-const STAMP_OPTIONS: [&[&str]; 3] = [
-    &[
-        "○", "●", "◇", "◆", "□", "■", "△", "▲", "☆", "★", "+", "×", "※", "•",
-    ],
-    &[
-        "░", "▒", "▓", "█", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▀", "▌", "▐", "▊", "▉",
-    ],
-    &[
-        "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
-    ],
+const STAMP_LABELS: [&str; 10] = [
+    "Decorators 1",
+    "Decorators 2",
+    "Decorators 3",
+    "Fills 1",
+    "Fills 2",
+    "Fills 3",
+    "Fills 4",
+    "Blocks 1",
+    "Blocks 2",
+    "Blocks 3",
+];
+const STAMP_OPTIONS: [&[&str]; 10] = [
+    &["○", "●", "◇", "◆", "□"],
+    &["■", "△", "▲", "☆", "★"],
+    &["+", "×", "※", "•"],
+    &["░", "▒", "▓", "█"],
+    &["▁", "▂", "▃", "▄"],
+    &["▅", "▆", "▇", "▀"],
+    &["▌", "▐", "▊", "▉"],
+    &["▘", "▝", "▀", "▖", "▌"],
+    &["▞", "▛", "▗", "▚", "▐"],
+    &["▜", "▄", "▙", "▟", "█"],
 ];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
@@ -106,14 +118,14 @@ struct MenuLayout<'a> {
 
 impl ToolbarState {
     pub fn cycle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        if modifiers != ModifiersState::empty() && modifiers != ModifiersState::SHIFT {
+        if modifiers.control_key() || modifiers.super_key() {
             return false;
         }
 
         let Key::Character(text) = key else {
             return false;
         };
-        let Some(index) = toolbar_index(text, modifiers.shift_key()) else {
+        let Some(index) = toolbar_index(text, modifiers.shift_key(), modifiers.alt_key()) else {
             return false;
         };
         let backwards = modifiers.shift_key();
@@ -152,7 +164,7 @@ impl ToolbarState {
 
     pub fn main_spans(&self) -> Vec<ToolbarSpan> {
         let mut spans = vec![ToolbarSpan {
-            contents: "1. ".to_string(),
+            contents: "<1> ".to_string(),
             selected: false,
             action: Some(ToolbarAction::CycleMain),
         }];
@@ -173,11 +185,13 @@ impl ToolbarState {
         spans
     }
 
-    pub fn submenu_spans(&self) -> Vec<ToolbarSpan> {
+    pub fn submenu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
         let layout = self.layout();
         let mut spans = Vec::new();
-        for (index, label) in layout.labels.iter().enumerate() {
-            if index > 0 {
+        let range = submenu_range(row, layout.labels.len());
+        for (position, index) in range.enumerate() {
+            let label = layout.labels[index];
+            if position > 0 {
                 spans.push(ToolbarSpan {
                     contents: GAP.to_string(),
                     selected: false,
@@ -185,7 +199,7 @@ impl ToolbarState {
                 });
             }
             spans.push(ToolbarSpan {
-                contents: format!("{}. {label} ", index + 2),
+                contents: format!("{} {label} ", submenu_shortcut_label(index)),
                 selected: false,
                 action: Some(ToolbarAction::CycleSubmenu(index)),
             });
@@ -276,7 +290,7 @@ impl ToolbarState {
     pub fn action_at(&self, row: usize, column: usize) -> Option<ToolbarAction> {
         let spans = match row {
             0 => self.main_spans(),
-            1 => self.submenu_spans(),
+            1 | 2 => self.submenu_spans(row),
             _ => return None,
         };
         let mut start = 0;
@@ -379,16 +393,44 @@ impl ToolbarState {
     }
 }
 
-fn toolbar_index(text: &str, shifted: bool) -> Option<usize> {
+fn toolbar_index(text: &str, shifted: bool, alt: bool) -> Option<usize> {
     let digit: usize = match (text, shifted) {
         ("1" | "!", true) | ("1", false) => 1,
         ("2" | "@", true) | ("2", false) => 2,
         ("3" | "#", true) | ("3", false) => 3,
         ("4" | "$", true) | ("4", false) => 4,
         ("5" | "%", true) | ("5", false) => 5,
+        ("6" | "^", true) | ("6", false) => 6,
+        ("7" | "&", true) | ("7", false) => 7,
+        ("8" | "*", true) | ("8", false) => 8,
+        ("9" | "(", true) | ("9", false) => 9,
+        ("0" | ")", true) | ("0", false) => 0,
         _ => return None,
     };
-    digit.checked_sub(1)
+    if alt {
+        (digit >= 2).then_some(8 + digit)
+    } else if digit == 0 {
+        Some(9)
+    } else {
+        digit.checked_sub(1)
+    }
+}
+
+fn submenu_range(row: usize, submenu_count: usize) -> std::ops::Range<usize> {
+    match row {
+        1 => 0..submenu_count.min(9),
+        2 => 9.min(submenu_count)..submenu_count,
+        _ => 0..0,
+    }
+}
+
+fn submenu_shortcut_label(submenu: usize) -> String {
+    const DIGITS: [char; 9] = ['2', '3', '4', '5', '6', '7', '8', '9', '0'];
+    if submenu < DIGITS.len() {
+        format!("<{}>", DIGITS[submenu])
+    } else {
+        format!("<A-{}>", DIGITS[(submenu - DIGITS.len()) % DIGITS.len()])
+    }
 }
 
 fn cycle_selected(
@@ -452,7 +494,7 @@ mod tests {
                 .iter()
                 .map(|span| span.contents.as_str())
                 .collect::<String>(),
-            "1. Line Stamp Shape Utils"
+            "<1> Line Stamp Shape Utils"
         );
         assert_eq!(
             toolbar
@@ -478,11 +520,11 @@ mod tests {
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
         assert_eq!(
             toolbar
-                .submenu_spans()
+                .submenu_spans(1)
                 .iter()
                 .map(|span| span.contents.as_str())
                 .collect::<String>(),
-            "2. Start · ◀ ◆ ●    3. End · ▶ ◆ ●    4. Width ─ ━ ═    5. Corner Smooth Sharp"
+            "<2> Start · ◀ ◆ ●    <3> End · ▶ ◆ ●    <4> Width ─ ━ ═    <5> Corner Smooth Sharp"
         );
     }
 
@@ -491,14 +533,15 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         cycle(&mut toolbar, "1");
         cycle(&mut toolbar, "2");
-        assert_eq!(toolbar.stamp_selected, [1, 0, 0]);
+        assert_eq!(toolbar.stamp_selected[0], 1);
 
         cycle(&mut toolbar, "3");
-        assert_eq!(toolbar.stamp_selected, [1, 1, 0]);
+        assert_eq!(toolbar.stamp_selected[0], 1);
+        assert_eq!(toolbar.stamp_selected[1], 1);
         assert_eq!(toolbar.stamp_active_submenu, 1);
         assert_eq!(
             toolbar
-                .submenu_spans()
+                .submenu_spans(1)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
@@ -511,16 +554,22 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         cycle(&mut toolbar, "1");
         let submenu = toolbar
-            .submenu_spans()
+            .submenu_spans(1)
             .iter()
             .map(|span| span.contents.as_str())
             .collect::<String>();
-        assert!(submenu.starts_with("2. Decorators "));
-        assert!(submenu.contains("    3. Fills "));
-        assert!(submenu.contains("    4. Blocks ▘ ▝ ▀"));
+        assert!(submenu.starts_with("<2> Decorators 1 "));
+        assert!(submenu.contains("    <5> Fills 1 "));
+        assert!(submenu.contains("    <9> Blocks 1 ▘ ▝ ▀"));
+        let overflow = toolbar
+            .submenu_spans(2)
+            .iter()
+            .map(|span| span.contents.as_str())
+            .collect::<String>();
+        assert!(overflow.starts_with("<A-2> Blocks 3 ▜ ▄ ▙ ▟ █"));
         assert_eq!(
             toolbar
-                .submenu_spans()
+                .submenu_spans(1)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
@@ -545,17 +594,17 @@ mod tests {
     #[test]
     fn mouse_hit_testing_selects_main_modes_and_submenu_options() {
         let mut toolbar = ToolbarState::default();
-        let action = toolbar.action_at(0, 8).expect("Stamp is clickable");
+        let action = toolbar.action_at(0, 10).expect("Stamp is clickable");
         assert_eq!(action, ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(toolbar.apply_action(action));
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
-            submenu: 1,
-            option: 13,
+            submenu: 6,
+            option: 1,
         }));
         assert_eq!(toolbar.stamp(), "▐");
-        assert_eq!(toolbar.stamp_active_submenu, 1);
+        assert_eq!(toolbar.stamp_active_submenu, 6);
 
         assert_eq!(
             toolbar.action_at(1, 0),
@@ -573,7 +622,13 @@ mod tests {
 
     #[test]
     fn block_stamps_match_uniline_quadrant_combinations() {
-        assert_eq!(STAMP_OPTIONS[2].concat(), "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█");
+        assert_eq!(
+            STAMP_OPTIONS[7..]
+                .iter()
+                .flat_map(|options| options.iter().copied())
+                .collect::<String>(),
+            "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
+        );
     }
 
     #[test]
@@ -581,5 +636,27 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         assert!(!toolbar.cycle_shortcut(&Key::Character("6".into()), ModifiersState::empty()));
         assert!(!toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::SUPER));
+    }
+
+    #[test]
+    fn every_submenu_has_at_most_five_options() {
+        for options in LINE_OPTIONS
+            .into_iter()
+            .chain(STAMP_OPTIONS)
+            .chain(SHAPE_OPTIONS)
+            .chain(UTILITY_OPTIONS)
+        {
+            assert!(options.len() <= 5, "submenu has {} options", options.len());
+        }
+    }
+
+    #[test]
+    fn zero_and_alt_two_reach_the_ninth_and_tenth_stamp_groups() {
+        let mut toolbar = ToolbarState::default();
+        cycle(&mut toolbar, "1");
+        cycle(&mut toolbar, "0");
+        assert_eq!(toolbar.stamp_active_submenu, 8);
+        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::ALT,));
+        assert_eq!(toolbar.stamp_active_submenu, 9);
     }
 }

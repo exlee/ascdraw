@@ -1015,7 +1015,7 @@ mod tests {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 1,
+            submenu: 3,
             option: 3,
         });
 
