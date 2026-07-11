@@ -23,8 +23,12 @@ const LINE_OPTIONS: [&[&str]; 3] = [
 ];
 const STAMP_LABELS: [&str; 2] = ["Decorators", "Fills"];
 const STAMP_OPTIONS: [&[&str]; 2] = [
-    &["○", "●", "◇", "◆", "□", "△", "☆", "•"],
-    &["░", "▒", "▓", "█", "▄", "▀", "▌", "▐"],
+    &[
+        "○", "●", "◇", "◆", "□", "■", "△", "▲", "☆", "★", "+", "×", "※", "•",
+    ],
+    &[
+        "░", "▒", "▓", "█", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▀", "▌", "▐", "▊", "▉",
+    ],
 ];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
@@ -468,7 +472,7 @@ mod tests {
                 .iter()
                 .map(|span| span.contents.as_str())
                 .collect::<String>(),
-            "2. Decorators ○ ● ◇ ◆ □ △ ☆ •    3. Fills ░ ▒ ▓ █ ▄ ▀ ▌ ▐"
+            "2. Decorators ○ ● ◇ ◆ □ ■ △ ▲ ☆ ★ + × ※ •    3. Fills ░ ▒ ▓ █ ▁ ▂ ▃ ▄ ▅ ▆ ▇ ▀ ▌ ▐ ▊ ▉"
         );
         assert_eq!(
             toolbar
@@ -504,7 +508,7 @@ mod tests {
 
         assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 1,
-            option: 7,
+            option: 13,
         }));
         assert_eq!(toolbar.stamp(), "▐");
         assert_eq!(toolbar.stamp_active_submenu, 1);
@@ -513,6 +517,14 @@ mod tests {
             toolbar.action_at(1, 0),
             Some(ToolbarAction::CycleSubmenu(0))
         );
+    }
+
+    #[test]
+    fn every_stamp_symbol_is_one_utf8_character_and_one_display_cell() {
+        for symbol in STAMP_OPTIONS.into_iter().flatten() {
+            assert_eq!(symbol.chars().count(), 1, "{symbol:?}");
+            assert_eq!(UnicodeWidthStr::width(*symbol), 1, "{symbol:?}");
+        }
     }
 
     #[test]
