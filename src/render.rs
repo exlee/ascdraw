@@ -1625,6 +1625,85 @@ mod tests {
     }
 
     #[test]
+    fn complete_page_prefix_renders_as_one_outline_without_an_internal_seam() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        for key in ["2", "1"] {
+            assert!(
+                state
+                    .toolbar
+                    .handle_shortcut(&Key::Character(key.into()), ModifiersState::empty())
+            );
+        }
+
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let max_columns = 100;
+        let logical_row = 3;
+        let physical_row = crate::toolbar::toolbar_content_row(logical_row);
+        let spans = crate::toolbar::boxed_toolbar_spans(
+            &state.toolbar.toolbar_spans(logical_row),
+            max_columns,
+        );
+        let expected_color = spans
+            .iter()
+            .find(|span| span.highlighted)
+            .and_then(|span| toolbar_span_outline_color(&state, span))
+            .expect("page prefix highlight color");
+        let highlighted: Vec<_> = toolbar_span_outlines(physical_row, &spans, &state, &metrics, 0)
+            .into_iter()
+            .filter(|outline| outline.color == expected_color)
+            .collect();
+        assert_eq!(highlighted.len(), 1);
+        let outline = highlighted[0];
+        assert_eq!(
+            outline.right - outline.left,
+            (4 * metrics.cell_width - 1) as f32 + TOOLBAR_SELECTION_PADDING * 2.0
+        );
+
+        let width = PADDING * 2 + max_columns * metrics.cell_width;
+        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height);
+        let mut pixels = vec![0xff; width * height * 4];
+        let image_info = ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::BGRA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface =
+            surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                .expect("test surface");
+        render_toolbar_span_outlines(surface.canvas(), physical_row, &spans, &state, &metrics, 0);
+
+        let seam_x =
+            (outline.left + TOOLBAR_SELECTION_PADDING + 2.0 * metrics.cell_width as f32) as usize;
+        let middle_y = ((outline.top + outline.bottom) / 2.0) as usize;
+        let seam_offset = (middle_y * width + seam_x) * 4;
+        assert_eq!(&pixels[seam_offset..seam_offset + 4], &[0xff; 4]);
+
+        let top_x = ((outline.left + outline.right) / 2.0) as usize;
+        let top_y = outline.top as usize;
+        let top_offset = (top_y * width + top_x) * 4;
+        assert_eq!(
+            &pixels[top_offset..top_offset + 4],
+            &[
+                expected_color.b,
+                expected_color.g,
+                expected_color.r,
+                expected_color.a,
+            ]
+        );
+    }
+
+    #[test]
     fn bottom_tooltip_uses_screen_bottom_geometry_width_clipping_and_theme_face() {
         let config = AppConfig::default();
         let state = EditorState::new(&config.theme, "test");

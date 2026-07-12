@@ -500,14 +500,13 @@ impl ToolbarState {
     }
 
     fn main_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let mut prefix = plain_span(if row == MAIN_LABEL_ROW {
-            "Mode: ".to_string()
+        let mut spans = if row == MAIN_LABEL_ROW {
+            vec![plain_span("Mode: ".to_string())]
         } else {
-            "1.    ".to_string()
-        });
-        prefix.highlighted =
-            row == MAIN_SHORTCUT_ROW && self.pending_shortcut() == Some(PendingShortcut::Mode);
-        let mut spans = vec![prefix];
+            let mut prefix = plain_span("1.".to_string());
+            prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Mode);
+            vec![prefix, plain_span("    ".to_string())]
+        };
         for (index, mode) in MainMode::ALL.iter().enumerate() {
             if index > 0 {
                 spans.push(plain_span(" ".to_string()));
@@ -532,7 +531,7 @@ impl ToolbarState {
             spans.push(ToolbarSpan {
                 contents: "0. Save/Load/Export".to_string(),
                 selected: self.export_open,
-                highlighted: self.pending_shortcut() == Some(PendingShortcut::ExportCategory),
+                highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::ToggleExportMenu),
                 right_aligned: true,
@@ -557,15 +556,26 @@ impl ToolbarState {
                     .map(|(option, _)| UnicodeWidthStr::width(*option))
                     .sum::<usize>()
                 + EXPORT_OPTIONS[category].len().saturating_sub(1);
-            let mut prefix = plain_span(if label_row {
-                pad_right_to_width(format!("{label}:"), prefix_width)
+            if label_row {
+                spans.push(plain_span(pad_right_to_width(
+                    format!("{label}:"),
+                    prefix_width,
+                )));
             } else {
-                pad_left_to_width(path, prefix_width - 1) + " "
-            });
-            prefix.highlighted = !label_row
-                && (self.pending_shortcut() == Some(PendingShortcut::ExportCategory)
-                    || self.pending_shortcut() == Some(PendingShortcut::ExportOption(category)));
-            spans.push(prefix);
+                let highlighted_prefix = match self.pending_shortcut() {
+                    Some(PendingShortcut::ExportCategory) => Some("0.".to_string()),
+                    Some(PendingShortcut::ExportOption(pending)) if pending == category => {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                };
+                push_shortcut_path(
+                    &mut spans,
+                    &path,
+                    prefix_width,
+                    highlighted_prefix.as_deref(),
+                );
+            }
             for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
                 if position > 0 {
                     spans.push(plain_span(" ".to_string()));
@@ -608,29 +618,36 @@ impl ToolbarState {
                 spans.push(plain_span(" ".repeat(cell_width)));
                 continue;
             }
-            let mut prefix = plain_span(if label_row {
+            if label_row {
                 if page == 0 {
-                    pad_right_to_width(format!("{}:", layout.labels[category]), prefix_width)
+                    spans.push(plain_span(pad_right_to_width(
+                        format!("{}:", layout.labels[category]),
+                        prefix_width,
+                    )));
                 } else {
-                    " ".repeat(prefix_width)
+                    spans.push(plain_span(" ".repeat(prefix_width)));
                 }
             } else {
-                pad_left_to_width(
-                    submenu_path(category, page, options.len()),
-                    prefix_width - 1,
-                ) + " "
-            });
-            prefix.highlighted = (matches!(
-                self.pending_shortcut(),
-                Some(PendingShortcut::Category(pending)) if pending == category
-            ) || matches!(
-                self.pending_shortcut(),
-                Some(PendingShortcut::Option {
-                    category: pending_category,
-                    page: pending_page,
-                }) if pending_category == category && pending_page == page
-            )) && !label_row;
-            spans.push(prefix);
+                let path = submenu_path(category, page, options.len());
+                let highlighted_prefix = match self.pending_shortcut() {
+                    Some(PendingShortcut::Category(pending)) if pending == category => {
+                        Some(format!("{}.", category + 2))
+                    }
+                    Some(PendingShortcut::Option {
+                        category: pending_category,
+                        page: pending_page,
+                    }) if pending_category == category && pending_page == page => {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                };
+                push_shortcut_path(
+                    &mut spans,
+                    &path,
+                    prefix_width,
+                    highlighted_prefix.as_deref(),
+                );
+            }
 
             for (position, option) in options[page_start..]
                 .iter()
@@ -836,9 +853,31 @@ fn pad_right_to_width(contents: String, width: usize) -> String {
     contents + &" ".repeat(padding)
 }
 
-fn pad_left_to_width(contents: String, width: usize) -> String {
-    let padding = width.saturating_sub(UnicodeWidthStr::width(contents.as_str()));
-    " ".repeat(padding) + &contents
+fn push_shortcut_path(
+    spans: &mut Vec<ToolbarSpan>,
+    path: &str,
+    prefix_width: usize,
+    highlighted_prefix: Option<&str>,
+) {
+    let path_width = UnicodeWidthStr::width(path);
+    let leading_padding = prefix_width.saturating_sub(path_width + 1);
+    if leading_padding > 0 {
+        spans.push(plain_span(" ".repeat(leading_padding)));
+    }
+
+    if let Some(highlighted) = highlighted_prefix.filter(|prefix| path.starts_with(prefix)) {
+        let mut span = plain_span(highlighted.to_string());
+        span.highlighted = true;
+        spans.push(span);
+        if let Some(remainder) = path.strip_prefix(highlighted)
+            && !remainder.is_empty()
+        {
+            spans.push(plain_span(remainder.to_string()));
+        }
+    } else {
+        spans.push(plain_span(path.to_string()));
+    }
+    spans.push(plain_span(" ".to_string()));
 }
 
 fn menu_prefix_width<'a>(label: &str, paths: impl IntoIterator<Item = &'a str>) -> usize {
@@ -976,6 +1015,19 @@ mod tests {
             .into_iter()
             .find_map(|(start, span)| (span.contents.trim() == prefix).then_some(start))
             .unwrap_or_else(|| panic!("prefix {prefix:?} missing from {:?}", spans_text(spans)))
+    }
+
+    fn path_cell_start(spans: &[ToolbarSpan], path: &str, prefix_width: usize) -> usize {
+        prefix_start(spans, path)
+            .saturating_sub(prefix_width.saturating_sub(UnicodeWidthStr::width(path) + 1))
+    }
+
+    fn highlighted_contents(spans: &[ToolbarSpan]) -> Vec<&str> {
+        spans
+            .iter()
+            .filter(|span| span.highlighted)
+            .map(|span| span.contents.as_str())
+            .collect()
     }
 
     fn option_start(spans: &[ToolbarSpan], category: usize, option: usize) -> usize {
@@ -1169,7 +1221,12 @@ mod tests {
                     let label_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2);
                     let shortcut_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
                     let path = submenu_path(category, page, options.len());
-                    assert_eq!(prefix_start(&shortcut_spans, &path), expected.0);
+                    let prefix_width =
+                        submenu_prefix_width(layout.labels[category], category, options.len());
+                    assert_eq!(
+                        path_cell_start(&shortcut_spans, &path, prefix_width),
+                        expected.0
+                    );
                     assert_eq!(
                         option_start(&label_spans, category, page * OPTIONS_PER_PAGE),
                         expected.1
@@ -1192,28 +1249,59 @@ mod tests {
         let page_two = toolbar.toolbar_spans(MENU_FIRST_ROW + 3);
         let page_three = toolbar.toolbar_spans(MENU_FIRST_ROW + 5);
         assert_eq!(
-            prefix_start(&page_one, "2.1."),
-            prefix_start(&page_two, "2.2.")
+            path_cell_start(
+                &page_one,
+                "2.1.",
+                submenu_prefix_width(STAMP_LABELS[0], 0, STAMP_OPTIONS[0].len()),
+            ),
+            path_cell_start(
+                &page_two,
+                "2.2.",
+                submenu_prefix_width(STAMP_LABELS[0], 0, STAMP_OPTIONS[0].len()),
+            )
         );
         assert_eq!(
-            prefix_start(&page_one, "3.1."),
-            prefix_start(&page_two, "3.2.")
+            path_cell_start(
+                &page_one,
+                "3.1.",
+                submenu_prefix_width(STAMP_LABELS[1], 1, STAMP_OPTIONS[1].len()),
+            ),
+            path_cell_start(
+                &page_two,
+                "3.2.",
+                submenu_prefix_width(STAMP_LABELS[1], 1, STAMP_OPTIONS[1].len()),
+            )
         );
         assert_eq!(
-            prefix_start(&page_one, "3.1."),
-            prefix_start(&page_three, "3.3.")
+            path_cell_start(
+                &page_one,
+                "3.1.",
+                submenu_prefix_width(STAMP_LABELS[1], 1, STAMP_OPTIONS[1].len()),
+            ),
+            path_cell_start(
+                &page_three,
+                "3.3.",
+                submenu_prefix_width(STAMP_LABELS[1], 1, STAMP_OPTIONS[1].len()),
+            )
         );
         assert_eq!(
-            prefix_start(&page_one, "5.1."),
-            prefix_start(&page_two, "5.2.")
+            path_cell_start(
+                &page_one,
+                "5.1.",
+                submenu_prefix_width(STAMP_LABELS[3], 3, STAMP_OPTIONS[3].len()),
+            ),
+            path_cell_start(
+                &page_two,
+                "5.2.",
+                submenu_prefix_width(STAMP_LABELS[3], 3, STAMP_OPTIONS[3].len()),
+            )
         );
 
-        let fills_start = prefix_start(&page_one, "4.");
-        let fills_cell_width = submenu_cell_width(
-            submenu_prefix_width(STAMP_LABELS[2], 2, STAMP_OPTIONS[2].len()),
-            STAMP_OPTIONS[2],
-        );
-        let blocks_start = prefix_start(&page_two, "5.2.");
+        let fills_prefix_width = submenu_prefix_width(STAMP_LABELS[2], 2, STAMP_OPTIONS[2].len());
+        let fills_start = path_cell_start(&page_one, "4.", fills_prefix_width);
+        let fills_cell_width = submenu_cell_width(fills_prefix_width, STAMP_OPTIONS[2]);
+        let blocks_prefix_width = submenu_prefix_width(STAMP_LABELS[3], 3, STAMP_OPTIONS[3].len());
+        let blocks_start = path_cell_start(&page_two, "5.2.", blocks_prefix_width);
         assert_eq!(
             blocks_start,
             fills_start + fills_cell_width + UnicodeWidthStr::width(GAP)
@@ -1230,7 +1318,14 @@ mod tests {
         for (category, label) in EXPORT_LABELS.iter().enumerate() {
             assert_eq!(
                 prefix_start(&labels, &format!("{label}:")),
-                prefix_start(&shortcuts, &format!("0.{}.", category + 1))
+                path_cell_start(
+                    &shortcuts,
+                    &format!("0.{}.", category + 1),
+                    menu_prefix_width(
+                        label,
+                        std::iter::once(format!("0.{}.", category + 1).as_str()),
+                    ),
+                )
             );
             let action = ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1);
             let label_option = span_starts(&labels)
@@ -1291,6 +1386,147 @@ mod tests {
                 .iter()
                 .all(|span| !span.highlighted)
         );
+    }
+
+    #[test]
+    fn multi_page_category_highlights_only_its_common_prefix_on_every_page() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        for (key, prefix, page_count) in [("2", "2.", 2), ("3", "3.", 3), ("5", "5.", 2)] {
+            press(&mut toolbar, key);
+            for page in 0..page_count {
+                assert_eq!(
+                    highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1)),
+                    vec![prefix]
+                );
+            }
+            toolbar.cancel_shortcut();
+        }
+    }
+
+    #[test]
+    fn selected_page_highlights_one_contiguous_complete_path() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        press(&mut toolbar, "2");
+        press(&mut toolbar, "1");
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["2.1."]
+        );
+        assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 3)).is_empty());
+    }
+
+    #[test]
+    fn flattened_category_highlights_only_its_complete_category_path() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        press(&mut toolbar, "4");
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["4."]
+        );
+    }
+
+    #[test]
+    fn export_prefix_highlighting_follows_category_then_page_hierarchy() {
+        let mut toolbar = ToolbarState::default();
+
+        press(&mut toolbar, "0");
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["0.", "0.", "0."]
+        );
+        assert!(
+            toolbar
+                .toolbar_spans(MAIN_LABEL_ROW)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
+
+        press(&mut toolbar, "2");
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["0.2."]
+        );
+    }
+
+    #[test]
+    fn cancellation_and_completion_clear_exact_prefix_highlights() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        press(&mut toolbar, "3");
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["3."]
+        );
+        assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        for page in 0..3 {
+            assert!(
+                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1))
+                    .is_empty()
+            );
+        }
+
+        for key in ["3", "3", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.pending_shortcut(), None);
+        for page in 0..3 {
+            assert!(
+                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1))
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn split_prefix_spans_preserve_category_and_option_column_alignment() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        let baseline: Vec<_> = (0..3)
+            .map(|page| {
+                let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+                (
+                    prefix_start(&spans, &format!("3.{}.", page + 1)),
+                    option_start(&spans, 1, page * OPTIONS_PER_PAGE),
+                )
+            })
+            .collect();
+
+        press(&mut toolbar, "3");
+        for (page, expected) in baseline.into_iter().enumerate() {
+            let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+            let common_prefix_start = span_starts(&spans)
+                .into_iter()
+                .find_map(|(start, span)| {
+                    (span.highlighted && span.contents == "3.").then_some(start)
+                })
+                .unwrap();
+            assert_eq!(common_prefix_start, expected.0);
+            assert_eq!(option_start(&spans, 1, page * OPTIONS_PER_PAGE), expected.1);
+        }
+    }
+
+    #[test]
+    fn exact_highlight_spans_survive_narrow_box_clipping_without_width_drift() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        press(&mut toolbar, "2");
+
+        for width in 8..48 {
+            let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width);
+            assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
+            let highlighted = highlighted_contents(&spans);
+            assert!(
+                highlighted.is_empty()
+                    || (highlighted.len() == 1 && "2.".starts_with(highlighted[0]))
+            );
+        }
     }
 
     #[test]
