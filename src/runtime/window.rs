@@ -138,10 +138,31 @@ impl EditorWindow {
         let prepend = self.state.take_pending_prepend();
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
+        let toolbar_metrics = self.renderer.title_metrics(scale_factor);
+        reanchor_toolbar_transition(
+            &mut self.viewport,
+            scale_factor,
+            self.transparent_menubar,
+            toolbar_metrics.cell_height,
+            &previous_state.toolbar,
+            &self.state.toolbar,
+        );
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
         self.viewport
             .compensate_for_prepend(prepend.0, prepend.1, cell_size);
+
+        // A toolbar-only transition can temporarily clip anchored cells. Do
+        // not let viewport normalization turn the exact pixel compensation
+        // above into an unrelated canvas pan. Navigation and document edits
+        // still take the normal constrained path below.
+        if !document_changed
+            && prepend == (0, 0)
+            && self.state.grid.cursor_pos == previous_state.grid.cursor_pos
+        {
+            return false;
+        }
+
         let current = self.viewport.origin(cell_size);
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let content = self.state.content_cells();
@@ -457,12 +478,151 @@ fn grid_top(
         + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height)
 }
 
+fn reanchor_toolbar_transition(
+    viewport: &mut ViewportOffset,
+    scale_factor: f64,
+    transparent_menubar: bool,
+    toolbar_cell_height: usize,
+    old_toolbar: &crate::toolbar::ToolbarState,
+    new_toolbar: &crate::toolbar::ToolbarState,
+) {
+    let old_grid_top = grid_top(
+        scale_factor,
+        transparent_menubar,
+        toolbar_cell_height,
+        old_toolbar,
+    );
+    let new_grid_top = grid_top(
+        scale_factor,
+        transparent_menubar,
+        toolbar_cell_height,
+        new_toolbar,
+    );
+    viewport.reanchor_grid_top(old_grid_top, new_grid_top);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::AppConfig;
+    use crate::layout::PADDING;
     use crate::model::{Atom, Direction, Face};
     use crate::toolbar::{MainMode, ToolbarAction};
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    fn toolbar_test_metrics(config: &AppConfig) -> (usize, (usize, usize)) {
+        let renderer = load_renderer(config);
+        let toolbar = renderer.title_metrics(1.0);
+        let canvas = renderer.metrics(1.0);
+        (toolbar.cell_height, (canvas.cell_width, canvas.cell_height))
+    }
+
+    fn canvas_screen_position(
+        coord: Coord,
+        grid_top: usize,
+        cell_size: (usize, usize),
+        viewport: ViewportOffset,
+    ) -> (i64, i64) {
+        (
+            PADDING as i64 + coord.column as i64 * cell_size.0 as i64 + viewport.x,
+            grid_top as i64 + coord.line as i64 * cell_size.1 as i64 + viewport.y,
+        )
+    }
+
+    fn assert_toolbar_transition_is_anchored(
+        config: &AppConfig,
+        old_toolbar: &crate::toolbar::ToolbarState,
+        new_toolbar: &crate::toolbar::ToolbarState,
+        viewport: &mut ViewportOffset,
+        toolbar_cell_height: usize,
+        cell_size: (usize, usize),
+    ) {
+        let old_grid_top = grid_top(
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            old_toolbar,
+        );
+        let new_grid_top = grid_top(
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            new_toolbar,
+        );
+        let before = [
+            Coord::default(),
+            Coord { line: 3, column: 7 },
+            Coord {
+                line: 19,
+                column: 2,
+            },
+        ]
+        .map(|coord| canvas_screen_position(coord, old_grid_top, cell_size, *viewport));
+        let horizontal = viewport.x;
+
+        reanchor_toolbar_transition(
+            viewport,
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            old_toolbar,
+            new_toolbar,
+        );
+
+        assert_eq!(viewport.x, horizontal);
+        assert_eq!(
+            [
+                Coord::default(),
+                Coord { line: 3, column: 7 },
+                Coord {
+                    line: 19,
+                    column: 2,
+                },
+            ]
+            .map(|coord| { canvas_screen_position(coord, new_grid_top, cell_size, *viewport) }),
+            before
+        );
+    }
+
+    fn apply_mouse_toolbar_transition(
+        state: &mut EditorState,
+        action: ToolbarAction,
+        viewport: &mut ViewportOffset,
+        config: &AppConfig,
+        toolbar_cell_height: usize,
+        cell_size: (usize, usize),
+    ) {
+        let old_toolbar = state.toolbar.clone();
+        assert!(state.apply_toolbar_action(action));
+        assert_toolbar_transition_is_anchored(
+            config,
+            &old_toolbar,
+            &state.toolbar,
+            viewport,
+            toolbar_cell_height,
+            cell_size,
+        );
+    }
+
+    fn apply_keyboard_toolbar_transition(
+        state: &mut EditorState,
+        key: Key,
+        viewport: &mut ViewportOffset,
+        config: &AppConfig,
+        toolbar_cell_height: usize,
+        cell_size: (usize, usize),
+    ) {
+        let old_toolbar = state.toolbar.clone();
+        assert!(state.handle_toolbar_shortcut(&key, ModifiersState::empty()));
+        assert_toolbar_transition_is_anchored(
+            config,
+            &old_toolbar,
+            &state.toolbar,
+            viewport,
+            toolbar_cell_height,
+            cell_size,
+        );
+    }
 
     #[test]
     fn autosave_requires_a_change_and_more_than_five_idle_seconds() {
@@ -870,5 +1030,186 @@ mod tests {
         assert_eq!(cursor_before, cursor);
         assert_eq!(cursor_after, content[0]);
         assert!(cursor_is_visible(origin_after, cursor_after, (24, 10)));
+    }
+
+    #[test]
+    fn keyboard_and_mouse_mode_height_changes_keep_every_canvas_cell_anchored() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+        let mut state = EditorState::new(&config.theme, "test");
+        let mut viewport = ViewportOffset { x: -13, y: 17 };
+
+        for mode in [MainMode::Utilities, MainMode::Stamp, MainMode::Shapes] {
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::SelectMain(mode),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::SelectMain(MainMode::Line),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+        }
+
+        for digit in ["2", "3", "4", "1"] {
+            apply_keyboard_toolbar_transition(
+                &mut state,
+                Key::Character("1".into()),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+            apply_keyboard_toolbar_transition(
+                &mut state,
+                Key::Character(digit.into()),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+        }
+
+        assert_eq!(viewport, ViewportOffset { x: -13, y: 17 });
+    }
+
+    #[test]
+    fn large_line_and_compact_utils_menu_cycles_have_no_drift() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+        let mut state = EditorState::new(&config.theme, "test");
+        let initial = ViewportOffset { x: 21, y: -37 };
+        let mut viewport = initial;
+
+        assert!(
+            state.toolbar.rows() > {
+                let mut compact = state.toolbar.clone();
+                compact.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+                compact.rows()
+            }
+        );
+        for _ in 0..20 {
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::SelectMain(MainMode::Utilities),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::SelectMain(MainMode::Line),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+        }
+
+        assert_eq!(viewport, initial);
+    }
+
+    #[test]
+    fn export_open_category_escape_and_action_close_round_trips_are_anchored() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+        let mut state = EditorState::new(&config.theme, "test");
+        let initial = ViewportOffset { x: -8, y: 29 };
+        let mut viewport = initial;
+
+        apply_keyboard_toolbar_transition(
+            &mut state,
+            Key::Character("0".into()),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        apply_keyboard_toolbar_transition(
+            &mut state,
+            Key::Character("2".into()),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        apply_keyboard_toolbar_transition(
+            &mut state,
+            Key::Named(NamedKey::Escape),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        assert_eq!(viewport, initial);
+
+        for _ in 0..12 {
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::ToggleExportMenu,
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+            apply_mouse_toolbar_transition(
+                &mut state,
+                ToolbarAction::SelectExportCategory(3),
+                &mut viewport,
+                &config,
+                toolbar_cell_height,
+                cell_size,
+            );
+        }
+        assert_eq!(viewport, initial);
+    }
+
+    #[test]
+    fn export_close_then_document_edit_records_one_coherent_anchored_viewport() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+        let mut state = EditorState::new(&config.theme, "test");
+        state.insert("drawing");
+        let mut viewport = ViewportOffset { x: 4, y: -23 };
+
+        apply_mouse_toolbar_transition(
+            &mut state,
+            ToolbarAction::ToggleExportMenu,
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        apply_mouse_toolbar_transition(
+            &mut state,
+            ToolbarAction::SelectExportCategory(3),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        let closed_viewport = viewport;
+        let previous = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport,
+        };
+        state.clear_canvas();
+        let current = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport,
+        };
+        let mut history = EditHistory::default();
+
+        assert!(history.record_change(previous.clone(), &current));
+        assert_eq!(history.undo(current), Some(previous));
+        assert_eq!(closed_viewport, viewport);
     }
 }

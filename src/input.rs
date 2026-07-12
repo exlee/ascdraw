@@ -351,13 +351,31 @@ pub fn pointer_position_to_coord(
     let toolbar_metrics = renderer.title_metrics(scale_factor);
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
         + crate::toolbar::toolbar_height(toolbar, toolbar_metrics.cell_height);
+    pointer_position_to_coord_with_metrics(
+        x,
+        y,
+        grid_top,
+        metrics.cell_width,
+        metrics.cell_height,
+        viewport,
+    )
+}
+
+fn pointer_position_to_coord_with_metrics(
+    x: f64,
+    y: f64,
+    grid_top: usize,
+    cell_width: usize,
+    cell_height: usize,
+    viewport: ViewportOffset,
+) -> Option<Coord> {
     let grid_x = x - PADDING as f64 - viewport.x as f64;
     let grid_y = y - grid_top as f64 - viewport.y as f64;
     if grid_x < 0.0 || grid_y < 0.0 {
         return None;
     }
-    let column = (grid_x / metrics.cell_width.max(1) as f64).floor() as usize;
-    let line = (grid_y / metrics.cell_height.max(1) as f64).floor() as usize;
+    let column = (grid_x / cell_width.max(1) as f64).floor() as usize;
+    let line = (grid_y / cell_height.max(1) as f64).floor() as usize;
     Some(Coord { line, column })
 }
 
@@ -539,6 +557,49 @@ mod tests {
                 toolbar.rows(),
             ),
             Some((last_content_row, 4, 40))
+        );
+    }
+
+    #[test]
+    fn pointer_mapping_keeps_an_anchored_cell_across_grid_top_changes() {
+        let cell_width = 8;
+        let cell_height = 16;
+        let coord = Coord { line: 6, column: 9 };
+        let old_grid_top = 44;
+        let new_grid_top = 172;
+        let mut viewport = ViewportOffset { x: -5, y: 11 };
+        let screen_x = PADDING as i64
+            + coord.column as i64 * cell_width as i64
+            + viewport.x
+            + cell_width as i64 / 2;
+        let screen_y = old_grid_top as i64
+            + coord.line as i64 * cell_height as i64
+            + viewport.y
+            + cell_height as i64 / 2;
+
+        assert_eq!(
+            pointer_position_to_coord_with_metrics(
+                screen_x as f64,
+                screen_y as f64,
+                old_grid_top,
+                cell_width,
+                cell_height,
+                viewport,
+            ),
+            Some(coord)
+        );
+
+        viewport.reanchor_grid_top(old_grid_top, new_grid_top);
+        assert_eq!(
+            pointer_position_to_coord_with_metrics(
+                screen_x as f64,
+                screen_y as f64,
+                new_grid_top,
+                cell_width,
+                cell_height,
+                viewport,
+            ),
+            Some(coord)
         );
     }
 

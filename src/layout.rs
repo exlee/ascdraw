@@ -26,6 +26,14 @@ pub struct ViewportOffset {
 }
 
 impl ViewportOffset {
+    /// Keeps the canvas-to-screen transform stable when only the top edge of
+    /// the grid moves (for example, because the toolbar changes height).
+    pub fn reanchor_grid_top(&mut self, old_grid_top: usize, new_grid_top: usize) {
+        self.y = self
+            .y
+            .saturating_add(old_grid_top as i64 - new_grid_top as i64);
+    }
+
     pub fn compensate_for_prepend(
         &mut self,
         columns: usize,
@@ -69,9 +77,9 @@ impl ViewportOffset {
         self.x = self
             .x
             .saturating_add(cell_delta(cursor.column, old_cell_size.0, new_cell_size.0));
+        self.reanchor_grid_top(old_grid_top, new_grid_top);
         self.y = self
             .y
-            .saturating_add(old_grid_top as i64 - new_grid_top as i64)
             .saturating_add(cell_delta(cursor.line, old_cell_size.1, new_cell_size.1));
     }
 }

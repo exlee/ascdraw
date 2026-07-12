@@ -260,7 +260,14 @@ fn try_main() -> Result<ExitCode> {
                                 editor.state.cursor_mode,
                             ) == Some(EditCommand::CancelTextEntry)
                             {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
                                 editor.state.cancel_text_entry();
+                                editor.finish_state_change(
+                                    previous_state,
+                                    previous_viewport,
+                                    false,
+                                );
                                 editor.request_redraw();
                             } else if let Some(action) =
                                 user_keys.action_for_event(&event, editor.modifiers)
@@ -323,8 +330,14 @@ fn try_main() -> Result<ExitCode> {
                                         editor.state.toolbar.action_at(row, column, width)
                                     });
                             if let Some(action) = toolbar_action {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
                                 editor.state.apply_toolbar_action(action);
-                                editor.ensure_cursor_in_viewport();
+                                editor.finish_state_change(
+                                    previous_state,
+                                    previous_viewport,
+                                    false,
+                                );
                                 perform_pending_export(editor);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
