@@ -18,6 +18,25 @@ pub struct SelectionBounds {
     pub bottom: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanvasRegion {
+    pub left: i64,
+    pub top: i64,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl CanvasRegion {
+    pub fn from_selection(bounds: SelectionBounds) -> Self {
+        Self {
+            left: i64::try_from(bounds.left).unwrap_or(i64::MAX),
+            top: i64::try_from(bounds.top).unwrap_or(i64::MAX),
+            width: bounds.width(),
+            height: bounds.height(),
+        }
+    }
+}
+
 impl CanvasSelection {
     pub fn collapsed_at(coord: Coord) -> Self {
         Self {
@@ -156,6 +175,58 @@ pub fn selected_atoms(lines: &[Vec<Atom>], bounds: SelectionBounds) -> Vec<Vec<A
             selected_line_atoms(line, bounds.left, bounds.right)
         })
         .collect()
+}
+
+pub fn region_atoms(lines: &[Vec<Atom>], region: CanvasRegion) -> Vec<Vec<Atom>> {
+    (0..region.height)
+        .map(|row_offset| {
+            let row = region
+                .top
+                .saturating_add(i64::try_from(row_offset).unwrap_or(i64::MAX));
+            let line = usize::try_from(row)
+                .ok()
+                .and_then(|row| lines.get(row))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            signed_line_atoms(line, region.left, region.width)
+        })
+        .collect()
+}
+
+pub fn region_text(lines: &[Vec<Atom>], region: CanvasRegion) -> String {
+    region_atoms(lines, region)
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn signed_line_atoms(line: &[Atom], left: i64, width: usize) -> Vec<Atom> {
+    let leading = if left < 0 {
+        usize::try_from(left.saturating_neg())
+            .unwrap_or(usize::MAX)
+            .min(width)
+    } else {
+        0
+    };
+    let mut result: Vec<_> = (0..leading).map(|_| blank_atom()).collect();
+    let remaining = width.saturating_sub(leading);
+    let Ok(left) = usize::try_from(left.max(0)) else {
+        result.extend((0..remaining).map(|_| blank_atom()));
+        return result;
+    };
+    if remaining > 0 {
+        result.extend(selected_line_atoms(
+            line,
+            left,
+            left.saturating_add(remaining - 1),
+        ));
+    }
+    result
 }
 
 fn selected_line_atoms(line: &[Atom], left: usize, right: usize) -> Vec<Atom> {
@@ -346,6 +417,7 @@ fn push_spaces(target: &mut String, count: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ThemeConfig;
 
     fn atoms(text: &[&str]) -> Vec<Atom> {
         text.iter()
@@ -469,6 +541,65 @@ mod tests {
                 }
             ),
             "a xz"
+        );
+    }
+
+    #[test]
+    fn signed_region_preserves_outside_blanks_rows_faces_and_trailing_width() {
+        let special = ThemeConfig::default().selection;
+        let lines = vec![
+            vec![
+                Atom {
+                    face: special.clone(),
+                    contents: "a".to_string(),
+                },
+                Atom {
+                    face: Face::default(),
+                    contents: "b".to_string(),
+                },
+            ],
+            Vec::new(),
+        ];
+        let region = CanvasRegion {
+            left: -1,
+            top: -1,
+            width: 4,
+            height: 4,
+        };
+
+        let extracted = region_atoms(&lines, region);
+        assert_eq!(region_text(&lines, region), "    \n ab \n    \n    ");
+        assert!(extracted.iter().all(|row| display_width(row) == 4));
+        assert_eq!(extracted[1][1].face, special);
+    }
+
+    #[test]
+    fn signed_region_blanks_cells_that_cut_wide_grapheme_boundaries() {
+        let lines = vec![atoms(&["a", "😀", "z"])];
+
+        assert_eq!(
+            region_text(
+                &lines,
+                CanvasRegion {
+                    left: 2,
+                    top: 0,
+                    width: 2,
+                    height: 1,
+                },
+            ),
+            " z"
+        );
+        assert_eq!(
+            region_text(
+                &lines,
+                CanvasRegion {
+                    left: 0,
+                    top: 0,
+                    width: 2,
+                    height: 1,
+                },
+            ),
+            "a "
         );
     }
 

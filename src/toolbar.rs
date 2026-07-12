@@ -297,7 +297,7 @@ impl Tooltip {
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
-                "TXT/JSON export selection only; PNG canvas-only screenshot is deferred"
+                "TXT exports selection or visible viewport; JSON exports the whole project; PNG is deferred"
             }
             Self::Selection => "Esc cancels selection; Space/Backspace clears, r then KEY for replace all",
         };
@@ -2547,7 +2547,7 @@ mod tests {
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
         assert_eq!(toolbar.tooltip(), Tooltip::Export);
-        assert!(toolbar.tooltip().text().contains("export selection only"));
+        assert!(toolbar.tooltip().text().contains("visible viewport"));
     }
 
     #[test]

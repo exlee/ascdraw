@@ -21,6 +21,39 @@ pub struct LayoutMetrics {
     pub tooltip_visible: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibleCanvasCells {
+    pub origin: (i64, i64),
+    pub columns: usize,
+    pub rows: usize,
+}
+
+impl VisibleCanvasCells {
+    pub fn from_layout(
+        layout: LayoutMetrics,
+        viewport: ViewportOffset,
+        cell_size: (usize, usize),
+    ) -> Self {
+        let (left, columns) = visible_axis(viewport.x, cell_size.0, layout.cols);
+        let (top, rows) = visible_axis(viewport.y, cell_size.1, layout.rows);
+        Self {
+            origin: (left, top),
+            columns,
+            rows,
+        }
+    }
+}
+
+fn visible_axis(offset: i64, cell_size: usize, full_cells: usize) -> (i64, usize) {
+    let cell_size = i64::try_from(cell_size.max(1)).unwrap_or(i64::MAX);
+    let origin = offset.saturating_neg().div_euclid(cell_size);
+    let has_partial_cell = offset.rem_euclid(cell_size) != 0;
+    (
+        origin,
+        full_cells.saturating_add(usize::from(has_partial_cell)),
+    )
+}
+
 /// Renderer-pixel translation applied to the canvas.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -353,6 +386,86 @@ fn layout_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::toolbar::{MainMode, ToolbarAction};
+
+    #[test]
+    fn visible_canvas_cells_include_residual_pixels_and_signed_origins() {
+        let layout = LayoutMetrics {
+            top_padding: 20,
+            grid_top: 100,
+            cols: 12,
+            rows: 7,
+            grid_bottom: 212,
+            tooltip_top: 240,
+            tooltip_visible: true,
+        };
+
+        assert_eq!(
+            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: -16, y: 32 }, (8, 16),),
+            VisibleCanvasCells {
+                origin: (2, -2),
+                columns: 12,
+                rows: 7,
+            }
+        );
+        assert_eq!(
+            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: 3, y: -17 }, (8, 16),),
+            VisibleCanvasCells {
+                origin: (-1, 1),
+                columns: 13,
+                rows: 8,
+            }
+        );
+    }
+
+    #[test]
+    fn visible_export_rows_follow_dynamic_toolbar_height() {
+        let menu_heights = [
+            MainMode::Stamp,
+            MainMode::Line,
+            MainMode::Shapes,
+            MainMode::Utilities,
+        ]
+        .map(|mode| {
+            let mut toolbar = ToolbarState::default();
+            toolbar.apply_action(ToolbarAction::SelectMain(mode));
+            toolbar.rows()
+        });
+        let compact_rows = *menu_heights.iter().min().unwrap();
+        let expanded_rows = *menu_heights.iter().max().unwrap();
+        assert!(expanded_rows > compact_rows);
+
+        let available_rows = 20usize;
+        let compact_layout = LayoutMetrics {
+            top_padding: 0,
+            grid_top: compact_rows,
+            cols: 10,
+            rows: available_rows.saturating_sub(compact_rows),
+            grid_bottom: available_rows,
+            tooltip_top: available_rows,
+            tooltip_visible: false,
+        };
+        let expanded_layout = LayoutMetrics {
+            top_padding: 0,
+            grid_top: expanded_rows,
+            cols: 10,
+            rows: available_rows.saturating_sub(expanded_rows),
+            grid_bottom: available_rows,
+            tooltip_top: available_rows,
+            tooltip_visible: false,
+        };
+
+        assert!(
+            VisibleCanvasCells::from_layout(compact_layout, ViewportOffset::default(), (1, 1),)
+                .rows
+                > VisibleCanvasCells::from_layout(
+                    expanded_layout,
+                    ViewportOffset::default(),
+                    (1, 1),
+                )
+                .rows
+        );
+    }
 
     #[test]
     fn transparent_menubar_uses_fixed_point_top_inset() {

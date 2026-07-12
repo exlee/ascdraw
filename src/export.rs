@@ -7,9 +7,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::editor::EditorState;
-use crate::layout::ViewportOffset;
+use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Atom, Face};
-use crate::selection::CanvasSelection;
+use crate::selection::{CanvasRegion, CanvasSelection, region_atoms};
 use crate::toolbar::DurableMenuSelections;
 
 const PROJECT_FORMAT: &str = "ascdraw";
@@ -128,18 +128,19 @@ pub fn perform(
     action: ExportAction,
     state: &mut EditorState,
     viewport: &mut ViewportOffset,
+    visible_canvas: VisibleCanvasCells,
     platform: &mut impl ExportPlatform,
 ) -> Result<ExportOutcome> {
     match action {
         ExportAction::ClipboardTxt => {
-            platform.set_clipboard_text(&state.selected_text())?;
+            platform.set_clipboard_text(&text_export(state, visible_canvas))?;
             Ok(ExportOutcome::Unchanged)
         }
         ExportAction::SaveTxt => {
             let Some(path) = platform.choose_save_path(FileKind::Txt) else {
                 return Ok(ExportOutcome::Unchanged);
             };
-            fs::write(&path, state.selected_text())
+            fs::write(&path, text_export(state, visible_canvas))
                 .with_context(|| format!("failed to write {}", path.display()))?;
             Ok(ExportOutcome::Unchanged)
         }
@@ -188,6 +189,44 @@ pub fn perform(
         }
         ExportAction::ClipboardPng | ExportAction::SavePng => Ok(ExportOutcome::Unchanged),
     }
+}
+
+fn text_export(state: &EditorState, visible_canvas: VisibleCanvasCells) -> String {
+    canvas_atoms_for_export(state, visible_canvas)
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn canvas_region_for_export(
+    state: &EditorState,
+    visible_canvas: VisibleCanvasCells,
+) -> CanvasRegion {
+    if state.selection.is_collapsed() {
+        CanvasRegion {
+            left: visible_canvas.origin.0,
+            top: visible_canvas.origin.1,
+            width: visible_canvas.columns,
+            height: visible_canvas.rows,
+        }
+    } else {
+        CanvasRegion::from_selection(state.selection_bounds())
+    }
+}
+
+pub fn canvas_atoms_for_export(
+    state: &EditorState,
+    visible_canvas: VisibleCanvasCells,
+) -> Vec<Vec<Atom>> {
+    region_atoms(
+        &state.grid.lines,
+        canvas_region_for_export(state, visible_canvas),
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -518,7 +557,17 @@ mod tests {
         state: &mut EditorState,
         platform: &mut MockPlatform,
     ) -> Result<ExportOutcome> {
-        perform(action, state, &mut ViewportOffset::default(), platform)
+        perform(
+            action,
+            state,
+            &mut ViewportOffset::default(),
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 1,
+                rows: 1,
+            },
+            platform,
+        )
     }
 
     #[test]
@@ -530,6 +579,105 @@ mod tests {
             ExportOutcome::Unchanged
         );
         assert_eq!(platform.clipboard.as_deref(), Some("ab\ncd"));
+    }
+
+    #[test]
+    fn collapsed_selection_exports_signed_viewport_with_blank_padding_and_trailing_cells() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("abc\nde");
+        let before = state.edit_snapshot();
+        let mut viewport = ViewportOffset { x: 13, y: -7 };
+        let mut platform = MockPlatform::default();
+
+        assert_eq!(
+            perform(
+                ExportAction::ClipboardTxt,
+                &mut state,
+                &mut viewport,
+                VisibleCanvasCells {
+                    origin: (-1, 0),
+                    columns: 5,
+                    rows: 3,
+                },
+                &mut platform,
+            )
+            .unwrap(),
+            ExportOutcome::Unchanged
+        );
+
+        assert_eq!(platform.clipboard.as_deref(), Some(" abc \n de  \n     "));
+        assert_eq!(state.edit_snapshot(), before);
+        assert_eq!(viewport, ViewportOffset { x: 13, y: -7 });
+    }
+
+    #[test]
+    fn expanded_selection_overrides_viewport_and_clipboard_matches_saved_txt() {
+        let path = temp_path("txt");
+        let mut state = state_with_selection();
+        let visible = VisibleCanvasCells {
+            origin: (-20, -10),
+            columns: 2,
+            rows: 1,
+        };
+        let mut viewport = ViewportOffset::default();
+        let before = state.edit_snapshot();
+        let mut clipboard = MockPlatform::default();
+        perform(
+            ExportAction::ClipboardTxt,
+            &mut state,
+            &mut viewport,
+            visible,
+            &mut clipboard,
+        )
+        .unwrap();
+        let mut save = MockPlatform {
+            save: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        perform(
+            ExportAction::SaveTxt,
+            &mut state,
+            &mut viewport,
+            visible,
+            &mut save,
+        )
+        .unwrap();
+
+        assert_eq!(clipboard.clipboard.as_deref(), Some("ab\ncd"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "ab\ncd");
+        assert_eq!(state.edit_snapshot(), before);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn json_save_remains_whole_project_when_selection_and_viewport_are_smaller() {
+        let path = temp_path("json");
+        let mut state = state_with_selection();
+        state.grid.lines.push(row_atoms("outside"));
+        let mut viewport = ViewportOffset::default();
+        let mut platform = MockPlatform {
+            save: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        perform(
+            ExportAction::SaveJson,
+            &mut state,
+            &mut viewport,
+            VisibleCanvasCells {
+                origin: (1, 1),
+                columns: 1,
+                rows: 1,
+            },
+            &mut platform,
+        )
+        .unwrap();
+
+        let saved = fs::read_to_string(&path).unwrap();
+        let LoadedJson::Project(project) = project_from_json(&saved).unwrap() else {
+            panic!("expected project document");
+        };
+        assert_eq!(contents(project.lines.last().unwrap()), "outside");
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -795,6 +943,11 @@ mod tests {
                 ExportAction::LoadJson,
                 &mut target,
                 &mut target_viewport,
+                VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut platform,
             )
             .unwrap(),
@@ -849,6 +1002,11 @@ mod tests {
                 ExportAction::SaveJson,
                 &mut state,
                 &mut actual_viewport,
+                VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut platform,
             )
             .unwrap(),
@@ -883,6 +1041,11 @@ mod tests {
             ExportAction::LoadJson,
             &mut target,
             &mut viewport,
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
             &mut platform,
         )
         .unwrap_err();

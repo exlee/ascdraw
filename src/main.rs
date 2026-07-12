@@ -461,11 +461,13 @@ fn perform_pending_export(editor: &mut EditorWindow) {
     };
     let previous_state = editor.state.clone();
     let previous_viewport = editor.viewport;
+    let visible_canvas = editor.visible_canvas_cells();
     let mut platform = NativeExportPlatform;
     let outcome = perform_export_action(
         action,
         &mut editor.state,
         &mut editor.viewport,
+        visible_canvas,
         &mut platform,
     );
     if action.is_png() {
@@ -496,9 +498,10 @@ fn perform_export_action(
     action: export::ExportAction,
     state: &mut EditorState,
     viewport: &mut layout::ViewportOffset,
+    visible_canvas: layout::VisibleCanvasCells,
     platform: &mut impl export::ExportPlatform,
 ) -> anyhow::Result<ExportOutcome> {
-    let outcome = export::perform(action, state, viewport, platform);
+    let outcome = export::perform(action, state, viewport, visible_canvas, platform);
     // Loading a project restores its durable toolbar selections and therefore
     // resets transient interactions. Export is a peer mode, so re-establish it
     // before any outcome-specific viewport validation or history recording.
@@ -1617,6 +1620,11 @@ mod tests {
                 action,
                 &mut state,
                 &mut layout::ViewportOffset::default(),
+                layout::VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut platform,
             )
             .unwrap();
@@ -1654,6 +1662,11 @@ mod tests {
                 action,
                 &mut state,
                 &mut layout::ViewportOffset::default(),
+                layout::VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut platform,
             )
             .is_err()
@@ -1693,6 +1706,11 @@ mod tests {
             export::ExportAction::SaveJson,
             &mut source,
             &mut source_viewport,
+            layout::VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
             &mut save,
         )
         .unwrap();
@@ -1716,6 +1734,11 @@ mod tests {
                 export::ExportAction::LoadJson,
                 &mut target,
                 &mut target_viewport,
+                layout::VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut load,
             )
             .unwrap(),

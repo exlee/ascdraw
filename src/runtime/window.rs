@@ -16,8 +16,9 @@ use crate::editor::EditorState;
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
-    LayoutMetrics, ViewportOffset, content_intersects_inner_screen, content_top_padding,
-    cursor_is_visible, layout_metrics, navigation_origin, normalized_cursor_and_origin,
+    LayoutMetrics, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
+    content_top_padding, cursor_is_visible, layout_metrics, navigation_origin,
+    normalized_cursor_and_origin,
 };
 #[cfg(target_os = "macos")]
 use crate::macos;
@@ -343,6 +344,16 @@ impl EditorWindow {
             &self.state.toolbar,
             self.transparent_menubar,
             scale_factor,
+        )
+    }
+
+    pub fn visible_canvas_cells(&self) -> VisibleCanvasCells {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        VisibleCanvasCells::from_layout(
+            self.current_layout(),
+            self.viewport,
+            (metrics.cell_width, metrics.cell_height),
         )
     }
 
@@ -1058,6 +1069,11 @@ mod tests {
                 ExportAction::Clear,
                 state,
                 &mut ViewportOffset::default(),
+                VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
                 &mut platform,
             )
             .unwrap(),
