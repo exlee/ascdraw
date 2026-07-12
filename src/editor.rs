@@ -393,9 +393,19 @@ impl EditorState {
         let Some(to) = adjacent_coord(from, direction) else {
             return;
         };
-        self.remove_connection(from, direction);
+        self.erase_connection_or_cell(from, direction);
         self.move_to_without_ending_stroke(to);
-        self.remove_connection(to, direction.opposite());
+        self.erase_connection_or_cell(to, direction.opposite());
+    }
+
+    fn erase_connection_or_cell(&mut self, coord: Coord, direction: Direction) {
+        let is_line = self.line_markers.iter().any(|marker| marker.coord == coord)
+            || self.cell_contents(coord).is_some_and(is_line_glyph);
+        if is_line {
+            self.remove_connection(coord, direction);
+        } else {
+            self.clear_cell();
+        }
     }
 
     fn remove_connection(&mut self, coord: Coord, direction: Direction) {
@@ -1033,6 +1043,21 @@ mod tests {
         state.move_or_erase(Direction::Left);
         assert_eq!(contents(&state.grid.lines[0]), "   ");
         assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn line_mode_erasing_movement_clears_non_line_cells() {
+        let mut state = state();
+        state.insert("x●◆");
+        state.move_to(Coord::default());
+
+        state.move_or_erase(Direction::Right);
+        assert_eq!(contents(&state.grid.lines[0]), "  ◆");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+
+        state.move_or_erase(Direction::Right);
+        assert_eq!(contents(&state.grid.lines[0]), "   ");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
     }
 
     #[test]
