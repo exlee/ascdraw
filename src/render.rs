@@ -22,6 +22,9 @@ use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, layout_metrics};
 use crate::model::{Atom, Face};
 use crate::selection::SelectionBounds;
 
+mod export_png;
+pub use export_png::{CanvasImage, render_canvas_image};
+
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 2.0;

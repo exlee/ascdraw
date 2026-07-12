@@ -83,8 +83,6 @@ bg = "default"
 
 ## Current scope
 
-The top-right **0. Save/Load/Export** menu copies the selected rectangle as TXT, saves the selection as TXT or JSON, and loads TXT or JSON through native file dialogs. Clipboard and saved exports include only the selected rectangle; JSON preserves its dimensions, cell contents, and faces. PNG entries are visible but intentionally deferred.
-
-TODO: PNG clipboard/save should use the Egui Screenshot feature and capture only selected canvas content, never menus.
+The top-right **0. Save/Load/Export** menu copies or saves TXT and PNG, saves the whole project as JSON, and loads TXT or JSON through native file dialogs. TXT and PNG use the expanded rectangular selection when present; otherwise they use the visible canvas viewport. PNG rendering is canvas-only, excluding the cursor, selection border, previews, menus, title, and tooltip. JSON defaults to `ascdraw.json`; PNG defaults to `ascdraw.png`.
 
 ascdraw currently provides an editable grapheme-aware cell grid, connected Unicode line drawing, text entry, font fallback, configurable themes and cursor shapes, live font scaling, multiple native windows, and macOS menu integration. Further Stamp, Shape, and Utils operations are still to come.

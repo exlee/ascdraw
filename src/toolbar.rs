@@ -297,7 +297,7 @@ impl Tooltip {
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
-                "TXT exports selection or visible viewport; JSON exports the whole project; PNG is deferred"
+                "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
             Self::Selection => "Esc cancels selection; Space/Backspace clears, r then KEY for replace all",
         };

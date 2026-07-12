@@ -249,7 +249,7 @@ fn try_main() -> Result<ExitCode> {
                                 editor.finish_history_transaction();
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
-                                let mut platform = NativeExportPlatform;
+                                let mut platform = NativeExportPlatform::text_only();
                                 let result = handle_clipboard_shortcut(
                                     &mut editor.state,
                                     &event.logical_key,
@@ -353,7 +353,7 @@ fn try_main() -> Result<ExitCode> {
                                     }
                                     editor.request_redraw();
                                 }
-                                perform_pending_export(editor);
+                                perform_pending_export(editor, &config);
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
@@ -397,7 +397,7 @@ fn try_main() -> Result<ExitCode> {
                                     previous_viewport,
                                     false,
                                 );
-                                perform_pending_export(editor);
+                                perform_pending_export(editor, &config);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
                                 let previous_state = editor.state.clone();
@@ -455,14 +455,18 @@ fn handle_clipboard_shortcut(
     })
 }
 
-fn perform_pending_export(editor: &mut EditorWindow) {
+fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
     let Some(action) = editor.state.toolbar.take_export_action() else {
         return;
     };
     let previous_state = editor.state.clone();
     let previous_viewport = editor.viewport;
     let visible_canvas = editor.visible_canvas_cells();
-    let mut platform = NativeExportPlatform;
+    let mut platform = NativeExportPlatform::with_png(
+        &editor.renderer,
+        editor.window.scale_factor(),
+        config.macos.color_space,
+    );
     let outcome = perform_export_action(
         action,
         &mut editor.state,
@@ -470,10 +474,6 @@ fn perform_pending_export(editor: &mut EditorWindow) {
         visible_canvas,
         &mut platform,
     );
-    if action.is_png() {
-        log_error("PNG export is deferred; it will use an Egui canvas-only screenshot");
-        return;
-    }
     match outcome {
         Ok(ExportOutcome::DocumentLoaded) => {
             editor.viewport = layout::ViewportOffset::default();
@@ -738,6 +738,28 @@ mod tests {
 
         fn choose_open_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
             self.open.take()
+        }
+
+        fn render_canvas_image(
+            &mut self,
+            lines: &[Vec<crate::model::Atom>],
+            default_face: &crate::model::Face,
+        ) -> Result<render::CanvasImage> {
+            let config = AppConfig::default();
+            render::render_canvas_image(
+                &render::load_renderer(&config),
+                lines,
+                default_face,
+                1.0,
+                config.macos.color_space,
+            )
+        }
+
+        fn set_clipboard_image(&mut self, _image: &render::CanvasImage) -> Result<()> {
+            if self.fail_clipboard_write {
+                anyhow::bail!("mock clipboard image write failed");
+            }
+            Ok(())
         }
     }
 
@@ -1648,35 +1670,39 @@ mod tests {
     #[test]
     fn export_error_consumes_once_but_keeps_the_action_prefix_active() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
-        let action = export::ExportAction::ClipboardTxt;
-        assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
-        assert_eq!(state.toolbar.take_export_action(), Some(action));
-        let mut platform = ClipboardPlatform {
-            fail_clipboard_write: true,
-            ..ClipboardPlatform::default()
-        };
+        for action in [
+            export::ExportAction::ClipboardTxt,
+            export::ExportAction::ClipboardPng,
+        ] {
+            let mut state = EditorState::new(&config.theme, "test");
+            assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
+            assert_eq!(state.toolbar.take_export_action(), Some(action));
+            let mut platform = ClipboardPlatform {
+                fail_clipboard_write: true,
+                ..ClipboardPlatform::default()
+            };
 
-        assert!(
-            perform_export_action(
-                action,
-                &mut state,
-                &mut layout::ViewportOffset::default(),
-                layout::VisibleCanvasCells {
-                    origin: (0, 0),
-                    columns: 80,
-                    rows: 24,
-                },
-                &mut platform,
-            )
-            .is_err()
-        );
-        assert_eq!(state.toolbar.take_export_action(), None);
-        assert!(state.toolbar.export_menu_open());
-        assert_eq!(
-            state.toolbar.pending_shortcut(),
-            Some(PendingShortcut::ExportOption(0))
-        );
+            assert!(
+                perform_export_action(
+                    action,
+                    &mut state,
+                    &mut layout::ViewportOffset::default(),
+                    layout::VisibleCanvasCells {
+                        origin: (0, 0),
+                        columns: 80,
+                        rows: 24,
+                    },
+                    &mut platform,
+                )
+                .is_err()
+            );
+            assert_eq!(state.toolbar.take_export_action(), None);
+            assert!(state.toolbar.export_menu_open());
+            assert_eq!(
+                state.toolbar.pending_shortcut(),
+                Some(PendingShortcut::ExportOption(0))
+            );
+        }
     }
 
     #[test]

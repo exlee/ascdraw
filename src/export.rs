@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::MacosColorSpace;
 use crate::editor::EditorState;
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Atom, Face};
+use crate::render::{CanvasImage, Renderer, render_canvas_image};
 use crate::selection::{CanvasRegion, CanvasSelection, region_atoms};
 use crate::toolbar::DurableMenuSelections;
 
@@ -29,12 +32,6 @@ pub enum ExportAction {
     Clear,
 }
 
-impl ExportAction {
-    pub fn is_png(self) -> bool {
-        matches!(self, Self::ClipboardPng | Self::SavePng)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportOutcome {
     Unchanged,
@@ -48,17 +45,58 @@ pub trait ExportPlatform {
     fn clipboard_text(&mut self) -> Result<String>;
     fn choose_save_path(&mut self, kind: FileKind) -> Option<PathBuf>;
     fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf>;
+    fn render_canvas_image(
+        &mut self,
+        _lines: &[Vec<Atom>],
+        _default_face: &Face,
+    ) -> Result<CanvasImage> {
+        bail!("PNG rendering is unavailable")
+    }
+    fn set_clipboard_image(&mut self, _image: &CanvasImage) -> Result<()> {
+        bail!("PNG clipboard support is unavailable")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
     Txt,
     Json,
+    Png,
 }
 
-pub struct NativeExportPlatform;
+pub struct NativeExportPlatform<'a> {
+    png: Option<NativePngContext<'a>>,
+}
 
-impl ExportPlatform for NativeExportPlatform {
+struct NativePngContext<'a> {
+    renderer: &'a Renderer,
+    scale_factor: f64,
+    color_space: MacosColorSpace,
+}
+
+impl NativeExportPlatform<'static> {
+    pub fn text_only() -> Self {
+        Self { png: None }
+    }
+}
+
+impl<'a> NativeExportPlatform<'a> {
+    pub fn with_png(
+        renderer: &'a Renderer,
+        scale_factor: f64,
+        color_space: MacosColorSpace,
+    ) -> Self {
+        Self {
+            png: Some(NativePngContext {
+                renderer,
+                scale_factor,
+                color_space,
+            }),
+        }
+    }
+}
+
+impl ExportPlatform for NativeExportPlatform<'_> {
     fn set_clipboard_text(&mut self, text: &str) -> Result<()> {
         arboard::Clipboard::new()
             .context("failed to open the system clipboard")?
@@ -87,6 +125,32 @@ impl ExportPlatform for NativeExportPlatform {
             .add_filter(name, &[extension])
             .pick_file()
     }
+
+    fn render_canvas_image(
+        &mut self,
+        lines: &[Vec<Atom>],
+        default_face: &Face,
+    ) -> Result<CanvasImage> {
+        let context = self.png.as_ref().context("PNG renderer is unavailable")?;
+        render_canvas_image(
+            context.renderer,
+            lines,
+            default_face,
+            context.scale_factor,
+            context.color_space,
+        )
+    }
+
+    fn set_clipboard_image(&mut self, image: &CanvasImage) -> Result<()> {
+        arboard::Clipboard::new()
+            .context("failed to open the system clipboard")?
+            .set_image(arboard::ImageData {
+                width: image.width,
+                height: image.height,
+                bytes: Cow::Borrowed(&image.rgba),
+            })
+            .context("failed to copy PNG image to the system clipboard")
+    }
 }
 
 pub fn copy_selection(state: &EditorState, platform: &mut impl ExportPlatform) -> Result<()> {
@@ -114,6 +178,7 @@ fn file_kind_details(kind: FileKind) -> (&'static str, &'static str) {
     match kind {
         FileKind::Txt => ("Text", "txt"),
         FileKind::Json => ("JSON", "json"),
+        FileKind::Png => ("PNG", "png"),
     }
 }
 
@@ -121,6 +186,7 @@ fn default_file_name(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Txt => "selection.txt",
         FileKind::Json => "ascdraw.json",
+        FileKind::Png => "ascdraw.png",
     }
 }
 
@@ -149,6 +215,22 @@ pub fn perform(
                 return Ok(ExportOutcome::Unchanged);
             };
             save_project_json(&path, state, *viewport)?;
+            Ok(ExportOutcome::Unchanged)
+        }
+        ExportAction::ClipboardPng => {
+            let lines = canvas_atoms_for_export(state, visible_canvas);
+            let image = platform.render_canvas_image(&lines, &state.grid.default_face)?;
+            platform.set_clipboard_image(&image)?;
+            Ok(ExportOutcome::Unchanged)
+        }
+        ExportAction::SavePng => {
+            let Some(path) = platform.choose_save_path(FileKind::Png) else {
+                return Ok(ExportOutcome::Unchanged);
+            };
+            let lines = canvas_atoms_for_export(state, visible_canvas);
+            let image = platform.render_canvas_image(&lines, &state.grid.default_face)?;
+            fs::write(&path, &image.png)
+                .with_context(|| format!("failed to write {}", path.display()))?;
             Ok(ExportOutcome::Unchanged)
         }
         ExportAction::LoadTxt => {
@@ -187,7 +269,6 @@ pub fn perform(
             state.clear_canvas();
             Ok(ExportOutcome::CanvasCleared)
         }
-        ExportAction::ClipboardPng | ExportAction::SavePng => Ok(ExportOutcome::Unchanged),
     }
 }
 
@@ -505,8 +586,13 @@ mod tests {
     #[derive(Default)]
     struct MockPlatform {
         clipboard: Option<String>,
+        clipboard_image: Option<CanvasImage>,
+        rendered_lines: Option<Vec<Vec<Atom>>>,
+        image: Option<CanvasImage>,
         fail_clipboard_read: bool,
         fail_clipboard_write: bool,
+        fail_image_render: bool,
+        fail_image_write: bool,
         save: Option<PathBuf>,
         open: Option<PathBuf>,
     }
@@ -530,6 +616,35 @@ mod tests {
         }
         fn choose_open_path(&mut self, _kind: FileKind) -> Option<PathBuf> {
             self.open.take()
+        }
+        fn render_canvas_image(
+            &mut self,
+            lines: &[Vec<Atom>],
+            _default_face: &Face,
+        ) -> Result<CanvasImage> {
+            self.rendered_lines = Some(lines.to_vec());
+            if self.fail_image_render {
+                bail!("mock PNG render failed");
+            }
+            self.image.clone().context("mock PNG image is missing")
+        }
+        fn set_clipboard_image(&mut self, image: &CanvasImage) -> Result<()> {
+            if self.fail_image_write {
+                bail!("mock PNG clipboard write failed");
+            }
+            self.clipboard_image = Some(image.clone());
+            Ok(())
+        }
+    }
+
+    fn sample_image() -> CanvasImage {
+        let rgba = vec![1, 2, 3, 255];
+        CanvasImage {
+            width: 1,
+            height: 1,
+            rgba,
+            png: b"deterministic PNG bytes".to_vec(),
+            color_space: MacosColorSpace::Srgb,
         }
     }
 
@@ -678,6 +793,167 @@ mod tests {
         };
         assert_eq!(contents(project.lines.last().unwrap()), "outside");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn png_clipboard_and_save_use_identical_selected_canvas_pixels() {
+        let path = temp_path("png");
+        let image = sample_image();
+        let mut state = state_with_selection();
+        let before = state.edit_snapshot();
+        let visible = VisibleCanvasCells {
+            origin: (-10, -10),
+            columns: 1,
+            rows: 1,
+        };
+        let mut viewport = ViewportOffset { x: 7, y: -9 };
+        let mut clipboard = MockPlatform {
+            image: Some(image.clone()),
+            ..MockPlatform::default()
+        };
+        perform(
+            ExportAction::ClipboardPng,
+            &mut state,
+            &mut viewport,
+            visible,
+            &mut clipboard,
+        )
+        .unwrap();
+        let mut save = MockPlatform {
+            image: Some(image.clone()),
+            save: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        perform(
+            ExportAction::SavePng,
+            &mut state,
+            &mut viewport,
+            visible,
+            &mut save,
+        )
+        .unwrap();
+
+        assert_eq!(
+            clipboard.rendered_lines.as_deref(),
+            save.rendered_lines.as_deref()
+        );
+        assert_eq!(clipboard.clipboard_image.as_ref(), Some(&image));
+        assert_eq!(fs::read(&path).unwrap(), image.png);
+        assert_eq!(state.edit_snapshot(), before);
+        assert_eq!(viewport, ViewportOffset { x: 7, y: -9 });
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn png_viewport_source_is_raw_canvas_only_even_with_active_overlays_and_preview() {
+        let config = ThemeConfig::default();
+        let mut state = EditorState::new(&config, "title excluded");
+        state.grid.lines = lines_from_text("ab");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.toggle_shape_preview();
+        state.move_cursor(crate::model::Direction::Right);
+        let expected = region_atoms(
+            &state.grid.lines,
+            CanvasRegion {
+                left: 0,
+                top: 0,
+                width: 2,
+                height: 1,
+            },
+        );
+        let mut platform = MockPlatform {
+            image: Some(sample_image()),
+            ..MockPlatform::default()
+        };
+
+        perform(
+            ExportAction::ClipboardPng,
+            &mut state,
+            &mut ViewportOffset::default(),
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 2,
+                rows: 1,
+            },
+            &mut platform,
+        )
+        .unwrap();
+
+        assert_eq!(platform.rendered_lines.as_ref(), Some(&expected));
+
+        let mut lifted = EditorState::new(&config, "title excluded");
+        lifted.grid.lines = lines_from_text("ab");
+        assert!(lifted.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+        assert!(lifted.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 4,
+        }));
+        assert!(lifted.begin_move_lift());
+        assert!(lifted.move_lift(crate::model::Direction::Right));
+        perform(
+            ExportAction::ClipboardPng,
+            &mut lifted,
+            &mut ViewportOffset::default(),
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 2,
+                rows: 1,
+            },
+            &mut platform,
+        )
+        .unwrap();
+        assert_eq!(platform.rendered_lines.as_ref(), Some(&expected));
+    }
+
+    #[test]
+    fn png_save_cancellation_skips_rendering_and_is_an_exact_no_op() {
+        let mut state = state_with_selection();
+        let before = state.edit_snapshot();
+        let mut platform = MockPlatform {
+            fail_image_render: true,
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform_action(ExportAction::SavePng, &mut state, &mut platform).unwrap(),
+            ExportOutcome::Unchanged
+        );
+        assert!(platform.rendered_lines.is_none());
+        assert_eq!(state.edit_snapshot(), before);
+    }
+
+    #[test]
+    fn png_render_and_clipboard_failures_are_atomic() {
+        for mut platform in [
+            MockPlatform {
+                fail_image_render: true,
+                ..MockPlatform::default()
+            },
+            MockPlatform {
+                image: Some(sample_image()),
+                fail_image_write: true,
+                ..MockPlatform::default()
+            },
+        ] {
+            let mut state = state_with_selection();
+            let before = state.edit_snapshot();
+            assert!(perform_action(ExportAction::ClipboardPng, &mut state, &mut platform).is_err());
+            assert_eq!(state.edit_snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn png_file_write_failure_is_atomic() {
+        let mut state = state_with_selection();
+        let before = state.edit_snapshot();
+        let mut platform = MockPlatform {
+            image: Some(sample_image()),
+            save: Some(std::env::temp_dir()),
+            ..MockPlatform::default()
+        };
+
+        assert!(perform_action(ExportAction::SavePng, &mut state, &mut platform).is_err());
+        assert_eq!(state.edit_snapshot(), before);
     }
 
     #[test]
@@ -986,6 +1262,7 @@ mod tests {
     fn project_save_uses_project_filename_and_does_not_mutate_editor_state() {
         assert_eq!(default_file_name(FileKind::Txt), "selection.txt");
         assert_eq!(default_file_name(FileKind::Json), "ascdraw.json");
+        assert_eq!(default_file_name(FileKind::Png), "ascdraw.png");
 
         let path = temp_path("json");
         let mut state = state_with_selection();
