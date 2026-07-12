@@ -229,9 +229,11 @@ fn try_main() -> Result<ExitCode> {
                             if event.state == ElementState::Pressed =>
                         {
                             editor.note_keypress(Instant::now());
-                            if let Some(command) =
-                                history_command(&event.logical_key, editor.modifiers)
-                            {
+                            if let Some(command) = history_command(
+                                &event.logical_key,
+                                editor.modifiers,
+                                editor.state.cursor_mode,
+                            ) {
                                 match command {
                                     HistoryCommand::Undo => {
                                         editor.undo();
@@ -818,6 +820,128 @@ mod tests {
                 "mode {mode:?}"
             );
         }
+    }
+
+    #[test]
+    fn plain_history_shortcuts_undo_and_redo_in_every_canvas_mode() {
+        let config = AppConfig::default();
+        for main_mode in [
+            MainMode::Line,
+            MainMode::Stamp,
+            MainMode::Shapes,
+            MainMode::Utilities,
+        ] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode));
+            let before = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            state.insert("x");
+            let edited = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            let mut edit_history = history::EditHistory::default();
+            assert!(edit_history.record_change(before.clone(), &edited));
+
+            assert_eq!(
+                history_command(
+                    &Key::Character("u".into()),
+                    ModifiersState::empty(),
+                    state.cursor_mode,
+                ),
+                Some(HistoryCommand::Undo),
+                "mode {main_mode:?}"
+            );
+            state.prepare_history_command();
+            let undone = edit_history.undo(edited).expect("undo entry");
+            state.restore_edit_snapshot(undone.edit.clone());
+            assert_eq!(line_contents(&state.grid.lines[0]), "");
+
+            assert_eq!(
+                history_command(
+                    &Key::Character("U".into()),
+                    ModifiersState::SHIFT,
+                    state.cursor_mode,
+                ),
+                Some(HistoryCommand::Redo),
+                "mode {main_mode:?}"
+            );
+            state.prepare_history_command();
+            let redone = edit_history.redo(undone).expect("redo entry");
+            state.restore_edit_snapshot(redone.edit);
+            assert_eq!(line_contents(&state.grid.lines[0]), "x");
+        }
+    }
+
+    #[test]
+    fn plain_u_and_uppercase_u_remain_text_and_single_replacements() {
+        let config = AppConfig::default();
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.cursor_mode = mode;
+            for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
+                assert_eq!(
+                    history_command(&Key::Character(key.into()), modifiers, state.cursor_mode),
+                    None,
+                    "mode {mode:?}, key {key}"
+                );
+                assert_eq!(
+                    handle_editor_key(
+                        &mut state,
+                        &Key::Character(key.into()),
+                        Some(key),
+                        false,
+                        modifiers,
+                    ),
+                    Some(true)
+                );
+            }
+            assert_eq!(line_contents(&state.grid.lines[0]), "uU", "mode {mode:?}");
+        }
+
+        for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.insert("x");
+            state.move_to(Coord::default());
+            assert!(state.begin_single_replace());
+            assert_eq!(
+                history_command(&Key::Character(key.into()), modifiers, state.cursor_mode),
+                None
+            );
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Character(key.into()),
+                    Some(key),
+                    false,
+                    modifiers,
+                ),
+                Some(true)
+            );
+            assert_eq!(line_contents(&state.grid.lines[0]), key);
+            assert_eq!(state.cursor_mode, CursorMode::Stamp);
+        }
+    }
+
+    #[test]
+    fn plain_history_precedes_and_cancels_pending_toolbar_prefixes() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
+        );
+        assert!(state.toolbar.pending_shortcut().is_some());
+        assert_eq!(
+            history_command(
+                &Key::Character("u".into()),
+                ModifiersState::empty(),
+                state.cursor_mode,
+            ),
+            Some(HistoryCommand::Undo)
+        );
+        assert!(state.prepare_history_command());
+        assert!(state.toolbar.pending_shortcut().is_none());
     }
 
     #[test]

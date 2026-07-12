@@ -105,9 +105,12 @@ impl EditorWindow {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.state.end_stroke();
+        let transient_changed = self.state.prepare_history_command();
         let current = self.history_snapshot();
         let Some(snapshot) = self.history.undo(current) else {
+            if transient_changed {
+                self.request_redraw();
+            }
             return false;
         };
         self.restore_history_snapshot(snapshot);
@@ -120,9 +123,12 @@ impl EditorWindow {
     }
 
     pub fn redo(&mut self) -> bool {
-        self.state.end_stroke();
+        let transient_changed = self.state.prepare_history_command();
         let current = self.history_snapshot();
         let Some(snapshot) = self.history.redo(current) else {
+            if transient_changed {
+                self.request_redraw();
+            }
             return false;
         };
         self.restore_history_snapshot(snapshot);

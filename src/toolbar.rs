@@ -261,7 +261,7 @@ pub enum Tooltip {
 impl Tooltip {
     pub fn text(self) -> String {
         const MISC_TIP: [&str; 5] = [
-            "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
+            "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
             "Select with Ctrl-<direction>",
             "Erase with Alt-<direction>",
             "Direction keys are ←→↓↑ and hjkl",

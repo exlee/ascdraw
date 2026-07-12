@@ -202,14 +202,27 @@ fn shift_direction_command(direction: Direction, mode: CursorMode) -> EditComman
     }
 }
 
-/// Returns global history commands before every mode-specific or configurable shortcut.
-pub fn history_command(key: &Key, modifiers: ModifiersState) -> Option<HistoryCommand> {
-    if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
+/// Returns history commands before every mode-specific or configurable shortcut.
+pub fn history_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    mode: CursorMode,
+) -> Option<HistoryCommand> {
+    if !modifiers.alt_key() && (modifiers.control_key() || modifiers.super_key()) {
+        return match key {
+            Key::Character(text) if text.eq_ignore_ascii_case("z") => Some(HistoryCommand::Undo),
+            Key::Character(text) if text.eq_ignore_ascii_case("r") => Some(HistoryCommand::Redo),
+            _ => None,
+        };
+    }
+    if mode.accepts_text()
+        || (modifiers != ModifiersState::empty() && modifiers != ModifiersState::SHIFT)
+    {
         return None;
     }
     match key {
-        Key::Character(text) if text.eq_ignore_ascii_case("z") => Some(HistoryCommand::Undo),
-        Key::Character(text) if text.eq_ignore_ascii_case("r") => Some(HistoryCommand::Redo),
+        Key::Character(text) if text == "u" => Some(HistoryCommand::Undo),
+        Key::Character(text) if text == "U" => Some(HistoryCommand::Redo),
         _ => None,
     }
 }
@@ -1377,30 +1390,45 @@ mod tests {
 
     #[test]
     fn control_and_command_history_shortcuts_are_global_and_alt_is_excluded() {
-        for modifiers in [
-            ModifiersState::CONTROL,
-            ModifiersState::SUPER,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-            ModifiersState::SUPER | ModifiersState::SHIFT,
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
         ] {
-            assert_eq!(
-                history_command(&Key::Character("z".into()), modifiers),
-                Some(HistoryCommand::Undo)
-            );
-            assert_eq!(
-                history_command(&Key::Character("R".into()), modifiers),
-                Some(HistoryCommand::Redo)
-            );
+            for modifiers in [
+                ModifiersState::CONTROL,
+                ModifiersState::SUPER,
+                ModifiersState::CONTROL | ModifiersState::SHIFT,
+                ModifiersState::SUPER | ModifiersState::SHIFT,
+            ] {
+                assert_eq!(
+                    history_command(&Key::Character("z".into()), modifiers, mode),
+                    Some(HistoryCommand::Undo)
+                );
+                assert_eq!(
+                    history_command(&Key::Character("R".into()), modifiers, mode),
+                    Some(HistoryCommand::Redo)
+                );
+            }
         }
         assert_eq!(
             history_command(
                 &Key::Character("r".into()),
-                ModifiersState::CONTROL | ModifiersState::ALT
+                ModifiersState::CONTROL | ModifiersState::ALT,
+                CursorMode::Stamp,
             ),
             None
         );
         assert_eq!(
-            history_command(&Key::Character("r".into()), ModifiersState::empty()),
+            history_command(
+                &Key::Character("r".into()),
+                ModifiersState::empty(),
+                CursorMode::Stamp,
+            ),
             None
         );
         for mode in [
@@ -1416,6 +1444,53 @@ mod tests {
                 edit_command_for_key(&Key::Character("r".into()), ModifiersState::CONTROL, mode),
                 None,
                 "Ctrl-R must never start or type Replace in {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_vim_history_shortcuts_use_logical_case_only_in_canvas_modes() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            assert_eq!(
+                history_command(&Key::Character("u".into()), ModifiersState::empty(), mode,),
+                Some(HistoryCommand::Undo),
+                "mode {mode:?}"
+            );
+            for modifiers in [ModifiersState::empty(), ModifiersState::SHIFT] {
+                assert_eq!(
+                    history_command(&Key::Character("U".into()), modifiers, mode),
+                    Some(HistoryCommand::Redo),
+                    "mode {mode:?}, modifiers {modifiers:?}"
+                );
+            }
+        }
+
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            for key in ["u", "U"] {
+                assert_eq!(
+                    history_command(&Key::Character(key.into()), ModifiersState::empty(), mode,),
+                    None,
+                    "mode {mode:?}, key {key}"
+                );
+            }
+        }
+
+        for modifiers in [
+            ModifiersState::ALT,
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::SHIFT | ModifiersState::ALT,
+            ModifiersState::SHIFT | ModifiersState::CONTROL,
+        ] {
+            assert_eq!(
+                history_command(&Key::Character("U".into()), modifiers, CursorMode::Stamp),
+                None,
+                "modifiers {modifiers:?}"
             );
         }
     }

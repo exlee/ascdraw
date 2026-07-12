@@ -278,6 +278,18 @@ impl EditorState {
         true
     }
 
+    pub fn prepare_history_command(&mut self) -> bool {
+        let changed = self.active_stroke.is_some()
+            || self.shape_preview.is_some()
+            || self.move_lift.is_some()
+            || self.toolbar.pending_shortcut().is_some();
+        self.end_stroke();
+        self.shape_preview = None;
+        self.cancel_move_lift();
+        self.toolbar.cancel_shortcut();
+        changed
+    }
+
     fn sync_cursor_mode_with_toolbar(&mut self) {
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
@@ -2649,6 +2661,43 @@ mod tests {
 
         assert!(state.lines_with_shape_preview().is_none());
         assert!(state.grid.lines[0].iter().all(|atom| atom.contents == " "));
+    }
+
+    #[test]
+    fn history_preparation_cancels_transients_without_closing_export_or_durable_tools() {
+        let mut shape = state();
+        shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        shape.toggle_shape_preview();
+        assert!(shape.prepare_history_command());
+        assert!(shape.shape_preview.is_none());
+
+        let mut line = state();
+        line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        line.move_or_draw(Direction::Right, true);
+        assert!(line.active_stroke.is_some());
+        assert!(line.prepare_history_command());
+        assert!(line.active_stroke.is_none());
+
+        let mut lift = utility_state(&["abc"], UtilityKind::Move, Coord::default());
+        lift.selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        let before_lift = lift.edit_snapshot();
+        assert!(lift.begin_move_lift());
+        assert!(lift.move_lift(Direction::Right));
+        assert!(lift.prepare_history_command());
+        assert!(!lift.move_lift_active());
+        assert_eq!(lift.edit_snapshot(), before_lift);
+
+        let mut export = state();
+        let durable = export.toolbar.durable_selections();
+        export.apply_toolbar_action(ToolbarAction::ToggleExportMenu);
+        assert!(export.toolbar.export_menu_open());
+        assert!(export.toolbar.pending_shortcut().is_some());
+        assert!(export.prepare_history_command());
+        assert!(export.toolbar.export_menu_open());
+        assert!(export.toolbar.pending_shortcut().is_none());
+        assert_eq!(export.toolbar.durable_selections(), durable);
+        assert!(!export.prepare_history_command());
     }
 
     #[test]
