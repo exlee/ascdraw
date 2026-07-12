@@ -3,10 +3,10 @@ fg = "black"
 bg = "white"
 
 [selection]
-fg = "orangered"
+fg = "red"
 
 [selection-highlight]
-fg = "gold"
+fg = "purple"
 
 [cursor-drawing]
 fg = "darkblue"

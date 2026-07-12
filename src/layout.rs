@@ -77,21 +77,44 @@ fn cell_shift(count: usize, size: usize) -> i64 {
         .saturating_mul(i64::try_from(size).unwrap_or(i64::MAX))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ContentBounds {
-    pub left: usize,
-    pub right: usize,
-    pub top: usize,
-    pub bottom: usize,
-}
-
+#[cfg(test)]
 pub fn legal_origin_range(min: usize, max: usize, viewport_cells: usize) -> (i64, i64) {
     let min = i64::try_from(min).unwrap_or(i64::MAX);
     let max = i64::try_from(max).unwrap_or(i64::MAX);
-    let viewport_cells = i64::try_from(viewport_cells).unwrap_or(i64::MAX);
-    let near_edge = min.saturating_sub(SCROLL_MARGIN_CELLS);
-    let far_edge = max.saturating_sub(viewport_cells.saturating_sub(SCROLL_MARGIN_CELLS));
-    (near_edge.min(far_edge), near_edge.max(far_edge))
+    let (inner_start, inner_end) = inner_screen_offsets(viewport_cells);
+    (
+        min.saturating_sub(inner_end),
+        max.saturating_sub(inner_start),
+    )
+}
+
+fn inner_screen_offsets(viewport_cells: usize) -> (i64, i64) {
+    let viewport_cells = i64::try_from(viewport_cells.max(1)).unwrap_or(i64::MAX);
+    let outer_margin = SCROLL_MARGIN_CELLS
+        .saturating_sub(1)
+        .min(viewport_cells.saturating_sub(1) / 2);
+    (
+        outer_margin.saturating_add(1),
+        viewport_cells.saturating_sub(outer_margin),
+    )
+}
+
+fn content_intersects_inner_screen(
+    origin: (i64, i64),
+    viewport: (usize, usize),
+    content: &[Coord],
+) -> bool {
+    let horizontal = inner_screen_offsets(viewport.0);
+    let vertical = inner_screen_offsets(viewport.1);
+    content.iter().any(|coord| {
+        let x = i64::try_from(coord.column)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(origin.0);
+        let y = i64::try_from(coord.line)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(origin.1);
+        (horizontal.0..=horizontal.1).contains(&x) && (vertical.0..=vertical.1).contains(&y)
+    })
 }
 
 pub fn cursor_origin(current: i64, cursor: usize, viewport_cells: usize) -> i64 {
@@ -110,41 +133,55 @@ pub fn navigation_origin(
     current: (i64, i64),
     cursor: Coord,
     viewport: (usize, usize),
-    bounds: Option<ContentBounds>,
+    content: &[Coord],
 ) -> Option<(i64, i64)> {
     let desired = (
         cursor_origin(current.0, cursor.column, viewport.0),
         cursor_origin(current.1, cursor.line, viewport.1),
     );
-    let Some(bounds) = bounds else {
+    if content.is_empty() {
         return Some(desired);
-    };
-    let horizontal = legal_origin_range(bounds.left, bounds.right, viewport.0);
-    let vertical = legal_origin_range(bounds.top, bounds.bottom, viewport.1);
-    ((horizontal.0..=horizontal.1).contains(&desired.0)
-        && (vertical.0..=vertical.1).contains(&desired.1))
-    .then_some(desired)
+    }
+    content_intersects_inner_screen(desired, viewport, content).then_some(desired)
 }
 
 pub fn clamped_navigation_origin(
     current: (i64, i64),
     cursor: Coord,
     viewport: (usize, usize),
-    bounds: Option<ContentBounds>,
+    content: &[Coord],
 ) -> (i64, i64) {
     let desired = (
         cursor_origin(current.0, cursor.column, viewport.0),
         cursor_origin(current.1, cursor.line, viewport.1),
     );
-    let Some(bounds) = bounds else {
+    if content.is_empty() {
         return desired;
-    };
-    let horizontal = legal_origin_range(bounds.left, bounds.right, viewport.0);
-    let vertical = legal_origin_range(bounds.top, bounds.bottom, viewport.1);
-    (
-        desired.0.clamp(horizontal.0, horizontal.1),
-        desired.1.clamp(vertical.0, vertical.1),
-    )
+    }
+    let horizontal = inner_screen_offsets(viewport.0);
+    let vertical = inner_screen_offsets(viewport.1);
+    content
+        .iter()
+        .map(|coord| {
+            let x = i64::try_from(coord.column).unwrap_or(i64::MAX);
+            let y = i64::try_from(coord.line).unwrap_or(i64::MAX);
+            let origin = (
+                desired.0.clamp(
+                    x.saturating_sub(horizontal.1),
+                    x.saturating_sub(horizontal.0),
+                ),
+                desired
+                    .1
+                    .clamp(y.saturating_sub(vertical.1), y.saturating_sub(vertical.0)),
+            );
+            let distance = desired
+                .0
+                .abs_diff(origin.0)
+                .saturating_add(desired.1.abs_diff(origin.1));
+            (distance, origin)
+        })
+        .min_by_key(|candidate| *candidate)
+        .map_or(desired, |(_, origin)| origin)
 }
 
 fn cell_delta(index: usize, old_size: usize, new_size: usize) -> i64 {
@@ -266,31 +303,69 @@ mod tests {
     }
 
     #[test]
-    fn point_at_five_in_ten_cells_has_exact_requested_origin_range() {
-        assert_eq!(legal_origin_range(5, 5, 10), (-2, 2));
-        let bounds = ContentBounds {
-            left: 5,
-            right: 5,
-            top: 5,
-            bottom: 5,
-        };
-        for origin in -2..=2 {
-            assert_eq!(
-                navigation_origin(
-                    (origin, origin),
-                    Coord { line: 5, column: 5 },
-                    (10, 10),
-                    Some(bounds)
-                ),
-                Some((origin, origin))
-            );
-        }
+    fn ten_cell_viewport_uses_the_requested_six_cell_inner_screen() {
+        assert_eq!(inner_screen_offsets(10), (3, 8));
+        assert_eq!(legal_origin_range(1, 10, 10), (-7, 7));
     }
 
     #[test]
-    fn multi_cell_bounds_allow_panning_between_both_margin_anchors() {
-        assert_eq!(legal_origin_range(4, 17, 10), (1, 10));
-        assert_eq!(legal_origin_range(8, 9, 10), (2, 5));
+    fn requested_extreme_viewports_keep_a_real_point_in_the_inner_screen() {
+        let content = [
+            Coord { line: 1, column: 1 },
+            Coord {
+                line: 10,
+                column: 10,
+            },
+        ];
+        let viewport = (10, 10);
+
+        assert_eq!(viewport_rectangle((-7, -7), viewport), ((-7, -7), (3, 3)));
+        assert_eq!(inner_rectangle((-7, -7), viewport), ((-4, -4), (1, 1)));
+        assert_eq!(screen_position((-7, -7), content[0]), (8, 8));
+        assert!(content_intersects_inner_screen(
+            (-7, -7),
+            viewport,
+            &content
+        ));
+        assert!(!content_intersects_inner_screen(
+            (-8, -8),
+            viewport,
+            &content
+        ));
+
+        assert_eq!(viewport_rectangle((7, 7), viewport), ((7, 7), (17, 17)));
+        assert_eq!(inner_rectangle((7, 7), viewport), ((10, 10), (15, 15)));
+        assert_eq!(screen_position((7, 7), content[1]), (3, 3));
+        assert!(content_intersects_inner_screen((7, 7), viewport, &content));
+        assert!(!content_intersects_inner_screen((8, 8), viewport, &content));
+
+        assert_eq!(
+            navigation_origin((-7, -7), content[0], viewport, &content),
+            Some((-7, -7))
+        );
+        assert_eq!(
+            navigation_origin((7, 7), content[1], viewport, &content),
+            Some((7, 7))
+        );
+    }
+
+    #[test]
+    fn constraint_requires_one_point_to_match_both_axes() {
+        let content = [
+            Coord {
+                line: 10,
+                column: 1,
+            },
+            Coord {
+                line: 1,
+                column: 10,
+            },
+        ];
+        assert!(!content_intersects_inner_screen(
+            (-7, -7),
+            (10, 10),
+            &content
+        ));
     }
 
     #[test]
@@ -300,16 +375,11 @@ mod tests {
             column: 50,
         };
         assert_eq!(
-            navigation_origin((0, 0), cursor, (10, 10), None),
+            navigation_origin((0, 0), cursor, (10, 10), &[]),
             Some((41, 41))
         );
 
-        let point = ContentBounds {
-            left: 5,
-            right: 5,
-            top: 5,
-            bottom: 5,
-        };
+        let point = [Coord { line: 5, column: 5 }];
         assert_eq!(
             navigation_origin(
                 (2, 2),
@@ -318,7 +388,7 @@ mod tests {
                     column: 12
                 },
                 (10, 10),
-                Some(point)
+                &point
             ),
             None
         );
@@ -326,12 +396,7 @@ mod tests {
 
     #[test]
     fn far_blank_cursor_is_allowed_while_visible_and_content_stays_in_margin() {
-        let point = ContentBounds {
-            left: 5,
-            right: 5,
-            top: 5,
-            bottom: 5,
-        };
+        let point = [Coord { line: 5, column: 5 }];
         assert_eq!(
             navigation_origin(
                 (0, 0),
@@ -340,7 +405,7 @@ mod tests {
                     column: 20
                 },
                 (24, 24),
-                Some(point),
+                &point,
             ),
             Some((0, 0))
         );
@@ -352,7 +417,7 @@ mod tests {
                     column: 1
                 },
                 (24, 24),
-                Some(point),
+                &point,
             ),
             Some((0, 0))
         );
@@ -382,6 +447,35 @@ mod tests {
         (
             PADDING as i64 + cursor.column as i64 * cell_size.0 as i64 + viewport.x,
             grid_top as i64 + cursor.line as i64 * cell_size.1 as i64 + viewport.y,
+        )
+    }
+
+    fn viewport_rectangle(
+        origin: (i64, i64),
+        viewport: (usize, usize),
+    ) -> ((i64, i64), (i64, i64)) {
+        (
+            origin,
+            (
+                origin.0 + i64::try_from(viewport.0).unwrap(),
+                origin.1 + i64::try_from(viewport.1).unwrap(),
+            ),
+        )
+    }
+
+    fn inner_rectangle(origin: (i64, i64), viewport: (usize, usize)) -> ((i64, i64), (i64, i64)) {
+        let horizontal = inner_screen_offsets(viewport.0);
+        let vertical = inner_screen_offsets(viewport.1);
+        (
+            (origin.0 + horizontal.0, origin.1 + vertical.0),
+            (origin.0 + horizontal.1, origin.1 + vertical.1),
+        )
+    }
+
+    fn screen_position(origin: (i64, i64), coord: Coord) -> (i64, i64) {
+        (
+            i64::try_from(coord.column).unwrap() - origin.0,
+            i64::try_from(coord.line).unwrap() - origin.1,
         )
     }
 }

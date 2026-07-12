@@ -7,7 +7,6 @@ use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_with_connection, glyph_with_connection_and_corner,
     glyph_without_connection, is_line_glyph, line_ending_glyph,
 };
-use crate::layout::ContentBounds;
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::selection::{CanvasSelection, SelectionBounds, replace_range, selected_text};
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
@@ -744,34 +743,22 @@ impl EditorState {
         std::mem::take(&mut self.pending_prepend)
     }
 
-    pub fn content_bounds(&self) -> Option<ContentBounds> {
-        let mut bounds: Option<ContentBounds> = None;
+    pub fn content_cells(&self) -> Vec<Coord> {
+        let mut cells = Vec::new();
         for (line_index, line) in self.grid.lines.iter().enumerate() {
-            let mut column = 0;
+            let mut column: usize = 0;
             for atom in line {
                 let width = atom_width(atom);
                 if !atom.contents.chars().all(char::is_whitespace) {
-                    bounds = Some(match bounds {
-                        Some(current) => ContentBounds {
-                            left: current.left.min(column),
-                            right: current
-                                .right
-                                .max(column.saturating_add(width.saturating_sub(1))),
-                            top: current.top.min(line_index),
-                            bottom: current.bottom.max(line_index),
-                        },
-                        None => ContentBounds {
-                            left: column,
-                            right: column.saturating_add(width.saturating_sub(1)),
-                            top: line_index,
-                            bottom: line_index,
-                        },
-                    });
+                    cells.extend((column..column.saturating_add(width)).map(|column| Coord {
+                        line: line_index,
+                        column,
+                    }));
                 }
                 column = column.saturating_add(width);
             }
         }
-        bounds
+        cells
     }
 
     fn prepare_adjacent(&mut self, direction: Direction) -> bool {
@@ -1450,22 +1437,20 @@ mod tests {
     }
 
     #[test]
-    fn content_bounds_ignore_allocated_blank_padding() {
+    fn content_cells_ignore_allocated_blank_padding() {
         let mut state = state();
         state.move_to(Coord {
             line: 8,
             column: 12,
         });
-        assert_eq!(state.content_bounds(), None);
+        assert!(state.content_cells().is_empty());
         state.write_text("x");
         assert_eq!(
-            state.content_bounds(),
-            Some(ContentBounds {
-                left: 12,
-                right: 12,
-                top: 8,
-                bottom: 8,
-            })
+            state.content_cells(),
+            vec![Coord {
+                line: 8,
+                column: 12,
+            }]
         );
     }
 
