@@ -582,20 +582,20 @@ impl ToolbarState {
 
     pub fn tooltip(&self) -> &'static str {
         if self.export_open {
-            return "PNG is deferred; clipboard/save PNG will use an Egui canvas-only screenshot";
+            return "TXT/JSON export selection only; PNG canvas-only screenshot is deferred";
         }
         match self.main_mode {
             MainMode::Line => {
-                "Shift-<hjkl> or Shift-arrow to draw, Alt-<hjkl>, Alt-<arrow> to erase"
+                "Shift-direction draws; Alt-hjkl/arrows resize selection; Escape collapses; Space/Backspace clears; r then character replaces"
             }
             MainMode::Stamp => {
-                "<Space> to put stamp, <Shift> + direction to draw in line, <Ctrl>+direction - fill rectangle"
+                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
             }
             MainMode::Shapes => {
-                "<Escape> to start shape preview, <Space> to confirm, <Escape> to cancel"
+                "Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
             }
             MainMode::Utilities => {
-                "Space start, then Space confirm, Shift arrows - move selection, Backspace/Del clear selection"
+                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
             }
         }
     }
@@ -1127,6 +1127,25 @@ mod tests {
             toolbar.take_export_action(),
             Some(ExportAction::ClipboardTxt)
         );
+    }
+
+    #[test]
+    fn tooltips_describe_current_canvas_selection_shortcuts() {
+        let mut toolbar = ToolbarState::default();
+        for mode in MainMode::ALL {
+            toolbar.apply_action(ToolbarAction::SelectMain(mode));
+            let tooltip = toolbar.tooltip();
+            assert!(tooltip.contains("Alt-hjkl/arrows resize selection"));
+            assert!(tooltip.contains("Escape collapses"));
+            assert!(tooltip.contains("Backspace clears"));
+            assert!(tooltip.contains("r then character replaces"));
+        }
+
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        assert!(toolbar.tooltip().contains("Space fills with stamp"));
+
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        assert!(toolbar.tooltip().contains("export selection only"));
     }
 
     #[test]

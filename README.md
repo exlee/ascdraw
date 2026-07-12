@@ -10,7 +10,10 @@ The editor opens in **Line** mode.
 | --- | --- |
 | Move the cursor | Arrow keys or `h` `j` `k` `l` |
 | Draw a line | Shift + direction |
-| Clear the current cell | Space or Backspace |
+| Resize the canvas selection | Alt + direction |
+| Collapse the selection to 1x1 | Escape |
+| Clear the selected rectangle | Backspace, or Space in Line mode |
+| Replace the selected rectangle | `r`, then a character |
 | Enter or leave text entry | Return |
 | Choose a tool directly | `1`, then its displayed number |
 | Choose an option directly | Its displayed three-digit path |
@@ -34,11 +37,11 @@ Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw. Move wit
 
 ### Text entry
 
-Text entry is independent of the selected toolbar tool. Press Return to enter it and Return again to return to the selected tool. Type to insert text; the arrow keys or `h` `j` `k` `l` move freely over the canvas. Backspace and Delete edit text, and Tab inserts four spaces.
+Text entry is independent of the selected toolbar tool. Press Return to enter it and Return again to return to the selected tool. Type to insert text; the arrow keys or `h` `j` `k` `l` move freely over the canvas. Delete edits text, Backspace clears the selected rectangle, and Tab inserts four spaces.
 
-### Stamp, Shape, and Utils
+### Selection, Stamp, Shape, and Utils
 
-These tools expose their planned options and canvas navigation, but their editing actions are not implemented yet.
+Alt + `h` `j` `k` `l` or Alt + an arrow key extends the canvas selection rectangle. Escape collapses it to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
 
 ## Configuration
 
