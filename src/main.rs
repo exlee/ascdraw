@@ -490,6 +490,11 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.clear_selection();
             true
         }
+        EditCommand::ClearAndBack => {
+            state.clear_selection();
+            state.move_cursor(model::Direction::Left);
+            true
+        }
         EditCommand::ToggleTextEntry => {
             state.toggle_text_entry();
             false

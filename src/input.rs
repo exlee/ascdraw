@@ -16,6 +16,7 @@ pub enum EditCommand {
     ExtendSelection(Direction),
     Erase(Direction),
     Clear,
+    ClearAndBack,
     ToggleTextEntry,
     ToggleReplaceMode,
     BeginSingleReplace,
@@ -199,11 +200,11 @@ fn edit_command_for_key(
     }
 
     if matches!(key, Key::Named(NamedKey::Backspace)) {
-        return if mode.accepts_text() {
-            Some(EditCommand::Backspace)
-        } else {
-            Some(EditCommand::Clear)
-        };
+        return match mode {
+            CursorMode::Insert | CursorMode::Text => Some(EditCommand::Backspace),
+            CursorMode::Replace => Some(EditCommand::ClearAndBack),
+            _ => Some(EditCommand::Clear),
+        }
     }
 
     if !mode.accepts_text()
@@ -590,7 +591,7 @@ mod tests {
                 Some(EditCommand::Clear)
             );
         }
-        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+        for mode in [CursorMode::Text, CursorMode::Insert] {
             assert_eq!(
                 edit_command_for_key(
                     &Key::Named(NamedKey::Backspace),
@@ -598,6 +599,16 @@ mod tests {
                     mode,
                 ),
                 Some(EditCommand::Backspace)
+            );
+        }
+        for mode in [CursorMode::Replace] {
+            assert_eq!(
+                edit_command_for_key(
+                    &Key::Named(NamedKey::Backspace),
+                    ModifiersState::empty(),
+                    mode,
+                ),
+                Some(EditCommand::ClearAndBack)
             );
         }
 
