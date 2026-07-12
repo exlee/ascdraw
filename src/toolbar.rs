@@ -183,7 +183,6 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &["·", "░", "▒", "▓", "█"],
 ];
-const UTILITY_LABELS: [&str; 1] = ["Tool"];
 const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -381,13 +380,22 @@ impl ToolbarState {
                     self.toggle_export_menu();
                 } else if self.export_open {
                     self.select_export_mode_digit(digit);
+                } else if self.main_mode == MainMode::Utilities
+                    && let Some(option) = digit
+                        .checked_sub(2)
+                        .filter(|option| *option < UTILITY_OPTIONS[0].len())
+                {
+                    self.apply_action(ToolbarAction::SelectSubmenu { submenu: 0, option });
                 } else {
                     self.shortcut_prefix = if digit == 1 {
                         Some(PendingShortcut::Mode)
                     } else {
                         digit
                             .checked_sub(2)
-                            .filter(|category| *category < self.layout().labels.len())
+                            .filter(|category| {
+                                self.layout()
+                                    .is_some_and(|layout| *category < layout.labels.len())
+                            })
                             .map(PendingShortcut::Category)
                     };
                 }
@@ -403,8 +411,7 @@ impl ToolbarState {
             Some(PendingShortcut::Category(category)) => {
                 let option_count = self
                     .layout()
-                    .options
-                    .get(category)
+                    .and_then(|layout| layout.options.get(category))
                     .map_or(0, |options| options.len());
                 match category_shortcut(option_count, digit) {
                     Some(CategoryShortcut::Select(option)) => {
@@ -528,12 +535,14 @@ impl ToolbarState {
         if self.export_open {
             return 2;
         }
-        self.layout()
-            .options
-            .iter()
-            .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
-            .max()
-            .unwrap_or(0)
+        self.layout().map_or(2, |layout| {
+            layout
+                .options
+                .iter()
+                .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
+                .max()
+                .unwrap_or(0)
+        })
     }
 
     pub fn content_rows(&self) -> usize {
@@ -550,6 +559,8 @@ impl ToolbarState {
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
                 if self.export_open {
                     self.export_menu_spans(row)
+                } else if self.main_mode == MainMode::Utilities {
+                    self.utilities_menu_spans(row)
                 } else {
                     self.menu_spans(row)
                 }
@@ -688,7 +699,9 @@ impl ToolbarState {
     }
 
     fn menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let layout = self.layout();
+        let layout = self
+            .layout()
+            .expect("hierarchical menu rendering excludes Utilities");
         let relative_row = row - MENU_FIRST_ROW;
         let page = relative_row / 2;
         let label_row = relative_row.is_multiple_of(2);
@@ -769,6 +782,30 @@ impl ToolbarState {
                 });
             }
             pad_spans_to_width(&mut spans, cell_start + cell_width);
+        }
+        spans
+    }
+
+    fn utilities_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let label_row = row == MENU_FIRST_ROW;
+        let mut spans = Vec::new();
+        for (option, label) in UTILITY_OPTIONS[0].iter().enumerate() {
+            if option > 0 {
+                spans.push(plain_span(GAP.to_string()));
+            }
+            let action = ToolbarAction::SelectSubmenu { submenu: 0, option };
+            spans.push(ToolbarSpan {
+                contents: if label_row {
+                    (*label).to_string()
+                } else {
+                    aligned_shortcut(option + 2, label)
+                },
+                selected: label_row && option == self.utility_selected,
+                highlighted: false,
+                tooltip: false,
+                action: Some(action),
+                right_aligned: false,
+            });
         }
         spans
     }
@@ -897,32 +934,27 @@ impl ToolbarState {
         }
     }
 
-    fn layout(&self) -> MenuLayout<'_> {
+    fn layout(&self) -> Option<MenuLayout<'_>> {
         match self.main_mode {
-            MainMode::Line => MenuLayout {
+            MainMode::Line => Some(MenuLayout {
                 labels: &LINE_LABELS,
                 options: &LINE_OPTIONS,
                 selected: &self.line_selected,
                 exclusive_submenu: None,
-            },
-            MainMode::Stamp => MenuLayout {
+            }),
+            MainMode::Stamp => Some(MenuLayout {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
                 exclusive_submenu: Some(self.stamp_active_category),
-            },
-            MainMode::Shapes => MenuLayout {
+            }),
+            MainMode::Shapes => Some(MenuLayout {
                 labels: &SHAPE_LABELS,
                 options: &SHAPE_OPTIONS,
                 selected: &self.shape_selected,
                 exclusive_submenu: None,
-            },
-            MainMode::Utilities => MenuLayout {
-                labels: &UTILITY_LABELS,
-                options: &UTILITY_OPTIONS,
-                selected: std::slice::from_ref(&self.utility_selected),
-                exclusive_submenu: None,
-            },
+            }),
+            MainMode::Utilities => None,
         }
     }
 }
@@ -1302,9 +1334,9 @@ mod tests {
     fn every_menu_category_keeps_fixed_prefix_and_option_columns_across_pages() {
         let mut toolbar = ToolbarState::default();
 
-        for mode in MainMode::ALL {
+        for mode in [MainMode::Line, MainMode::Stamp, MainMode::Shapes] {
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
-            let layout = toolbar.layout();
+            let layout = toolbar.layout().expect("hierarchical editor mode");
             let expected: Vec<_> = layout
                 .labels
                 .iter()
@@ -1696,25 +1728,90 @@ mod tests {
     #[test]
     fn utils_push_and_pull_are_keyboard_and_mouse_selectable() {
         let mut toolbar = ToolbarState::default();
-        for key in ["1", "4", "2", "2"] {
+        for key in ["1", "4", "3"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert!(row(&toolbar, 2).contains("Tool: Select Push Pull"));
+        assert_eq!(row(&toolbar, 2), "Select    Push    Pull");
+        assert_eq!(row(&toolbar, 3), "2         3       4   ");
+        assert!(!row(&toolbar, 2).contains("Tool"));
+        for obsolete in ["2.1", "2.2", "2.3"] {
+            assert!(!row(&toolbar, 3).contains(obsolete));
+        }
 
         let expected = ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 2,
         };
-        let pull_column = (0..80)
-            .find(|column| toolbar.action_at(2, *column, 80) == Some(expected))
-            .expect("Pull is visible and clickable");
-        let action = toolbar.action_at(2, pull_column, 80).unwrap();
-        assert!(toolbar.apply_action(action));
+        for row in [2, 3] {
+            let pull_column = (0..80)
+                .find(|column| toolbar.action_at(row, *column, 80) == Some(expected))
+                .expect("Pull label and shortcut are visible and clickable");
+            let action = toolbar.action_at(row, pull_column, 80).unwrap();
+            assert!(toolbar.apply_action(action));
+        }
         assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPull);
+        assert_eq!(
+            toolbar
+                .toolbar_spans(2)
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
+        assert!(
+            toolbar
+                .toolbar_spans(3)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
+    }
+
+    #[test]
+    fn utils_are_direct_peer_shortcuts_with_no_pending_prefix() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["1", "4"] {
+            press(&mut toolbar, key);
+        }
+
+        for (key, utility, tooltip) in [
+            ("2", UtilityKind::Select, Tooltip::UtilitiesSelect),
+            ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
+            ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
+        ] {
+            press(&mut toolbar, key);
+            assert_eq!(toolbar.utility_kind(), utility);
+            assert_eq!(toolbar.tooltip(), tooltip);
+            assert_eq!(toolbar.pending_shortcut(), None);
+            assert!(
+                toolbar
+                    .toolbar_spans(MENU_FIRST_ROW + 1)
+                    .iter()
+                    .all(|span| !span.highlighted)
+            );
+        }
+
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+    }
+
+    #[test]
+    fn utils_peer_menu_clips_cleanly_at_narrow_widths() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+
+        for width in 0..24 {
+            for row in MENU_FIRST_ROW..=MENU_FIRST_ROW + 1 {
+                let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+                assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
+                assert!(spans.iter().all(|span| !span.highlighted));
+            }
+        }
     }
 
     #[test]
