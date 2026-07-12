@@ -328,8 +328,8 @@ pub enum ToolbarAction {
     RunExport(ExportAction),
 }
 
-const EXPORT_LABELS: [&str; 3] = ["Clipboard", "Save", "Load"];
-const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 3] = [
+const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
+const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
         ("TXT", ExportAction::ClipboardTxt),
         ("PNG", ExportAction::ClipboardPng),
@@ -343,6 +343,7 @@ const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 3] = [
         ("TXT", ExportAction::LoadTxt),
         ("JSON", ExportAction::LoadJson),
     ],
+    &[("Clear", ExportAction::Clear)],
 ];
 
 struct MenuLayout<'a> {
@@ -1473,7 +1474,7 @@ mod tests {
         press(&mut toolbar, "0");
         assert_eq!(
             highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
-            vec!["0.", "0.", "0."]
+            vec!["0.", "0.", "0.", "0."]
         );
         assert!(
             toolbar
@@ -1730,6 +1731,36 @@ mod tests {
     }
 
     #[test]
+    fn clear_is_keyboard_selectable_as_its_own_export_category() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["0", "4", "1"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
+        assert!(!toolbar.export_menu_open());
+    }
+
+    #[test]
+    fn clear_path_highlighting_and_layout_match_the_other_export_actions() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "0");
+        press(&mut toolbar, "4");
+
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["0.4."]
+        );
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Load:"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Clear"));
+        assert_eq!(EXPORT_OPTIONS[2].len(), 2);
+        assert_eq!(EXPORT_OPTIONS[3], &[("Clear", ExportAction::Clear)]);
+        for width in 0..48 {
+            let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width);
+            assert_eq!(UnicodeWidthStr::width(spans_text(&boxed).as_str()), width);
+        }
+    }
+
+    #[test]
     fn mouse_export_entry_and_action_match_keyboard_paths() {
         let mut toolbar = ToolbarState::default();
         let width = 60;
@@ -1758,6 +1789,30 @@ mod tests {
             toolbar.take_export_action(),
             Some(ExportAction::ClipboardTxt)
         );
+    }
+
+    #[test]
+    fn clear_export_action_is_visible_and_mouse_selectable() {
+        let mut toolbar = ToolbarState::default();
+        let width = 80;
+        assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+
+        let clear_column = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width)
+            .iter()
+            .scan(0, |column, span| {
+                let start = *column;
+                *column += UnicodeWidthStr::width(span.contents.as_str());
+                Some((start, span.action))
+            })
+            .find_map(|(column, action)| {
+                (action == Some(ToolbarAction::RunExport(ExportAction::Clear))).then_some(column)
+            })
+            .expect("Clear is visible");
+        let action = toolbar
+            .action_at(MENU_FIRST_ROW, clear_column, width)
+            .unwrap();
+        assert!(toolbar.apply_action(action));
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
     }
 
     #[test]

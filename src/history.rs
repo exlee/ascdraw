@@ -167,4 +167,41 @@ mod tests {
         assert!(!history.record_change(restored.clone(), &no_op));
         assert_eq!(history.redo(no_op), Some(after));
     }
+
+    #[test]
+    fn clear_is_undoable_and_redoable_while_blank_clear_preserves_redo() {
+        let mut blank_state = EditorState::new(&AppConfig::default().theme, "test");
+        let blank = HistorySnapshot {
+            edit: blank_state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut edited_state = blank_state.clone();
+        edited_state.insert("drawing");
+        let edited = HistorySnapshot {
+            edit: edited_state.edit_snapshot(),
+            viewport: ViewportOffset { x: 8, y: 9 },
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(blank.clone(), &edited));
+
+        let restored_blank = history.undo(edited.clone()).unwrap();
+        blank_state.restore_edit_snapshot(restored_blank.edit.clone());
+        blank_state.clear_canvas();
+        let blank_no_op = HistorySnapshot {
+            edit: blank_state.edit_snapshot(),
+            viewport: restored_blank.viewport,
+        };
+        assert!(!history.record_change(restored_blank, &blank_no_op));
+        assert_eq!(history.redo(blank_no_op.clone()), Some(edited.clone()));
+
+        edited_state.clear_canvas();
+        let cleared = HistorySnapshot {
+            edit: edited_state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut clear_history = EditHistory::default();
+        assert!(clear_history.record_change(edited.clone(), &cleared));
+        assert_eq!(clear_history.undo(cleared.clone()), Some(edited.clone()));
+        assert_eq!(clear_history.redo(edited), Some(cleared.clone()));
+    }
 }

@@ -810,6 +810,10 @@ impl EditorState {
         self.sync_cursor_mode_with_toolbar();
     }
 
+    pub fn clear_canvas(&mut self) {
+        self.replace_canvas(Vec::new());
+    }
+
     pub fn confirm_shape(&mut self) {
         let Some(preview) = self.shape_preview.take() else {
             dbg!("No preview");
@@ -1203,6 +1207,65 @@ mod tests {
         let before = state.edit_snapshot();
 
         state.clear_selection();
+
+        assert_eq!(state.edit_snapshot(), before);
+    }
+
+    #[test]
+    fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
+        let mut state = state();
+        state.grid.lines = vec![vec![Atom {
+            face: Face {
+                fg: "#123456".into(),
+                bg: "#abcdef".into(),
+                underline: "#fedcba".into(),
+                attributes: vec!["reverse".into()],
+            },
+            contents: "x".into(),
+        }]];
+        state.grid.cursor_pos = Coord { line: 3, column: 4 };
+        state.cursor_index = 1;
+        state
+            .selection
+            .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
+        state.active_stroke = Some(ActiveStroke {
+            end: Coord { line: 3, column: 4 },
+            end_base_glyph: "─".into(),
+            moving_ending: LineEnding::Arrow,
+        });
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord::default(),
+            ending: LineEnding::Arrow,
+            base_glyph: "─".into(),
+        });
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord::default(),
+            end: Coord { line: 3, column: 4 },
+        });
+        state.single_replace_pending = true;
+        state.pending_prepend = (2, 3);
+
+        state.clear_canvas();
+
+        assert_eq!(state.grid.lines, vec![Vec::new()]);
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert_eq!(state.cursor_index, 0);
+        assert!(state.selection.is_collapsed());
+        assert_eq!(state.selection.active(), Coord::default());
+        assert!(state.active_stroke.is_none());
+        assert!(state.line_markers.is_empty());
+        assert!(state.shape_preview.is_none());
+        assert!(!state.single_replace_pending);
+        assert_eq!(state.pending_prepend, (0, 0));
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn clear_canvas_on_a_canonical_blank_is_an_exact_document_no_op() {
+        let mut state = state();
+        let before = state.edit_snapshot();
+
+        state.clear_canvas();
 
         assert_eq!(state.edit_snapshot(), before);
     }
