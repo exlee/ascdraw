@@ -835,6 +835,7 @@ mod tests {
         let mut cleared = Vec::new();
         for key in [Key::Named(NamedKey::Backspace), Key::Named(NamedKey::Space)] {
             let mut state = EditorState::new(&config.theme, "test");
+            state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
             state.insert("│\n│\n│");
             state.move_to(Coord { line: 1, column: 0 });
 
@@ -1309,7 +1310,7 @@ mod tests {
         );
         assert_eq!(line_contents(&single_replace.grid.lines[0]), "2");
         assert_eq!(single_replace.grid.cursor_pos, Coord::default());
-        assert_eq!(single_replace.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(single_replace.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]
@@ -1342,7 +1343,7 @@ mod tests {
         );
         assert!(!state.toolbar.export_menu_open());
         assert_eq!(state.selection_bounds(), bounds);
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]

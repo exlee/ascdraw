@@ -195,8 +195,8 @@ const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull", "View", "Move"
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
     #[default]
-    Line,
     Stamp,
+    Line,
     Shapes,
     Utilities,
 }
@@ -219,7 +219,7 @@ pub enum UtilityKind {
 }
 
 impl MainMode {
-    pub const ALL: [Self; 4] = [Self::Line, Self::Stamp, Self::Shapes, Self::Utilities];
+    pub const ALL: [Self; 4] = [Self::Stamp, Self::Line, Self::Shapes, Self::Utilities];
 
     fn label(self) -> &'static str {
         match self {
@@ -1303,12 +1303,12 @@ mod tests {
     fn mode_path_selects_an_exact_mode() {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, "1");
-        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
         press(&mut toolbar, "3");
         assert_eq!(toolbar.main_mode(), MainMode::Shapes);
 
-        assert_eq!(row(&toolbar, 0), "Mode: Line Stamp Shape Utils");
-        assert_eq!(row(&toolbar, 1), "1.    1    2     3     4");
+        assert_eq!(row(&toolbar, 0), "Mode: Stamp Line Shape Utils");
+        assert_eq!(row(&toolbar, 1), "1.    1     2    3     4");
         assert_eq!(
             toolbar
                 .toolbar_spans(0)
@@ -1322,6 +1322,7 @@ mod tests {
     #[test]
     fn two_key_line_width_and_corner_paths_select_without_cycling() {
         let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         for key in ["4", "3"] {
             press(&mut toolbar, key);
         }
@@ -1374,6 +1375,7 @@ mod tests {
     #[test]
     fn line_start_and_end_use_independent_three_page_keyboard_paths() {
         let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         for key in ["2", "1", "0"] {
             press(&mut toolbar, key);
         }
@@ -1390,6 +1392,7 @@ mod tests {
     #[test]
     fn line_endpoint_pages_highlight_and_mouse_map_with_stable_columns() {
         let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         press(&mut toolbar, "2");
         for row_index in [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 3, MENU_FIRST_ROW + 5] {
             let highlighted: String = toolbar
@@ -1450,18 +1453,18 @@ mod tests {
         for key in ["1", "2", "3", "1", "0"] {
             press(&mut toolbar, key);
         }
-        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(toolbar.stamp(), "→");
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert_eq!(toolbar.stamp(), "□");
 
         for key in ["3", "3", "2"] {
             press(&mut toolbar, key);
         }
-        assert_eq!(toolbar.stamp(), "↔");
+        assert_eq!(toolbar.stamp(), "□");
 
         for key in ["2", "2", "0"] {
             press(&mut toolbar, key);
         }
-        assert_eq!(toolbar.stamp(), "¤");
+        assert_eq!(toolbar.stamp(), "□");
     }
 
     #[test]
@@ -1479,7 +1482,7 @@ mod tests {
     #[test]
     fn stamp_pages_show_the_complete_uniline_standalone_inventory() {
         let mut toolbar = ToolbarState::default();
-        for key in ["1", "2"] {
+        for key in ["1", "1"] {
             press(&mut toolbar, key);
         }
         assert!(row(&toolbar, 2).starts_with("Decorators: □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
@@ -1654,6 +1657,7 @@ mod tests {
     #[test]
     fn invalid_and_cancelled_prefixes_do_not_change_selection() {
         let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         press(&mut toolbar, "1");
         press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Line);
@@ -1848,22 +1852,22 @@ mod tests {
     #[test]
     fn mouse_hit_testing_directly_selects_modes_and_options() {
         let mut toolbar = ToolbarState::default();
-        let action = toolbar.action_at(0, 14, 80).expect("Stamp is clickable");
-        assert_eq!(action, ToolbarAction::SelectMain(MainMode::Stamp));
+        let action = toolbar.action_at(0, 14, 80).expect("Line is clickable");
+        assert_eq!(action, ToolbarAction::SelectMain(MainMode::Line));
         assert!(toolbar.apply_action(action));
 
         let decorator = toolbar
-            .action_at(2, 18, 80)
+            .action_at(2, 19, 80)
             .expect("decorator is clickable");
         assert_eq!(
             decorator,
             ToolbarAction::SelectSubmenu {
                 submenu: 0,
-                option: 2
+                option: 5
             }
         );
         assert!(toolbar.apply_action(decorator));
-        assert_eq!(toolbar.stamp(), "▫");
+        assert_eq!(toolbar.stamp(), "□");
 
         assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
         let shortcut_spans = toolbar.toolbar_spans(3);
@@ -2071,7 +2075,7 @@ mod tests {
         let toolbar = ToolbarState::default();
         let wide = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 60));
         assert!(wide.ends_with("0. Save/Load/Export │"));
-        assert!(wide.starts_with("│ Mode: Line"));
+        assert!(wide.starts_with("│ Mode: Stamp"));
         for width in 0..32 {
             let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
             assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
@@ -2144,7 +2148,7 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert!(!toolbar.export_menu_open());
         assert_eq!(toolbar.active_export_category, None);
-        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
         assert_eq!(selected_main_mode_count(&toolbar), 1);
         assert_eq!(toolbar.durable_selections(), durable);
     }
@@ -2423,8 +2427,8 @@ mod tests {
     fn main_modes_map_to_distinct_typed_tooltips() {
         let mut toolbar = ToolbarState::default();
         let expected = [
-            Tooltip::Line,
             Tooltip::Stamp,
+            Tooltip::Line,
             Tooltip::Shapes,
             Tooltip::UtilitiesSelect,
         ];
@@ -2591,6 +2595,6 @@ mod tests {
     fn unrelated_modified_keys_are_not_toolbar_shortcuts() {
         let mut toolbar = ToolbarState::default();
         assert!(!toolbar.handle_shortcut(&Key::Character("2".into()), ModifiersState::ALT));
-        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
 }

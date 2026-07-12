@@ -134,7 +134,7 @@ impl EditorState {
             },
             theme: theme.clone(),
             window_title: window_title.into(),
-            cursor_mode: CursorMode::MoveDraw,
+            cursor_mode: CursorMode::Stamp,
             toolbar: ToolbarState::default(),
             selection: CanvasSelection::collapsed_at(Coord::default()),
             cursor_index: 0,
@@ -1437,7 +1437,7 @@ mod tests {
         assert!(state.shape_preview.is_none());
         assert!(!state.single_replace_pending);
         assert_eq!(state.pending_prepend, (0, 0));
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]
@@ -1594,7 +1594,7 @@ mod tests {
         assert_eq!(contents(&state.grid.lines[0]), "aXY");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
         state.toggle_replace_mode();
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]
@@ -1609,7 +1609,7 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "aXc");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]
@@ -1895,7 +1895,7 @@ mod tests {
         assert_eq!(state.selected_text(), "界 \n界 ");
         assert_eq!(state.grid.cursor_pos, active);
         assert_eq!(state.selection.active(), active);
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]
@@ -1960,7 +1960,7 @@ mod tests {
 
         assert!(state.selection.is_collapsed());
         assert_eq!(state.toolbar.pending_shortcut(), None);
-        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
     }
 
     #[test]
@@ -2009,7 +2009,7 @@ mod tests {
             state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
         );
 
-        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
     }
 
     #[test]
@@ -2215,6 +2215,7 @@ mod tests {
     #[test]
     fn selected_line_endings_stay_at_the_stroke_endpoints() {
         let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 2,
@@ -2235,6 +2236,7 @@ mod tests {
     #[test]
     fn fixed_start_and_directional_end_survive_turning_and_marker_history_state() {
         let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 11,
@@ -2271,6 +2273,7 @@ mod tests {
     #[test]
     fn unadorned_endings_use_the_selected_double_line_style() {
         let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 2,
             option: 2,
@@ -2297,6 +2300,7 @@ mod tests {
     #[test]
     fn drawing_from_an_end_marker_moves_it_to_the_new_end() {
         let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         select_toolbar_option(&mut state, "3", 2);
         state.move_or_draw(Direction::Right, true);
         state.move_to(Coord { line: 0, column: 1 });
@@ -2310,6 +2314,7 @@ mod tests {
     #[test]
     fn drawing_from_a_start_marker_moves_it_to_the_new_end() {
         let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         select_toolbar_option(&mut state, "2", 2);
         state.move_or_draw(Direction::Right, true);
         state.move_to(Coord { line: 0, column: 0 });
@@ -2344,7 +2349,7 @@ mod tests {
         state.move_cursor(Direction::Right);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
         state.toggle_text_entry();
-        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
 
         for key in ["1", "2"] {
             assert!(state.handle_toolbar_shortcut(
@@ -2352,14 +2357,14 @@ mod tests {
                 winit::keyboard::ModifiersState::empty(),
             ));
         }
-        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(state.cursor_mode, CursorMode::Stamp);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
     }
 
     #[test]
     fn tooltip_tracks_editor_mode_and_export_override() {
         let mut state = EditorState::new(&ThemeConfig::default(), "test");
-        assert_eq!(state.tooltip(), Tooltip::Line);
+        assert_eq!(state.tooltip(), Tooltip::Stamp);
 
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         assert_eq!(state.tooltip(), Tooltip::Stamp);
@@ -2419,7 +2424,7 @@ mod tests {
                 !state
                     .handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
             );
-            assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+            assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
         }
     }
 
@@ -2446,7 +2451,7 @@ mod tests {
             winit::keyboard::ModifiersState::empty(),
         ));
 
-        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
     }
 
     #[test]

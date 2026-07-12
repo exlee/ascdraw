@@ -1065,11 +1065,11 @@ mod tests {
         ));
 
         let mut mouse_selection = previous.clone();
-        assert!(mouse_selection.apply_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(mouse_selection.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
         assert!(durable_menu_selections_changed(&previous, &mouse_selection));
 
         let mut unchanged = previous.clone();
-        assert!(unchanged.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
+        assert!(unchanged.apply_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         assert!(!durable_menu_selections_changed(&previous, &unchanged));
 
         let mut export = previous.clone();
