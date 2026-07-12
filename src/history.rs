@@ -1,0 +1,131 @@
+use std::collections::VecDeque;
+
+use crate::editor::EditSnapshot;
+use crate::layout::ViewportOffset;
+
+pub const HISTORY_LIMIT: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySnapshot {
+    pub edit: EditSnapshot,
+    pub viewport: ViewportOffset,
+}
+
+#[derive(Debug, Default)]
+pub struct EditHistory {
+    undo: VecDeque<HistorySnapshot>,
+    redo: VecDeque<HistorySnapshot>,
+}
+
+impl EditHistory {
+    pub fn record_change(&mut self, previous: HistorySnapshot, current: &HistorySnapshot) -> bool {
+        if previous.edit.same_document(&current.edit) {
+            return false;
+        }
+        push_bounded(&mut self.undo, previous);
+        self.redo.clear();
+        true
+    }
+
+    pub fn undo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
+        let previous = self.undo.pop_back()?;
+        push_bounded(&mut self.redo, current);
+        Some(previous)
+    }
+
+    pub fn redo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
+        let next = self.redo.pop_back()?;
+        push_bounded(&mut self.undo, current);
+        Some(next)
+    }
+
+    #[cfg(test)]
+    fn lengths(&self) -> (usize, usize) {
+        (self.undo.len(), self.redo.len())
+    }
+}
+
+fn push_bounded(stack: &mut VecDeque<HistorySnapshot>, snapshot: HistorySnapshot) {
+    if stack.len() == HISTORY_LIMIT {
+        stack.pop_front();
+    }
+    stack.push_back(snapshot);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::AppConfig;
+    use crate::editor::EditorState;
+
+    fn snapshot(text: &str, viewport: ViewportOffset) -> HistorySnapshot {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert(text);
+        HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport,
+        }
+    }
+
+    #[test]
+    fn records_undo_redo_and_clears_redo_after_a_new_edit() {
+        let blank = snapshot("", ViewportOffset::default());
+        let one = snapshot("1", ViewportOffset { x: 1, y: 2 });
+        let two = snapshot("12", ViewportOffset { x: 3, y: 4 });
+        let three = snapshot("123", ViewportOffset { x: 5, y: 6 });
+        let mut history = EditHistory::default();
+
+        assert!(history.record_change(blank.clone(), &one));
+        assert!(history.record_change(one.clone(), &two));
+        assert_eq!(history.undo(two.clone()), Some(one.clone()));
+        assert_eq!(history.undo(one.clone()), Some(blank.clone()));
+        assert_eq!(history.redo(blank), Some(one.clone()));
+        assert_eq!(history.redo(one.clone()), Some(two.clone()));
+
+        assert_eq!(history.undo(two), Some(one.clone()));
+        assert!(history.record_change(one, &three));
+        assert_eq!(history.lengths(), (2, 0));
+        assert!(history.redo(three).is_none());
+    }
+
+    #[test]
+    fn suppresses_cursor_only_and_identical_document_changes() {
+        let previous = snapshot("same", ViewportOffset::default());
+        let mut current = previous.clone();
+        current.viewport = ViewportOffset { x: 9, y: 8 };
+        current.edit.set_cursor_for_test(0, 0);
+        let mut history = EditHistory::default();
+
+        assert!(!history.record_change(previous, &current));
+        assert_eq!(history.lengths(), (0, 0));
+    }
+
+    #[test]
+    fn both_stacks_are_bounded() {
+        let mut history = EditHistory::default();
+        let mut current = snapshot("0", ViewportOffset::default());
+        for index in 1..=HISTORY_LIMIT + 10 {
+            let next = snapshot(&index.to_string(), ViewportOffset::default());
+            assert!(history.record_change(current, &next));
+            current = next;
+        }
+        assert_eq!(history.lengths(), (HISTORY_LIMIT, 0));
+
+        for _ in 0..HISTORY_LIMIT {
+            current = history.undo(current).expect("bounded undo entry");
+        }
+        assert_eq!(history.lengths(), (0, HISTORY_LIMIT));
+    }
+
+    #[test]
+    fn histories_are_isolated_per_owner() {
+        let blank = snapshot("", ViewportOffset::default());
+        let edited = snapshot("window one", ViewportOffset { x: 7, y: 8 });
+        let mut first = EditHistory::default();
+        let mut second = EditHistory::default();
+
+        assert!(first.record_change(blank.clone(), &edited));
+        assert_eq!(first.undo(edited), Some(blank.clone()));
+        assert!(second.undo(blank).is_none());
+    }
+}

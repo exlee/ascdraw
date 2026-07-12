@@ -38,14 +38,14 @@ pub struct EditorState {
     pending_prepend: (usize, usize),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ActiveStroke {
     end: Coord,
     end_base_glyph: String,
     moving_ending: LineEnding,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PlacedLineMarker {
     coord: Coord,
     ending: LineEnding,
@@ -58,7 +58,51 @@ struct ShapePreview {
     end: Coord,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditSnapshot {
+    lines: Vec<Vec<Atom>>,
+    cursor_pos: Coord,
+    cursor_index: usize,
+    selection: CanvasSelection,
+    active_stroke: Option<ActiveStroke>,
+    line_markers: Vec<PlacedLineMarker>,
+}
+
+impl EditSnapshot {
+    pub fn same_document(&self, other: &Self) -> bool {
+        self.lines == other.lines && self.line_markers == other.line_markers
+    }
+
+    #[cfg(test)]
+    pub fn set_cursor_for_test(&mut self, line: usize, column: usize) {
+        self.cursor_pos = Coord { line, column };
+        self.selection.collapse(self.cursor_pos);
+    }
+}
+
 impl EditorState {
+    pub fn edit_snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            lines: self.grid.lines.clone(),
+            cursor_pos: self.grid.cursor_pos,
+            cursor_index: self.cursor_index,
+            selection: self.selection,
+            active_stroke: self.active_stroke.clone(),
+            line_markers: self.line_markers.clone(),
+        }
+    }
+
+    pub fn restore_edit_snapshot(&mut self, snapshot: EditSnapshot) {
+        self.grid.lines = snapshot.lines;
+        self.grid.cursor_pos = snapshot.cursor_pos;
+        self.cursor_index = snapshot.cursor_index;
+        self.selection = snapshot.selection;
+        self.active_stroke = snapshot.active_stroke;
+        self.line_markers = snapshot.line_markers;
+        self.shape_preview = None;
+        self.pending_prepend = (0, 0);
+    }
+
     pub fn new(theme: &ThemeConfig, window_title: impl Into<String>) -> Self {
         Self {
             grid: GridState {
@@ -588,7 +632,26 @@ impl EditorState {
 
     pub fn clear_selection(&mut self) {
         self.end_stroke();
+        if !self.selection_contains_nonblank() {
+            return;
+        }
         self.replace_selection(None);
+    }
+
+    fn selection_contains_nonblank(&self) -> bool {
+        let bounds = self.selection.bounds();
+        (bounds.top..=bounds.bottom).any(|line_index| {
+            let Some(line) = self.grid.lines.get(line_index) else {
+                return false;
+            };
+            let mut column: usize = 0;
+            line.iter().any(|atom| {
+                let end = column.saturating_add(atom_width(atom));
+                let overlaps = column <= bounds.right && end > bounds.left;
+                column = end;
+                overlaps && !atom.contents.chars().all(char::is_whitespace)
+            })
+        })
     }
 
     pub fn place_stamp(&mut self) {
@@ -1094,6 +1157,47 @@ mod tests {
 
     fn state() -> EditorState {
         EditorState::new(&ThemeConfig::default(), "ascdraw")
+    }
+
+    #[test]
+    fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only() {
+        let mut state = state();
+        state.move_or_draw(Direction::Right, true);
+        state
+            .selection
+            .select(Coord::default(), state.grid.cursor_pos);
+        let snapshot = state.edit_snapshot();
+
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        state.toggle_text_entry();
+        state.window_title = "current title".into();
+        state.theme.selection.fg = "#123456".into();
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord::default(),
+            end: Coord { line: 1, column: 1 },
+        });
+        state.insert("changed");
+
+        state.restore_edit_snapshot(snapshot.clone());
+
+        assert_eq!(state.edit_snapshot(), snapshot);
+        assert_eq!(state.cursor_mode, CursorMode::Text);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(state.window_title, "current title");
+        assert_eq!(state.theme.selection.fg, "#123456");
+        assert!(state.shape_preview.is_none());
+        assert_eq!(state.pending_prepend, (0, 0));
+    }
+
+    #[test]
+    fn clearing_an_already_blank_selection_is_an_exact_document_no_op() {
+        let mut state = state();
+        state.extend_selection(Direction::Right);
+        let before = state.edit_snapshot();
+
+        state.clear_selection();
+
+        assert_eq!(state.edit_snapshot(), before);
     }
 
     #[test]

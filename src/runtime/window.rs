@@ -13,6 +13,7 @@ use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::EditorState;
+use crate::history::{EditHistory, HistorySnapshot};
 use crate::layout::{
     LayoutMetrics, ViewportOffset, content_intersects_inner_screen, content_top_padding,
     cursor_is_visible, layout_metrics, navigation_origin, normalized_cursor_and_origin,
@@ -33,6 +34,7 @@ pub struct EditorWindow {
     pub state: EditorState,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
+    history: EditHistory,
     transparent_menubar: bool,
     document_path: PathBuf,
     document_dirty: bool,
@@ -92,6 +94,39 @@ impl EditorWindow {
         self.document_dirty = true;
     }
 
+    pub fn history_snapshot(&self) -> HistorySnapshot {
+        HistorySnapshot {
+            edit: self.state.edit_snapshot(),
+            viewport: self.viewport,
+        }
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let current = self.history_snapshot();
+        let Some(snapshot) = self.history.undo(current) else {
+            return false;
+        };
+        self.restore_history_snapshot(snapshot);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let current = self.history_snapshot();
+        let Some(snapshot) = self.history.redo(current) else {
+            return false;
+        };
+        self.restore_history_snapshot(snapshot);
+        true
+    }
+
+    fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
+        self.state.restore_edit_snapshot(snapshot.edit);
+        self.viewport = snapshot.viewport;
+        self.ensure_cursor_in_viewport();
+        self.mark_document_dirty();
+        self.request_redraw();
+    }
+
     pub fn finish_state_change(
         &mut self,
         previous_state: EditorState,
@@ -127,7 +162,15 @@ impl EditorWindow {
                 content.is_empty()
                     || content_intersects_inner_screen(origin, viewport_cells, &content)
             );
-            return document_changed;
+            if !document_changed {
+                return false;
+            }
+            let previous = HistorySnapshot {
+                edit: previous_state.edit_snapshot(),
+                viewport: previous_viewport,
+            };
+            let current = self.history_snapshot();
+            return self.history.record_change(previous, &current);
         }
 
         self.state = previous_state;
@@ -241,6 +284,7 @@ pub fn create_editor_window(
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
+        history: EditHistory::default(),
         transparent_menubar: config.transparent_menubar,
         document_path: document_path.to_path_buf(),
         document_dirty: false,

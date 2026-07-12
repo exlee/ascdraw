@@ -35,6 +35,24 @@ pub enum ClipboardCommand {
     Paste,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryCommand {
+    Undo,
+    Redo,
+}
+
+/// Returns global history commands before every mode-specific or configurable shortcut.
+pub fn history_command(key: &Key, modifiers: ModifiersState) -> Option<HistoryCommand> {
+    if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
+        return None;
+    }
+    match key {
+        Key::Character(text) if text.eq_ignore_ascii_case("z") => Some(HistoryCommand::Undo),
+        Key::Character(text) if text.eq_ignore_ascii_case("r") => Some(HistoryCommand::Redo),
+        _ => None,
+    }
+}
+
 /// Returns global clipboard commands before mode-specific key handling.
 pub fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
     if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
@@ -654,6 +672,51 @@ mod tests {
             None,
             "Ctrl-C is copy, never text cancellation"
         );
+    }
+
+    #[test]
+    fn control_and_command_history_shortcuts_are_global_and_alt_is_excluded() {
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
+            assert_eq!(
+                history_command(&Key::Character("z".into()), modifiers),
+                Some(HistoryCommand::Undo)
+            );
+            assert_eq!(
+                history_command(&Key::Character("R".into()), modifiers),
+                Some(HistoryCommand::Redo)
+            );
+        }
+        assert_eq!(
+            history_command(
+                &Key::Character("r".into()),
+                ModifiersState::CONTROL | ModifiersState::ALT
+            ),
+            None
+        );
+        assert_eq!(
+            history_command(&Key::Character("r".into()), ModifiersState::empty()),
+            None
+        );
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
+        ] {
+            assert_eq!(
+                edit_command_for_key(&Key::Character("r".into()), ModifiersState::CONTROL, mode),
+                None,
+                "Ctrl-R must never start or type Replace in {mode:?}"
+            );
+        }
     }
 
     #[test]

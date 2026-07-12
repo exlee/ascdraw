@@ -243,19 +243,23 @@ impl Tooltip {
         match self {
             Self::None => "",
             Self::Line => {
-                "Shift-direction draws; Alt-hjkl/arrows resize selection; Escape collapses; Space/Backspace clears; r then character replaces"
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Shift-direction draws; Alt-hjkl/arrows resize selection; Escape collapses; Space/Backspace clears; r then character replaces"
             }
             Self::Stamp => {
-                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
             }
             Self::Shapes => {
-                "Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
             }
             Self::Utilities => {
-                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
             }
-            Self::Text => "<Ret> to exit text mode, arrows move freely over the canvas",
-            Self::Replace => "<Shift-Ret> to exit replace mode, arrows move freely over the canvas",
+            Self::Text => {
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Ret> exits text mode; arrows move freely over the canvas"
+            }
+            Self::Replace => {
+                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Shift-Ret> exits replace mode; arrows move freely over the canvas"
+            }
             Self::Export => {
                 "TXT/JSON export selection only; PNG canvas-only screenshot is deferred"
             }

@@ -16,6 +16,7 @@ mod drawing;
 mod editor;
 mod export;
 mod face_resolution;
+mod history;
 mod input;
 mod layout;
 #[cfg(target_os = "macos")]
@@ -36,8 +37,8 @@ use diagnostics::log_error;
 use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
 use input::{
-    ClipboardCommand, EditCommand, clipboard_command, edit_command, pointer_position_to_coord,
-    pointer_position_to_toolbar_position,
+    ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
+    history_command, pointer_position_to_coord, pointer_position_to_toolbar_position,
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
@@ -190,7 +191,20 @@ fn try_main() -> Result<ExitCode> {
                             if event.state == ElementState::Pressed =>
                         {
                             editor.note_keypress(Instant::now());
-                            if clipboard_command(&event.logical_key, editor.modifiers).is_some() {
+                            if let Some(command) =
+                                history_command(&event.logical_key, editor.modifiers)
+                            {
+                                match command {
+                                    HistoryCommand::Undo => {
+                                        editor.undo();
+                                    }
+                                    HistoryCommand::Redo => {
+                                        editor.redo();
+                                    }
+                                }
+                            } else if clipboard_command(&event.logical_key, editor.modifiers)
+                                .is_some()
+                            {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 let mut platform = NativeExportPlatform;
@@ -352,12 +366,15 @@ fn perform_pending_export(editor: &mut EditorWindow) {
         log_error("PNG export is deferred; it will use an Egui canvas-only screenshot");
         return;
     }
+    let previous_state = editor.state.clone();
+    let previous_viewport = editor.viewport;
     let mut platform = NativeExportPlatform;
     match export::perform(action, &mut editor.state, &mut platform) {
         Ok(ExportOutcome::DocumentLoaded) => {
             editor.viewport = layout::ViewportOffset::default();
-            editor.ensure_cursor_in_viewport();
-            editor.mark_document_dirty();
+            if editor.finish_state_change(previous_state, previous_viewport, true) {
+                editor.mark_document_dirty();
+            }
         }
         Ok(ExportOutcome::Unchanged) => {}
         Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
