@@ -5,7 +5,7 @@ use crate::app::CursorMode;
 use crate::layout::{PADDING, ViewportOffset, content_top_padding};
 use crate::model::{Coord, Direction};
 use crate::render::Renderer;
-use crate::toolbar::ToolbarState;
+use crate::toolbar::{ToolbarState, UtilityKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditCommand {
@@ -31,6 +31,33 @@ pub enum EditCommand {
     InsertTab,
     ConfirmOrTextEntry,
     ConfirmOrReplace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewCommand {
+    Pan(Direction),
+    Center,
+}
+
+/// Resolves viewport-only commands for the Utilities View tool. These are
+/// handled by the window runtime because they must never mutate the document.
+pub fn view_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    mode: CursorMode,
+    utility: UtilityKind,
+) -> Option<ViewCommand> {
+    if mode != CursorMode::Utilities
+        || utility != UtilityKind::View
+        || modifiers != ModifiersState::empty()
+    {
+        return None;
+    }
+    if is_space_key(key) {
+        Some(ViewCommand::Center)
+    } else {
+        direction_for_key(key).map(ViewCommand::Pan)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1057,6 +1084,64 @@ mod tests {
                 CursorMode::MoveDraw,
             ),
             Some(EditCommand::Draw(Direction::Right))
+        );
+    }
+
+    #[test]
+    fn utilities_view_resolves_plain_pan_and_center_only() {
+        for (key, direction) in [
+            (Key::Character("h".into()), Direction::Left),
+            (Key::Character("j".into()), Direction::Down),
+            (Key::Character("k".into()), Direction::Up),
+            (Key::Character("l".into()), Direction::Right),
+            (Key::Named(NamedKey::ArrowLeft), Direction::Left),
+            (Key::Named(NamedKey::ArrowDown), Direction::Down),
+            (Key::Named(NamedKey::ArrowUp), Direction::Up),
+            (Key::Named(NamedKey::ArrowRight), Direction::Right),
+        ] {
+            assert_eq!(
+                view_command(
+                    &key,
+                    ModifiersState::empty(),
+                    CursorMode::Utilities,
+                    UtilityKind::View,
+                ),
+                Some(ViewCommand::Pan(direction))
+            );
+        }
+        assert_eq!(
+            view_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                CursorMode::Utilities,
+                UtilityKind::View,
+            ),
+            Some(ViewCommand::Center)
+        );
+        for modifiers in [
+            ModifiersState::SHIFT,
+            ModifiersState::ALT,
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+        ] {
+            assert_eq!(
+                view_command(
+                    &Key::Named(NamedKey::ArrowRight),
+                    modifiers,
+                    CursorMode::Utilities,
+                    UtilityKind::View,
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            view_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                CursorMode::Utilities,
+                UtilityKind::Pull,
+            ),
+            None
         );
     }
 

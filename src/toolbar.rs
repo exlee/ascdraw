@@ -187,7 +187,7 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &[" ", "░", "▒", "▓", "█"],
 ];
-const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull"].as_slice()];
+const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull", "View"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
@@ -211,6 +211,7 @@ pub enum UtilityKind {
     Select,
     Push,
     Pull,
+    View,
 }
 
 impl MainMode {
@@ -245,6 +246,7 @@ pub enum Tooltip {
     UtilitiesSelect,
     UtilitiesPush,
     UtilitiesPull,
+    UtilitiesView,
     Text,
     Replace,
     Export,
@@ -280,6 +282,7 @@ impl Tooltip {
             Self::UtilitiesPull => {
                 "Pull: Shift-direction pulls"
             }
+            Self::UtilitiesView => "View: directions pan the view; Space centers the drawing",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
@@ -831,6 +834,7 @@ impl ToolbarState {
                 UtilityKind::Select => Tooltip::UtilitiesSelect,
                 UtilityKind::Push => Tooltip::UtilitiesPush,
                 UtilityKind::Pull => Tooltip::UtilitiesPull,
+                UtilityKind::View => Tooltip::UtilitiesView,
             };
         }
         self.main_mode.tooltip()
@@ -883,6 +887,7 @@ impl ToolbarState {
             0 => UtilityKind::Select,
             1 => UtilityKind::Push,
             2 => UtilityKind::Pull,
+            3 => UtilityKind::View,
             _ => unreachable!("utility selection is always normalized"),
         }
     }
@@ -1841,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn utils_push_and_pull_are_keyboard_and_mouse_selectable() {
+    fn utils_tools_are_keyboard_and_mouse_selectable() {
         let mut toolbar = ToolbarState::default();
         for key in ["1", "4", "3"] {
             press(&mut toolbar, key);
@@ -1849,8 +1854,8 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert_eq!(row(&toolbar, 2), "Select    Push    Pull");
-        assert_eq!(row(&toolbar, 3), "2         3       4   ");
+        assert_eq!(row(&toolbar, 2), "Select    Push    Pull    View");
+        assert_eq!(row(&toolbar, 3), "2         3       4       5   ");
         assert!(!row(&toolbar, 2).contains("Tool"));
         for obsolete in ["2.1", "2.2", "2.3"] {
             assert!(!row(&toolbar, 3).contains(obsolete));
@@ -1883,6 +1888,21 @@ mod tests {
                 .iter()
                 .all(|span| !span.highlighted)
         );
+
+        let view_action = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        };
+        for row in [2, 3] {
+            let column = (0..80)
+                .find(|column| toolbar.action_at(row, *column, 80) == Some(view_action))
+                .expect("View label and shortcut are visible and clickable");
+            assert!(
+                toolbar.apply_action(toolbar.action_at(row, column, 80).expect("View hit tests"))
+            );
+        }
+        assert_eq!(toolbar.utility_kind(), UtilityKind::View);
+        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesView);
     }
 
     #[test]
@@ -1896,6 +1916,7 @@ mod tests {
             ("2", UtilityKind::Select, Tooltip::UtilitiesSelect),
             ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
             ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
+            ("5", UtilityKind::View, Tooltip::UtilitiesView),
         ] {
             press(&mut toolbar, key);
             assert_eq!(toolbar.utility_kind(), utility);
@@ -1910,7 +1931,7 @@ mod tests {
         }
 
         press(&mut toolbar, "9");
-        assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
+        assert_eq!(toolbar.utility_kind(), UtilityKind::View);
         assert_eq!(toolbar.pending_shortcut(), None);
         assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
     }

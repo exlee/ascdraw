@@ -14,14 +14,14 @@ use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::EditorState;
 use crate::history::{EditHistory, HistorySnapshot};
-use crate::input::OrderedModifierTracker;
+use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
     LayoutMetrics, ViewportOffset, content_intersects_inner_screen, content_top_padding,
     cursor_is_visible, layout_metrics, navigation_origin, normalized_cursor_and_origin,
 };
 #[cfg(target_os = "macos")]
 use crate::macos;
-use crate::model::{Atom, Coord};
+use crate::model::{Atom, Coord, Direction};
 use crate::render::{Renderer, load_renderer, resize_surface};
 use crate::title_policy::window_attributes;
 use crate::user_keys::FontSizeAction;
@@ -228,6 +228,36 @@ impl EditorWindow {
         );
     }
 
+    pub fn apply_view_command(&mut self, command: ViewCommand) -> bool {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        let layout = self.current_layout();
+        let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
+        let content = self.state.content_cells();
+        let changed = match command {
+            ViewCommand::Pan(direction) => pan_viewport(
+                &mut self.viewport,
+                direction,
+                cell_size,
+                viewport_cells,
+                self.state.grid.cursor_pos,
+                &content,
+            ),
+            ViewCommand::Center => center_viewport(
+                &mut self.viewport,
+                &mut self.state,
+                cell_size,
+                viewport_cells,
+                &content,
+            ),
+        };
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
     fn current_layout(&self) -> LayoutMetrics {
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
@@ -260,6 +290,87 @@ impl EditorWindow {
             document::save,
         )
     }
+}
+
+fn pan_viewport(
+    viewport: &mut ViewportOffset,
+    direction: Direction,
+    cell_size: (usize, usize),
+    viewport_cells: (usize, usize),
+    cursor: Coord,
+    content: &[Coord],
+) -> bool {
+    let mut candidate = *viewport;
+    let cell_width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
+    let cell_height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
+    match direction {
+        Direction::Left => candidate.x = candidate.x.saturating_add(cell_width),
+        Direction::Right => candidate.x = candidate.x.saturating_sub(cell_width),
+        Direction::Up => candidate.y = candidate.y.saturating_add(cell_height),
+        Direction::Down => candidate.y = candidate.y.saturating_sub(cell_height),
+    }
+    let origin = candidate.origin(cell_size);
+    if !cursor_is_visible(origin, cursor, viewport_cells)
+        || (!content.is_empty()
+            && !content_intersects_inner_screen(origin, viewport_cells, content))
+    {
+        return false;
+    }
+    let changed = candidate != *viewport;
+    *viewport = candidate;
+    changed
+}
+
+fn center_viewport(
+    viewport: &mut ViewportOffset,
+    state: &mut EditorState,
+    cell_size: (usize, usize),
+    viewport_cells: (usize, usize),
+    content: &[Coord],
+) -> bool {
+    let Some((min, max)) = content_bounds(content) else {
+        return false;
+    };
+    let center = Coord {
+        line: max.line - (max.line - min.line) / 2,
+        column: max.column - (max.column - min.column) / 2,
+    };
+    let origin = (
+        i64::try_from(center.column)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(i64::try_from(viewport_cells.0 / 2).unwrap_or(i64::MAX)),
+        i64::try_from(center.line)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(i64::try_from(viewport_cells.1 / 2).unwrap_or(i64::MAX)),
+    );
+    let old_viewport = *viewport;
+    let old_cursor = state.grid.cursor_pos;
+    viewport.set_origin(origin, cell_size);
+    if !cursor_is_visible(origin, old_cursor, viewport_cells) {
+        state.relocate_cursor_for_view_center(center);
+    }
+    *viewport != old_viewport || state.grid.cursor_pos != old_cursor
+}
+
+fn content_bounds(content: &[Coord]) -> Option<(Coord, Coord)> {
+    let first = *content.first()?;
+    Some(
+        content
+            .iter()
+            .copied()
+            .fold((first, first), |(min, max), coord| {
+                (
+                    Coord {
+                        line: min.line.min(coord.line),
+                        column: min.column.min(coord.column),
+                    },
+                    Coord {
+                        line: max.line.max(coord.line),
+                        column: max.column.max(coord.column),
+                    },
+                )
+            }),
+    )
 }
 
 fn save_document_if_dirty(
@@ -549,6 +660,183 @@ mod tests {
             PADDING as i64 + coord.column as i64 * cell_size.0 as i64 + viewport.x,
             grid_top as i64 + coord.line as i64 * cell_size.1 as i64 + viewport.y,
         )
+    }
+
+    fn state_with_rows(rows: &[&str]) -> EditorState {
+        let mut state = EditorState::new(&AppConfig::default().theme, DEFAULT_WINDOW_TITLE);
+        state.grid.lines = rows
+            .iter()
+            .map(|row| {
+                unicode_segmentation::UnicodeSegmentation::graphemes(*row, true)
+                    .map(|contents| Atom {
+                        face: Face::default(),
+                        contents: contents.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        state
+    }
+
+    #[test]
+    fn view_pan_uses_camera_directions_exact_cells_and_preserves_pixel_residuals() {
+        let cell_size = (9, 13);
+        let original = ViewportOffset { x: 7, y: -3 };
+        let cursor = Coord { line: 4, column: 4 };
+        let content = [Coord { line: 5, column: 5 }];
+        for (direction, expected) in [
+            (Direction::Left, ViewportOffset { x: 16, y: -3 }),
+            (Direction::Right, ViewportOffset { x: -2, y: -3 }),
+            (Direction::Up, ViewportOffset { x: 7, y: 10 }),
+            (Direction::Down, ViewportOffset { x: 7, y: -16 }),
+        ] {
+            let mut viewport = original;
+            assert!(pan_viewport(
+                &mut viewport,
+                direction,
+                cell_size,
+                (10, 10),
+                cursor,
+                &content,
+            ));
+            assert_eq!(viewport, expected);
+        }
+
+        let mut viewport = original;
+        for _ in 0..20 {
+            assert!(pan_viewport(
+                &mut viewport,
+                Direction::Left,
+                cell_size,
+                (10, 10),
+                cursor,
+                &content,
+            ));
+            assert!(pan_viewport(
+                &mut viewport,
+                Direction::Right,
+                cell_size,
+                (10, 10),
+                cursor,
+                &content,
+            ));
+        }
+        assert_eq!(viewport, original);
+    }
+
+    #[test]
+    fn view_pan_rejects_cursor_and_actual_inner_content_escape() {
+        let mut cursor_boundary = ViewportOffset::default();
+        assert!(!pan_viewport(
+            &mut cursor_boundary,
+            Direction::Right,
+            (8, 12),
+            (10, 10),
+            Coord::default(),
+            &[],
+        ));
+        assert_eq!(cursor_boundary, ViewportOffset::default());
+
+        let mut content_boundary = ViewportOffset::default();
+        let cursor = Coord { line: 5, column: 5 };
+        let content = [Coord { line: 3, column: 3 }];
+        assert!(!pan_viewport(
+            &mut content_boundary,
+            Direction::Right,
+            (8, 12),
+            (10, 10),
+            cursor,
+            &content,
+        ));
+        assert_eq!(content_boundary, ViewportOffset::default());
+
+        let mut empty = ViewportOffset::default();
+        assert!(pan_viewport(
+            &mut empty,
+            Direction::Left,
+            (8, 12),
+            (10, 10),
+            cursor,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn view_center_uses_requested_asymmetric_content_and_display_midpoints() {
+        let mut state = state_with_rows(&[
+            "          ",
+            "  X       ",
+            "          ",
+            "          ",
+            "        Y ",
+        ]);
+        state.grid.cursor_pos = Coord { line: 3, column: 5 };
+        state
+            .selection
+            .select(Coord { line: 2, column: 4 }, Coord { line: 3, column: 5 });
+        let selection = state.selection;
+        let lines = state.grid.lines.clone();
+        let content = state.content_cells();
+        let mut viewport = ViewportOffset { x: 3, y: 7 };
+
+        // Bounds x=2..8 and y=1..4 use max - range/2, producing (5,3).
+        // A 10x8 display uses cell midpoint (5,4), hence origin (0,-1).
+        assert!(center_viewport(
+            &mut viewport,
+            &mut state,
+            (7, 11),
+            (10, 8),
+            &content,
+        ));
+        assert_eq!(viewport.origin((7, 11)), (0, -1));
+        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
+        assert_eq!(state.selection, selection);
+        assert_eq!(state.grid.lines, lines);
+        assert!(!center_viewport(
+            &mut viewport,
+            &mut state,
+            (7, 11),
+            (10, 8),
+            &content,
+        ));
+    }
+
+    #[test]
+    fn view_center_is_blank_noop_and_moves_far_cursor_to_wide_grapheme_start() {
+        let mut blank = state_with_rows(&["     "]);
+        blank.grid.cursor_pos = Coord { line: 0, column: 4 };
+        let blank_cursor = blank.grid.cursor_pos;
+        let mut blank_viewport = ViewportOffset { x: 5, y: -9 };
+        assert!(!center_viewport(
+            &mut blank_viewport,
+            &mut blank,
+            (8, 12),
+            (3, 3),
+            &[],
+        ));
+        assert_eq!(blank_viewport, ViewportOffset { x: 5, y: -9 });
+        assert_eq!(blank.grid.cursor_pos, blank_cursor);
+
+        let mut wide = state_with_rows(&["    界"]);
+        wide.grid.cursor_pos = Coord::default();
+        wide.selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        let lines = wide.grid.lines.clone();
+        let content = wide.content_cells();
+        let mut viewport = ViewportOffset::default();
+        assert!(center_viewport(
+            &mut viewport,
+            &mut wide,
+            (8, 12),
+            (3, 1),
+            &content,
+        ));
+        // The content midpoint is the wide glyph's second display cell (5),
+        // while the cursor must sit on its valid grapheme start (4).
+        assert_eq!(viewport.origin((8, 12)), (4, 0));
+        assert_eq!(wide.grid.cursor_pos, Coord { line: 0, column: 4 });
+        assert!(wide.selection.is_collapsed());
+        assert_eq!(wide.grid.lines, lines);
     }
 
     fn assert_toolbar_transition_is_anchored(

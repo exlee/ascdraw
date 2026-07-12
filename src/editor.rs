@@ -392,6 +392,25 @@ impl EditorState {
         self.collapse_selection();
     }
 
+    /// Relocates the cursor for an explicit viewport-centering command without
+    /// allocating blank cells. A target inside a wide grapheme resolves to
+    /// that grapheme's start column; a target beyond a ragged row stays at the
+    /// requested canvas column.
+    pub fn relocate_cursor_for_view_center(&mut self, coord: Coord) {
+        let line = &self.grid.lines[coord.line];
+        self.cursor_index = index_for_column(line, coord.column);
+        let grapheme_start = display_width(&line[..self.cursor_index]);
+        self.grid.cursor_pos = Coord {
+            line: coord.line,
+            column: if self.cursor_index < line.len() {
+                grapheme_start
+            } else {
+                coord.column
+            },
+        };
+        self.collapse_selection();
+    }
+
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
@@ -2834,6 +2853,7 @@ mod tests {
                 UtilityKind::Select => 0,
                 UtilityKind::Push => 1,
                 UtilityKind::Pull => 2,
+                UtilityKind::View => 3,
             },
         });
         state.grid.cursor_pos = cursor;

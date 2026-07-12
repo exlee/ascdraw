@@ -40,7 +40,7 @@ use export::{ExportOutcome, NativeExportPlatform};
 use input::{
     ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
     history_command, ordered_direction_command, pointer_position_to_coord,
-    pointer_position_to_toolbar_position,
+    pointer_position_to_toolbar_position, view_command,
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
@@ -273,6 +273,16 @@ fn try_main() -> Result<ExitCode> {
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
                                 pending_command = Some(app_command_from_user_action(action));
+                            } else if editor.state.toolbar.pending_shortcut().is_none()
+                                && let Some(command) = view_command(
+                                    &event.logical_key,
+                                    editor.modifiers,
+                                    editor.state.cursor_mode,
+                                    editor.state.toolbar.utility_kind(),
+                                )
+                            {
+                                editor.state.toolbar.cancel_shortcut();
+                                editor.apply_view_command(command);
                             } else {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
