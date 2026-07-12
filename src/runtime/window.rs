@@ -505,10 +505,32 @@ fn reanchor_toolbar_transition(
 mod tests {
     use super::*;
     use crate::app::AppConfig;
+    use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
     use crate::layout::PADDING;
     use crate::model::{Atom, Direction, Face};
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    #[derive(Default)]
+    struct NoopExportPlatform;
+
+    impl ExportPlatform for NoopExportPlatform {
+        fn set_clipboard_text(&mut self, _: &str) -> Result<()> {
+            unreachable!("Clear does not access the clipboard")
+        }
+
+        fn clipboard_text(&mut self) -> Result<String> {
+            unreachable!("Clear does not access the clipboard")
+        }
+
+        fn choose_save_path(&mut self, _: FileKind) -> Option<PathBuf> {
+            unreachable!("Clear does not open a save dialog")
+        }
+
+        fn choose_open_path(&mut self, _: FileKind) -> Option<PathBuf> {
+            unreachable!("Clear does not open a load dialog")
+        }
+    }
 
     fn toolbar_test_metrics(config: &AppConfig) -> (usize, (usize, usize)) {
         let renderer = load_renderer(config);
@@ -622,6 +644,41 @@ mod tests {
             toolbar_cell_height,
             cell_size,
         );
+    }
+
+    fn clear_after_toolbar_action_preserves_cursor_screen_position(
+        state: &mut EditorState,
+        viewport: ViewportOffset,
+        config: &AppConfig,
+        toolbar_cell_height: usize,
+        cell_size: (usize, usize),
+    ) -> ViewportOffset {
+        let cursor = state.grid.cursor_pos;
+        let current_grid_top = grid_top(
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            &state.toolbar,
+        );
+        let before = canvas_screen_position(cursor, current_grid_top, cell_size, viewport);
+        let mut platform = NoopExportPlatform;
+
+        assert_eq!(
+            state.toolbar.take_export_action(),
+            Some(ExportAction::Clear)
+        );
+        assert_eq!(
+            export::perform(ExportAction::Clear, state, &mut platform).unwrap(),
+            ExportOutcome::CanvasCleared
+        );
+        assert_eq!(state.grid.cursor_pos, cursor);
+        assert!(state.content_cells().is_empty());
+        assert_eq!(
+            canvas_screen_position(cursor, current_grid_top, cell_size, viewport),
+            before
+        );
+
+        viewport
     }
 
     #[test]
@@ -1177,8 +1234,13 @@ mod tests {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = EditorState::new(&config.theme, "test");
-        state.insert("drawing");
-        let mut viewport = ViewportOffset { x: 4, y: -23 };
+        state.insert("ragged\nx\nfar drawing");
+        let cursor = Coord { line: 2, column: 7 };
+        state.move_to(cursor);
+        let mut viewport = ViewportOffset {
+            x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 4,
+            y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 3,
+        };
 
         apply_mouse_toolbar_transition(
             &mut state,
@@ -1190,7 +1252,7 @@ mod tests {
         );
         apply_mouse_toolbar_transition(
             &mut state,
-            ToolbarAction::SelectExportCategory(3),
+            ToolbarAction::RunExport(ExportAction::Clear),
             &mut viewport,
             &config,
             toolbar_cell_height,
@@ -1201,7 +1263,13 @@ mod tests {
             edit: state.edit_snapshot(),
             viewport,
         };
-        state.clear_canvas();
+        viewport = clear_after_toolbar_action_preserves_cursor_screen_position(
+            &mut state,
+            viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
         let current = HistorySnapshot {
             edit: state.edit_snapshot(),
             viewport,
@@ -1209,7 +1277,147 @@ mod tests {
         let mut history = EditHistory::default();
 
         assert!(history.record_change(previous.clone(), &current));
-        assert_eq!(history.undo(current), Some(previous));
+        assert_eq!(history.undo(current.clone()), Some(previous.clone()));
+        assert_eq!(history.redo(previous), Some(current));
         assert_eq!(closed_viewport, viewport);
+    }
+
+    #[test]
+    fn keyboard_and_repeated_mouse_clear_do_not_drift() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+
+        for use_keyboard in [true, false] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.insert("drawing");
+            let cursor = Coord { line: 4, column: 9 };
+            state.move_to(cursor);
+            let initial = ViewportOffset {
+                x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 5,
+                y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 4,
+            };
+            let initial_grid_top = grid_top(
+                1.0,
+                config.transparent_menubar,
+                toolbar_cell_height,
+                &state.toolbar,
+            );
+            let initial_screen =
+                canvas_screen_position(cursor, initial_grid_top, cell_size, initial);
+            let mut viewport = initial;
+
+            for _ in 0..4 {
+                if use_keyboard {
+                    apply_keyboard_toolbar_transition(
+                        &mut state,
+                        Key::Character("0".into()),
+                        &mut viewport,
+                        &config,
+                        toolbar_cell_height,
+                        cell_size,
+                    );
+                    apply_keyboard_toolbar_transition(
+                        &mut state,
+                        Key::Character("5".into()),
+                        &mut viewport,
+                        &config,
+                        toolbar_cell_height,
+                        cell_size,
+                    );
+                } else {
+                    apply_mouse_toolbar_transition(
+                        &mut state,
+                        ToolbarAction::ToggleExportMenu,
+                        &mut viewport,
+                        &config,
+                        toolbar_cell_height,
+                        cell_size,
+                    );
+                    apply_mouse_toolbar_transition(
+                        &mut state,
+                        ToolbarAction::RunExport(ExportAction::Clear),
+                        &mut viewport,
+                        &config,
+                        toolbar_cell_height,
+                        cell_size,
+                    );
+                }
+                viewport = clear_after_toolbar_action_preserves_cursor_screen_position(
+                    &mut state,
+                    viewport,
+                    &config,
+                    toolbar_cell_height,
+                    cell_size,
+                );
+                assert_eq!(viewport, initial);
+                assert_eq!(
+                    canvas_screen_position(cursor, initial_grid_top, cell_size, viewport),
+                    initial_screen
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_styled_whitespace_removes_its_face_without_moving_cursor_or_viewport() {
+        let config = AppConfig::default();
+        let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
+        let mut state = EditorState::new(&config.theme, "test");
+        state.grid.lines = vec![vec![Atom {
+            face: config.theme.selection.clone(),
+            contents: " ".into(),
+        }]];
+        let cursor = Coord { line: 3, column: 6 };
+        state.move_to(cursor);
+        let initial = ViewportOffset {
+            x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 4,
+            y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 3,
+        };
+        let grid_top = grid_top(
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            &state.toolbar,
+        );
+        let screen = canvas_screen_position(cursor, grid_top, cell_size, initial);
+        let mut viewport = initial;
+
+        apply_mouse_toolbar_transition(
+            &mut state,
+            ToolbarAction::ToggleExportMenu,
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        apply_mouse_toolbar_transition(
+            &mut state,
+            ToolbarAction::RunExport(ExportAction::Clear),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        viewport = clear_after_toolbar_action_preserves_cursor_screen_position(
+            &mut state,
+            viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+
+        assert_eq!(viewport, initial);
+        assert_eq!(
+            canvas_screen_position(cursor, grid_top, cell_size, viewport),
+            screen
+        );
+        assert!(
+            state
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default())
+        );
     }
 }

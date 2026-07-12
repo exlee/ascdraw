@@ -411,6 +411,11 @@ fn perform_pending_export(editor: &mut EditorWindow) {
                 editor.mark_document_dirty();
             }
         }
+        Ok(ExportOutcome::CanvasCleared) => {
+            if editor.finish_state_change(previous_state, previous_viewport, true) {
+                editor.mark_document_dirty();
+            }
+        }
         Ok(ExportOutcome::Unchanged) => {}
         Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
     }

@@ -199,7 +199,7 @@ mod tests {
         edited_state.clear_canvas();
         let cleared = HistorySnapshot {
             edit: edited_state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
+            viewport: edited.viewport,
         };
         let mut clear_history = EditHistory::default();
         assert!(clear_history.record_change(edited.clone(), &cleared));

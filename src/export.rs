@@ -34,6 +34,7 @@ impl ExportAction {
 pub enum ExportOutcome {
     Unchanged,
     DocumentLoaded,
+    CanvasCleared,
 }
 
 pub trait ExportPlatform {
@@ -146,7 +147,7 @@ pub fn perform(
         }
         ExportAction::Clear => {
             state.clear_canvas();
-            Ok(ExportOutcome::DocumentLoaded)
+            Ok(ExportOutcome::CanvasCleared)
         }
         ExportAction::ClipboardPng | ExportAction::SavePng => Ok(ExportOutcome::Unchanged),
     }
@@ -481,10 +482,10 @@ mod tests {
 
         assert_eq!(
             perform(ExportAction::Clear, &mut state, &mut platform).unwrap(),
-            ExportOutcome::DocumentLoaded
+            ExportOutcome::CanvasCleared
         );
-        assert_eq!(state.grid.lines, vec![Vec::new()]);
-        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert!(state.content_cells().is_empty());
+        assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 3 });
         assert!(state.selection.is_collapsed());
         assert!(platform.save.is_none());
         assert!(platform.open.is_none());

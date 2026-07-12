@@ -821,7 +821,36 @@ impl EditorState {
     }
 
     pub fn clear_canvas(&mut self) {
-        self.replace_canvas(Vec::new());
+        let cursor = self.grid.cursor_pos;
+        let already_blank = self.content_cells().is_empty()
+            && self.line_markers.is_empty()
+            && self
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default());
+
+        if !already_blank {
+            self.grid.lines = (0..=cursor.line).map(|_| Vec::new()).collect();
+            self.grid.lines[cursor.line] = (0..cursor.column)
+                .map(|_| Atom {
+                    face: Face::default(),
+                    contents: " ".to_string(),
+                })
+                .collect();
+        }
+
+        self.grid.cursor_pos = cursor;
+        self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
+        self.active_stroke = None;
+        self.line_markers.clear();
+        self.shape_preview = None;
+        self.single_replace_pending = false;
+        self.pending_prepend = (0, 0);
+        self.toolbar.cancel_shortcut();
+        self.selection.collapse(cursor);
+        self.sync_cursor_mode_with_toolbar();
     }
 
     pub fn confirm_shape(&mut self) {
@@ -1271,17 +1300,91 @@ mod tests {
 
         state.clear_canvas();
 
-        assert_eq!(state.grid.lines, vec![Vec::new()]);
-        assert_eq!(state.grid.cursor_pos, Coord::default());
-        assert_eq!(state.cursor_index, 0);
+        assert_eq!(state.grid.lines.len(), 4);
+        assert!(state.grid.lines[..3].iter().all(Vec::is_empty));
+        assert_eq!(display_width(&state.grid.lines[3]), 4);
+        assert!(state.content_cells().is_empty());
+        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
+        assert_eq!(state.cursor_index, 4);
         assert!(state.selection.is_collapsed());
-        assert_eq!(state.selection.active(), Coord::default());
+        assert_eq!(state.selection.active(), Coord { line: 3, column: 4 });
         assert!(state.active_stroke.is_none());
         assert!(state.line_markers.is_empty());
         assert!(state.shape_preview.is_none());
         assert!(!state.single_replace_pending);
         assert_eq!(state.pending_prepend, (0, 0));
         assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn clear_canvas_preserves_a_far_cursor_and_later_inserts_there() {
+        let mut state = state();
+        state.grid.lines = vec![
+            vec![Atom {
+                face: Face::default(),
+                contents: "drawing".into(),
+            }],
+            Vec::new(),
+            vec![Atom {
+                face: Face::default(),
+                contents: "x".into(),
+            }],
+        ];
+        let cursor = Coord {
+            line: 5,
+            column: 12,
+        };
+        state.move_to(cursor);
+
+        state.clear_canvas();
+
+        assert_eq!(state.grid.cursor_pos, cursor);
+        assert_eq!(state.selection.active(), cursor);
+        assert!(state.content_cells().is_empty());
+        assert_eq!(state.grid.lines.len(), cursor.line + 1);
+        assert_eq!(display_width(&state.grid.lines[cursor.line]), cursor.column);
+
+        state.insert("x");
+        assert_eq!(state.grid.lines[cursor.line][cursor.column].contents, "x");
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: cursor.line,
+                column: cursor.column + 1,
+            }
+        );
+    }
+
+    #[test]
+    fn clear_canvas_removes_faces_from_styled_whitespace() {
+        let theme = ThemeConfig::default();
+        let mut state = EditorState::new(&theme, "ascdraw");
+        let cursor = Coord { line: 2, column: 3 };
+        state.grid.lines = vec![
+            vec![Atom {
+                face: theme.selection.clone(),
+                contents: " ".into(),
+            }],
+            Vec::new(),
+            vec![Atom {
+                face: theme.tooltip.clone(),
+                contents: "   ".into(),
+            }],
+        ];
+        state.grid.cursor_pos = cursor;
+
+        state.clear_canvas();
+
+        assert_eq!(state.grid.cursor_pos, cursor);
+        assert!(state.content_cells().is_empty());
+        assert!(
+            state
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default())
+        );
     }
 
     #[test]
