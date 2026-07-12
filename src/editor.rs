@@ -28,6 +28,7 @@ pub struct EditorState {
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
     shape_preview: Option<ShapePreview>,
+    single_replace_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,7 @@ impl EditorState {
             active_stroke: None,
             line_markers: Vec::new(),
             shape_preview: None,
+            single_replace_pending: false,
         }
     }
 
@@ -99,6 +101,7 @@ impl EditorState {
 
     pub fn toggle_text_entry(&mut self) {
         self.end_stroke();
+        self.single_replace_pending = false;
         if self.cursor_mode == CursorMode::Text {
             self.sync_cursor_mode_with_toolbar();
         } else {
@@ -108,6 +111,7 @@ impl EditorState {
 
     pub fn toggle_replace_mode(&mut self) {
         self.end_stroke();
+        self.single_replace_pending = false;
         if self.cursor_mode == CursorMode::Replace {
             self.sync_cursor_mode_with_toolbar();
         } else {
@@ -115,7 +119,21 @@ impl EditorState {
         }
     }
 
+    pub fn begin_single_replace(&mut self) -> bool {
+        if matches!(
+            self.cursor_mode,
+            CursorMode::Text | CursorMode::Insert | CursorMode::Replace
+        ) {
+            return false;
+        }
+        self.end_stroke();
+        self.single_replace_pending = true;
+        self.cursor_mode = CursorMode::Replace;
+        true
+    }
+
     fn sync_cursor_mode_with_toolbar(&mut self) {
+        self.single_replace_pending = false;
         self.cursor_mode = match self.toolbar.main_mode() {
             MainMode::Line => CursorMode::MoveDraw,
             MainMode::Stamp => CursorMode::Stamp,
@@ -145,11 +163,32 @@ impl EditorState {
     }
 
     pub fn write_text(&mut self, text: &str) {
-        if self.cursor_mode == CursorMode::Replace {
+        if self.single_replace_pending {
+            self.replace_once(text);
+        } else if self.cursor_mode == CursorMode::Replace {
             self.replace(text);
         } else {
             self.insert(text);
         }
+    }
+
+    fn replace_once(&mut self, text: &str) {
+        let Some(grapheme) = UnicodeSegmentation::graphemes(text, true).next() else {
+            return;
+        };
+        self.end_stroke();
+        let line = &mut self.grid.lines[self.grid.cursor_pos.line];
+        let atom = Atom {
+            face: Face::default(),
+            contents: grapheme.to_string(),
+        };
+        if self.cursor_index < line.len() {
+            line[self.cursor_index] = atom;
+        } else {
+            line.push(atom);
+        }
+        self.sync_cursor_mode_with_toolbar();
+        self.sync_cursor_column();
     }
 
     fn replace(&mut self, text: &str) {
@@ -826,6 +865,31 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
         state.toggle_replace_mode();
         assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn single_replace_consumes_one_grapheme_without_moving_the_cursor() {
+        let mut state = state();
+        state.insert("abc");
+        state.move_to(Coord { line: 0, column: 1 });
+
+        assert!(state.begin_single_replace());
+        assert_eq!(state.cursor_mode, CursorMode::Replace);
+        state.write_text("XY");
+
+        assert_eq!(contents(&state.grid.lines[0]), "aXc");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn single_replace_cannot_start_in_text_insert_or_replace_modes() {
+        let mut state = state();
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            state.cursor_mode = mode;
+            assert!(!state.begin_single_replace());
+            assert_eq!(state.cursor_mode, mode);
+        }
     }
 
     #[test]

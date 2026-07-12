@@ -16,6 +16,7 @@ pub enum EditCommand {
     Clear,
     ToggleTextEntry,
     ToggleReplaceMode,
+    BeginSingleReplace,
     PlaceStamp,
     ToggleShapePreview,
     ConfirmShape,
@@ -53,6 +54,17 @@ fn edit_command_for_key(
 
     if modifiers.control_key() || modifiers.super_key() {
         return None;
+    }
+
+    if !modifiers.shift_key()
+        && !modifiers.alt_key()
+        && matches!(key, Key::Character(text) if text == "r")
+        && !matches!(
+            mode,
+            CursorMode::Text | CursorMode::Insert | CursorMode::Replace
+        )
+    {
+        return Some(EditCommand::BeginSingleReplace);
     }
 
     if matches!(key, Key::Named(NamedKey::Backspace)) {
@@ -372,6 +384,28 @@ mod tests {
             ),
             Some(EditCommand::ToggleReplaceMode)
         );
+    }
+
+    #[test]
+    fn lowercase_r_starts_single_replace_only_outside_text_and_replace_modes() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            assert_eq!(
+                edit_command_for_key(&Key::Character("r".into()), ModifiersState::empty(), mode,),
+                Some(EditCommand::BeginSingleReplace)
+            );
+        }
+
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            assert_eq!(
+                edit_command_for_key(&Key::Character("r".into()), ModifiersState::empty(), mode,),
+                None
+            );
+        }
     }
 
     #[test]

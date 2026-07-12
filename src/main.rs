@@ -303,6 +303,10 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.toggle_replace_mode();
             false
         }
+        EditCommand::BeginSingleReplace => {
+            state.begin_single_replace();
+            false
+        }
         EditCommand::PlaceStamp => {
             state.place_stamp();
             true
