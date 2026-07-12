@@ -192,14 +192,14 @@ fn edit_command_for_key(
 
     if matches!(key, Key::Named(NamedKey::Enter)) {
         return Some(if modifiers.shift_key() {
-            EditCommand::ToggleReplaceMode
-        } else {
             EditCommand::ToggleTextEntry
+        } else {
+            EditCommand::ToggleReplaceMode
         });
     }
 
     if matches!(key, Key::Named(NamedKey::Backspace)) {
-        return if matches!(mode, CursorMode::Text | CursorMode::Insert) {
+        return if mode.accepts_text() {
             Some(EditCommand::Backspace)
         } else {
             Some(EditCommand::Clear)
@@ -576,7 +576,6 @@ mod tests {
     #[test]
     fn maps_backspace_to_clear_in_every_mode() {
         for mode in [
-            CursorMode::Replace,
             CursorMode::MoveDraw,
             CursorMode::Stamp,
             CursorMode::Shapes,
@@ -591,7 +590,7 @@ mod tests {
                 Some(EditCommand::Clear)
             );
         }
-        for mode in [CursorMode::Text, CursorMode::Insert] {
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
             assert_eq!(
                 edit_command_for_key(
                     &Key::Named(NamedKey::Backspace),
@@ -951,7 +950,7 @@ mod tests {
         ] {
             assert_eq!(
                 edit_command_for_key(&Key::Named(NamedKey::Enter), ModifiersState::empty(), mode,),
-                Some(EditCommand::ToggleTextEntry)
+                Some(EditCommand::ToggleReplaceMode)
             );
         }
     }
@@ -996,7 +995,7 @@ mod tests {
                 ModifiersState::SHIFT,
                 CursorMode::MoveDraw,
             ),
-            Some(EditCommand::ToggleReplaceMode)
+            Some(EditCommand::ToggleTextEntry)
         );
         assert_eq!(
             edit_command_for_key(

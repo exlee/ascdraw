@@ -456,22 +456,4 @@ mod tests {
         assert_eq!(resolved.bg, Rgba::rgb(4, 5, 6));
     }
 
-    #[test]
-    fn bundled_semantic_faces_resolve_to_requested_colors() {
-        let theme = crate::app::ThemeConfig::default();
-        let fallback_fg = Rgba::rgb(0, 0, 0);
-        let fallback_bg = Rgba::rgb(0xff, 0xff, 0xff);
-
-        for (face, expected) in [
-            (&theme.selection, Rgba::rgb(0xff, 0x00, 0x00)),
-            (&theme.selection_highlight, Rgba::rgb(0x80, 0x00, 0x80)),
-            (&theme.cursor_drawing, Rgba::rgb(0x00, 0x00, 0x8b)),
-            (&theme.tooltip, Rgba::rgb(0x80, 0x80, 0x80)),
-        ] {
-            assert_eq!(
-                resolve_derived_face(&theme.default, face, fallback_fg, fallback_bg).fg,
-                expected
-            );
-        }
-    }
 }

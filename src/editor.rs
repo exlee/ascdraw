@@ -188,7 +188,7 @@ impl EditorState {
         self.end_stroke();
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
-        if self.cursor_mode == CursorMode::Text {
+        if matches!(self.cursor_mode, CursorMode::Text | CursorMode::Replace) {
             self.sync_cursor_mode_with_toolbar();
         } else {
             self.cursor_mode = CursorMode::Text;
@@ -199,7 +199,7 @@ impl EditorState {
         self.end_stroke();
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
-        if self.cursor_mode == CursorMode::Replace {
+        if matches!(self.cursor_mode, CursorMode::Text | CursorMode::Replace) {
             self.sync_cursor_mode_with_toolbar();
         } else {
             self.cursor_mode = CursorMode::Replace;

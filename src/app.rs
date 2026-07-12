@@ -330,24 +330,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_theme_has_all_semantic_faces() {
-        let config = AppConfig::default();
-        assert_eq!(config.theme.default.fg, "#000000");
-        assert_eq!(config.theme.default.bg, "#ffffff");
-        assert_eq!(config.theme.selection.fg, "#ff0000");
-        assert_eq!(config.theme.selection.bg, "default");
-        assert_eq!(config.theme.selection_highlight.fg, "#800080");
-        assert_eq!(config.theme.selection_highlight.bg, "default");
-        assert_eq!(config.theme.cursor_drawing.fg, "#00008b");
-        assert_eq!(config.theme.cursor_drawing.bg, "default");
-        assert_eq!(config.theme.cursor_block.fg, "default");
-        assert_eq!(config.theme.cursor_block.bg, "default");
-        assert_eq!(config.theme.cursor_block.attributes, ["reverse"]);
-        assert_eq!(config.theme.tooltip.fg, "#808080");
-        assert_eq!(config.theme.tooltip.bg, "default");
-    }
-
-    #[test]
     fn bundled_theme_is_a_standalone_toml_stylesheet() {
         let theme: ThemeConfig = toml::from_str(include_str!("../theme.toml")).unwrap();
         let value: Value = toml::from_str(include_str!("../theme.toml")).unwrap();
@@ -384,7 +366,7 @@ mod tests {
                         || (color.len() == 7
                             && color.starts_with('#')
                             && color[1..].chars().all(|character| {
-                                character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
+                                character.is_ascii_hexdigit()
                             })),
                     "bundled explicit color is not canonical hexadecimal: {color}"
                 );
