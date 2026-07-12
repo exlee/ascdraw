@@ -1231,11 +1231,13 @@ mod tests {
         state.active_stroke = Some(ActiveStroke {
             end: Coord { line: 3, column: 4 },
             end_base_glyph: "─".into(),
-            moving_ending: LineEnding::Arrow,
+            moving_ending: LineEnding::Directional(
+                crate::drawing::DirectionalEnding::BlackTriangle,
+            ),
         });
         state.line_markers.push(PlacedLineMarker {
             coord: Coord::default(),
-            ending: LineEnding::Arrow,
+            ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "─".into(),
         });
         state.shape_preview = Some(ShapePreview {
@@ -1709,7 +1711,7 @@ mod tests {
         state.move_to(Coord { line: 0, column: 1 });
         state.line_markers.push(PlacedLineMarker {
             coord: Coord::default(),
-            ending: LineEnding::Arrow,
+            ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "╶".to_string(),
         });
         state.shape_preview = Some(ShapePreview {
@@ -1750,7 +1752,7 @@ mod tests {
         state.move_to(Coord::default());
         state.line_markers.push(PlacedLineMarker {
             coord: Coord { line: 1, column: 0 },
-            ending: LineEnding::Arrow,
+            ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "╶".to_string(),
         });
         state.shape_preview = Some(ShapePreview {
@@ -1876,11 +1878,11 @@ mod tests {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 1,
+            option: 2,
         });
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 1,
-            option: 1,
+            option: 2,
         });
 
         state.move_or_draw(Direction::Right, true);
@@ -1889,6 +1891,42 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "◀─╮");
         assert_eq!(contents(&state.grid.lines[1]), "  ▼");
+    }
+
+    #[test]
+    fn fixed_start_and_directional_end_survive_turning_and_marker_history_state() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 11,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 3,
+        });
+
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "◆─╮");
+        assert_eq!(contents(&state.grid.lines[1]), "  ↓");
+        assert_eq!(state.line_markers.len(), 2);
+        assert_eq!(state.line_markers[0].ending, LineEnding::Fixed('◆'));
+        assert_eq!(
+            state.line_markers[1].ending,
+            LineEnding::Directional(crate::drawing::DirectionalEnding::Arrow)
+        );
+
+        let snapshot = state.edit_snapshot();
+        state.clear_selection();
+        state.restore_edit_snapshot(snapshot);
+        assert_eq!(contents(&state.grid.lines[0]), "◆─╮");
+        assert_eq!(contents(&state.grid.lines[1]), "  ↓");
+        assert_eq!(
+            state.line_markers[1].ending,
+            LineEnding::Directional(crate::drawing::DirectionalEnding::Arrow)
+        );
     }
 
     #[test]
@@ -1920,7 +1958,7 @@ mod tests {
     #[test]
     fn drawing_from_an_end_marker_moves_it_to_the_new_end() {
         let mut state = state();
-        select_toolbar_option(&mut state, "3", 1);
+        select_toolbar_option(&mut state, "3", 2);
         state.move_or_draw(Direction::Right, true);
         state.move_to(Coord { line: 0, column: 1 });
 
@@ -1933,7 +1971,7 @@ mod tests {
     #[test]
     fn drawing_from_a_start_marker_moves_it_to_the_new_end() {
         let mut state = state();
-        select_toolbar_option(&mut state, "2", 1);
+        select_toolbar_option(&mut state, "2", 2);
         state.move_or_draw(Direction::Right, true);
         state.move_to(Coord { line: 0, column: 0 });
 
@@ -2248,7 +2286,7 @@ mod tests {
         });
         state.line_markers.push(PlacedLineMarker {
             coord: Coord { line: 0, column: 2 },
-            ending: LineEnding::Arrow,
+            ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "─".into(),
         });
         state.shape_preview = Some(ShapePreview {

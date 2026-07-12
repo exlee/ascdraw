@@ -30,8 +30,8 @@ The first two rows select a tool directly: press `1`, then the number under **Li
 
 Line mode is fully usable. Its options control:
 
-- **Line Start** — none, arrow, diamond, or circle
-- **Line End** — none, arrow, diamond, or circle
+- **Line Start** — none, six rotatable arrow styles, or any decorator
+- **Line End** — none, six rotatable arrow styles, or any decorator
 - **Line Width** — thin, heavy, or double
 
 Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw. Move without Shift to navigate.

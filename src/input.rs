@@ -492,6 +492,9 @@ mod tests {
         let cell_height = 16;
         let viewport_width = PADDING * 2 + 40 * cell_width;
         let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(crate::toolbar::ToolbarAction::SelectMain(
+            crate::toolbar::MainMode::Shapes,
+        ));
         let line_rows = toolbar.rows();
         assert_eq!(
             toolbar_position(

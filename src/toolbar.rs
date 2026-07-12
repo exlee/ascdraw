@@ -1,8 +1,13 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use crate::drawing::{CornerStyle, LineEnding, LineStyle};
+use crate::drawing::{ARROWS, CornerStyle, DECORATORS, LINE_ENDINGS, LineEnding, LineStyle};
 use crate::export::ExportAction;
+#[cfg(test)]
+use crate::{
+    drawing::{DIRECTIONAL_ENDINGS, line_ending_glyph},
+    model::Direction,
+};
 
 pub const TOOLBAR_ROW_GAP: usize = 0;
 
@@ -137,9 +142,17 @@ fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
 }
 
 const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
+const LINE_START_OPTIONS: [&str; LINE_ENDINGS.len()] = [
+    "None", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
+];
+const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
+    "None", "▷", "▶", "→", "▹", "▸", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
+];
 const LINE_OPTIONS: [&[&str]; 4] = [
-    &["·", "◀", "◆", "●"],
-    &["·", "▶", "◆", "●"],
+    &LINE_START_OPTIONS,
+    &LINE_END_OPTIONS,
     &["─", "━", "═"],
     &["Smooth", "Sharp"],
 ];
@@ -152,11 +165,6 @@ const SQUARES_AND_DIAMONDS: [&str; 6] = ["□", "■", "▫", "▪", "◆", "◊
 const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø"];
 #[cfg(test)]
 const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
-const DECORATORS: [&str; 20] = [
-    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
-    "¤",
-];
-
 #[cfg(test)]
 const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["△", "▷", "▽", "◁"],
@@ -165,10 +173,6 @@ const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["▵", "▹", "▿", "◃"],
     ["▴", "▸", "▾", "◂"],
     ["↕", "↔", "↕", "↔"],
-];
-const ARROWS: [&str; 22] = [
-    "△", "▷", "▽", "◁", "▲", "▶", "▼", "◀", "↑", "→", "↓", "←", "▵", "▹", "▿", "◃", "▴", "▸", "▾",
-    "◂", "↕", "↔",
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
 const QUADRANT_BLOCKS: [&str; 15] = [
@@ -1102,13 +1106,10 @@ fn line_style(selected: usize) -> LineStyle {
 }
 
 fn line_ending(selected: usize) -> LineEnding {
-    match selected {
-        0 => LineEnding::None,
-        1 => LineEnding::Arrow,
-        2 => LineEnding::Diamond,
-        3 => LineEnding::Circle,
-        _ => unreachable!("line ending selection is always normalized"),
-    }
+    LINE_ENDINGS
+        .get(selected)
+        .copied()
+        .expect("line ending selection is always normalized")
 }
 
 #[cfg(test)]
@@ -1224,9 +1225,9 @@ mod tests {
     fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
-        assert_eq!(toolbar.menu_row_count(), 2);
-        assert_eq!(toolbar.content_rows(), 4);
-        assert_eq!(toolbar.rows(), 6);
+        assert_eq!(toolbar.menu_row_count(), 6);
+        assert_eq!(toolbar.content_rows(), 8);
+        assert_eq!(toolbar.rows(), 10);
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
@@ -1274,10 +1275,116 @@ mod tests {
         }
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
 
-        assert!(row(&toolbar, 2).contains("Start: · ◀ ◆ ●"));
-        assert!(row(&toolbar, 3).contains("2. 1 2 3 4"));
+        assert!(row(&toolbar, 2).contains("Start: None ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
+        assert!(row(&toolbar, 3).contains("2.1. 1    2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, 3).contains("4. 1 2 3"));
         assert!(row(&toolbar, 3).contains("5. 1      2"));
+    }
+
+    #[test]
+    fn line_endings_exactly_map_the_documented_directional_and_decorator_sets() {
+        assert_eq!(
+            LINE_ENDINGS.len(),
+            1 + DIRECTIONAL_ENDINGS.len() + DECORATORS.len()
+        );
+        assert_eq!(&LINE_START_OPTIONS[7..], DECORATORS);
+        assert_eq!(&LINE_END_OPTIONS[7..], DECORATORS);
+        assert_eq!(&LINE_START_OPTIONS[1..7], ["◁", "◀", "←", "◃", "◂", "↔"]);
+        assert_eq!(&LINE_END_OPTIONS[1..7], ["▷", "▶", "→", "▹", "▸", "↔"]);
+
+        for (index, ending) in LINE_ENDINGS.into_iter().enumerate() {
+            assert_eq!(line_ending(index), ending);
+            if index == 0 {
+                assert_eq!(LINE_START_OPTIONS[index], "None");
+                assert_eq!(LINE_END_OPTIONS[index], "None");
+                continue;
+            }
+            assert_eq!(
+                LINE_START_OPTIONS[index],
+                line_ending_glyph(ending, Direction::Right, LineStyle::Thin).to_string()
+            );
+            assert_eq!(
+                LINE_END_OPTIONS[index],
+                line_ending_glyph(ending, Direction::Left, LineStyle::Thin).to_string()
+            );
+            for option in [LINE_START_OPTIONS[index], LINE_END_OPTIONS[index]] {
+                assert_eq!(UnicodeSegmentation::graphemes(option, true).count(), 1);
+                assert_eq!(UnicodeWidthStr::width(option), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn line_start_and_end_use_independent_three_page_keyboard_paths() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["2", "1", "0"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_start(), LineEnding::Fixed('▫'));
+        assert_eq!(toolbar.line_end(), LineEnding::None);
+
+        for key in ["3", "3", "7"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_start(), LineEnding::Fixed('▫'));
+        assert_eq!(toolbar.line_end(), LineEnding::Fixed('¤'));
+    }
+
+    #[test]
+    fn line_endpoint_pages_highlight_and_mouse_map_with_stable_columns() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "2");
+        for row_index in [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 3, MENU_FIRST_ROW + 5] {
+            let highlighted: String = toolbar
+                .toolbar_spans(row_index)
+                .iter()
+                .filter(|span| span.highlighted)
+                .map(|span| span.contents.as_str())
+                .collect();
+            assert_eq!(highlighted, "2.");
+        }
+        press(&mut toolbar, "1");
+        let highlighted: String = toolbar
+            .toolbar_spans(MENU_FIRST_ROW + 1)
+            .iter()
+            .filter(|span| span.highlighted)
+            .map(|span| span.contents.as_str())
+            .collect();
+        assert_eq!(highlighted, "2.1.");
+
+        let expected = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 26,
+        };
+        let box_width = 320;
+        let row_index = MENU_FIRST_ROW + 4;
+        let visible = boxed_toolbar_spans(&toolbar.toolbar_spans(row_index), box_width);
+        let column = span_starts(&visible)
+            .into_iter()
+            .find_map(|(start, span)| (span.action == Some(expected)).then_some(start))
+            .expect("third endpoint page remains mouse selectable");
+        assert_eq!(
+            toolbar.action_at(row_index, column, box_width),
+            Some(expected)
+        );
+
+        let start_columns: Vec<_> = [MENU_FIRST_ROW, MENU_FIRST_ROW + 2, MENU_FIRST_ROW + 4]
+            .into_iter()
+            .map(|row_index| {
+                let spans = toolbar.toolbar_spans(row_index);
+                span_starts(&spans)
+                    .into_iter()
+                    .find_map(|(start, span)| {
+                        matches!(
+                            span.action,
+                            Some(ToolbarAction::SelectSubmenu { submenu: 0, .. })
+                        )
+                        .then_some(start)
+                    })
+                    .unwrap()
+            })
+            .collect();
+        assert!(start_columns.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]

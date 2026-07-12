@@ -394,7 +394,7 @@ mod tests {
         let grid_top = top_padding + crate::toolbar::toolbar_height(&toolbar, cell_height);
 
         assert_eq!(grid_top, PADDING + toolbar.rows() * cell_height);
-        assert_eq!(grid_top, 128);
+        assert_eq!(grid_top, 200);
     }
 
     #[test]

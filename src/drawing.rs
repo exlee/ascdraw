@@ -28,10 +28,69 @@ pub enum LineStyle {
 pub enum LineEnding {
     #[default]
     None,
-    Arrow,
-    Diamond,
-    Circle,
+    Directional(DirectionalEnding),
+    Fixed(char),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectionalEnding {
+    WhiteTriangle,
+    BlackTriangle,
+    Arrow,
+    WhiteSmallTriangle,
+    BlackSmallTriangle,
+    Bidirectional,
+}
+
+#[cfg(test)]
+pub const DIRECTIONAL_ENDINGS: [DirectionalEnding; 6] = [
+    DirectionalEnding::WhiteTriangle,
+    DirectionalEnding::BlackTriangle,
+    DirectionalEnding::Arrow,
+    DirectionalEnding::WhiteSmallTriangle,
+    DirectionalEnding::BlackSmallTriangle,
+    DirectionalEnding::Bidirectional,
+];
+
+pub const DECORATORS: [&str; 20] = [
+    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
+    "¤",
+];
+
+pub const ARROWS: [&str; 22] = [
+    "△", "▷", "▽", "◁", "▲", "▶", "▼", "◀", "↑", "→", "↓", "←", "▵", "▹", "▿", "◃", "▴", "▸", "▾",
+    "◂", "↕", "↔",
+];
+
+pub const LINE_ENDINGS: [LineEnding; 27] = [
+    LineEnding::None,
+    LineEnding::Directional(DirectionalEnding::WhiteTriangle),
+    LineEnding::Directional(DirectionalEnding::BlackTriangle),
+    LineEnding::Directional(DirectionalEnding::Arrow),
+    LineEnding::Directional(DirectionalEnding::WhiteSmallTriangle),
+    LineEnding::Directional(DirectionalEnding::BlackSmallTriangle),
+    LineEnding::Directional(DirectionalEnding::Bidirectional),
+    LineEnding::Fixed('□'),
+    LineEnding::Fixed('■'),
+    LineEnding::Fixed('▫'),
+    LineEnding::Fixed('▪'),
+    LineEnding::Fixed('◆'),
+    LineEnding::Fixed('◊'),
+    LineEnding::Fixed('·'),
+    LineEnding::Fixed('∙'),
+    LineEnding::Fixed('•'),
+    LineEnding::Fixed('●'),
+    LineEnding::Fixed('◦'),
+    LineEnding::Fixed('Ø'),
+    LineEnding::Fixed('ø'),
+    LineEnding::Fixed('╳'),
+    LineEnding::Fixed('╱'),
+    LineEnding::Fixed('╲'),
+    LineEnding::Fixed('÷'),
+    LineEnding::Fixed('×'),
+    LineEnding::Fixed('±'),
+    LineEnding::Fixed('¤'),
+];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CornerStyle {
@@ -91,14 +150,49 @@ pub fn line_ending_glyph(
                 glyph_for_connections(connection(connected_direction), style, CornerStyle::Smooth)
             }
         },
-        LineEnding::Arrow => match connected_direction.opposite() {
+        LineEnding::Directional(style) => {
+            directional_ending_glyph(style, connected_direction.opposite())
+        }
+        LineEnding::Fixed(glyph) => glyph,
+    }
+}
+
+pub fn directional_ending_glyph(style: DirectionalEnding, outward: Direction) -> char {
+    match style {
+        DirectionalEnding::WhiteTriangle => match outward {
+            Direction::Up => '△',
+            Direction::Right => '▷',
+            Direction::Down => '▽',
+            Direction::Left => '◁',
+        },
+        DirectionalEnding::BlackTriangle => match outward {
             Direction::Up => '▲',
             Direction::Right => '▶',
             Direction::Down => '▼',
             Direction::Left => '◀',
         },
-        LineEnding::Diamond => '◆',
-        LineEnding::Circle => '●',
+        DirectionalEnding::Arrow => match outward {
+            Direction::Up => '↑',
+            Direction::Right => '→',
+            Direction::Down => '↓',
+            Direction::Left => '←',
+        },
+        DirectionalEnding::WhiteSmallTriangle => match outward {
+            Direction::Up => '▵',
+            Direction::Right => '▹',
+            Direction::Down => '▿',
+            Direction::Left => '◃',
+        },
+        DirectionalEnding::BlackSmallTriangle => match outward {
+            Direction::Up => '▴',
+            Direction::Right => '▸',
+            Direction::Down => '▾',
+            Direction::Left => '◂',
+        },
+        DirectionalEnding::Bidirectional => match outward {
+            Direction::Up | Direction::Down => '↕',
+            Direction::Right | Direction::Left => '↔',
+        },
     }
 }
 
@@ -283,11 +377,19 @@ mod tests {
     #[test]
     fn endings_follow_direction_and_selected_style() {
         assert_eq!(
-            line_ending_glyph(LineEnding::Arrow, Direction::Right, LineStyle::Thin),
+            line_ending_glyph(
+                LineEnding::Directional(DirectionalEnding::BlackTriangle),
+                Direction::Right,
+                LineStyle::Thin,
+            ),
             '◀'
         );
         assert_eq!(
-            line_ending_glyph(LineEnding::Arrow, Direction::Up, LineStyle::Thin),
+            line_ending_glyph(
+                LineEnding::Directional(DirectionalEnding::BlackTriangle),
+                Direction::Up,
+                LineStyle::Thin,
+            ),
             '▼'
         );
         assert_eq!(
@@ -298,6 +400,42 @@ mod tests {
             line_ending_glyph(LineEnding::None, Direction::Up, LineStyle::Double),
             '║'
         );
+    }
+
+    #[test]
+    fn all_directional_endings_rotate_and_fixed_endings_do_not() {
+        let expected = [
+            ['△', '▷', '▽', '◁'],
+            ['▲', '▶', '▼', '◀'],
+            ['↑', '→', '↓', '←'],
+            ['▵', '▹', '▿', '◃'],
+            ['▴', '▸', '▾', '◂'],
+            ['↕', '↔', '↕', '↔'],
+        ];
+        let directions = [
+            Direction::Up,
+            Direction::Right,
+            Direction::Down,
+            Direction::Left,
+        ];
+        for (style, glyphs) in DIRECTIONAL_ENDINGS.into_iter().zip(expected) {
+            for (direction, glyph) in directions.into_iter().zip(glyphs) {
+                assert_eq!(directional_ending_glyph(style, direction), glyph);
+            }
+        }
+        for glyph in DECORATORS {
+            let glyph = glyph.chars().next().unwrap();
+            for connected_direction in directions {
+                assert_eq!(
+                    line_ending_glyph(
+                        LineEnding::Fixed(glyph),
+                        connected_direction,
+                        LineStyle::Thin,
+                    ),
+                    glyph
+                );
+            }
+        }
     }
 
     #[test]
