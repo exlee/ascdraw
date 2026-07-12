@@ -219,26 +219,13 @@ fn render_toolbar(
     width: usize,
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
-    render_toolbar_spans(
-        canvas,
-        0,
-        &crate::toolbar::toolbar_border_spans(max_columns, true),
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
+    let mut rows = vec![(0, crate::toolbar::toolbar_border_spans(max_columns, true))];
     for row in 0..state.toolbar.tooltip_row() {
         let physical_row = crate::toolbar::toolbar_content_row(row);
-        render_toolbar_spans(
-            canvas,
+        rows.push((
             physical_row,
-            &crate::toolbar::boxed_toolbar_spans(&state.toolbar.toolbar_spans(row), max_columns),
-            state,
-            max_columns,
-            metrics,
-            top_padding,
-        );
+            crate::toolbar::boxed_toolbar_spans(&state.toolbar.toolbar_spans(row), max_columns),
+        ));
     }
 
     let tooltip = match state.cursor_mode {
@@ -260,27 +247,32 @@ fn render_toolbar(
         }],
         max_columns,
     );
-    render_toolbar_spans(
-        canvas,
+    rows.push((
         crate::toolbar::toolbar_content_row(state.toolbar.tooltip_row()),
-        &tooltip_spans,
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
-    render_toolbar_spans(
-        canvas,
+        tooltip_spans,
+    ));
+    rows.push((
         state.toolbar.rows() - 1,
-        &crate::toolbar::toolbar_border_spans(max_columns, false),
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
+        crate::toolbar::toolbar_border_spans(max_columns, false),
+    ));
+
+    for (row, spans) in &rows {
+        render_toolbar_span_contents(
+            canvas,
+            *row,
+            spans,
+            state,
+            max_columns,
+            metrics,
+            top_padding,
+        );
+    }
+    for (row, spans) in &rows {
+        render_toolbar_span_outlines(canvas, *row, spans, state, metrics, top_padding);
+    }
 }
 
-fn render_toolbar_spans(
+fn render_toolbar_span_contents(
     canvas: &Canvas,
     row: usize,
     spans: &[crate::toolbar::ToolbarSpan],
@@ -311,34 +303,88 @@ fn render_toolbar_spans(
             top_padding: top_padding + crate::toolbar::toolbar_row_offset(row, metrics.cell_height),
         },
     );
+}
 
+fn render_toolbar_span_outlines(
+    canvas: &Canvas,
+    row: usize,
+    spans: &[crate::toolbar::ToolbarSpan],
+    state: &EditorState,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    for outline in toolbar_span_outlines(row, spans, state, metrics, top_padding) {
+        let mut paint = Paint::default();
+        paint
+            .set_anti_alias(false)
+            .set_color(outline.color.to_color())
+            .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
+        canvas.draw_line(
+            (outline.left, outline.top),
+            (outline.right, outline.top),
+            &paint,
+        );
+        canvas.draw_line(
+            (outline.left, outline.bottom),
+            (outline.right, outline.bottom),
+            &paint,
+        );
+        canvas.draw_line(
+            (outline.left, outline.top),
+            (outline.left, outline.bottom),
+            &paint,
+        );
+        canvas.draw_line(
+            (outline.right, outline.top),
+            (outline.right, outline.bottom),
+            &paint,
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ToolbarSpanOutline {
+    color: Rgba,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+fn toolbar_span_outlines(
+    row: usize,
+    spans: &[crate::toolbar::ToolbarSpan],
+    state: &EditorState,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) -> Vec<ToolbarSpanOutline> {
     let top = (row_top(row, metrics, top_padding)
         + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32
         - TOOLBAR_SELECTION_PADDING;
     let bottom =
         top + metrics.cell_height.saturating_sub(1) as f32 + TOOLBAR_SELECTION_PADDING * 2.0;
+    let mut outlines = Vec::new();
     let mut column = 0;
     for span in spans {
         let span_width = UnicodeWidthStr::width(span.contents.as_str());
         if let Some(color) = toolbar_span_outline_color(state, span)
             && span_width > 0
         {
-            let mut paint = Paint::default();
-            paint
-                .set_anti_alias(false)
-                .set_color(color.to_color())
-                .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
             let left = (PADDING + column * metrics.cell_width) as f32 - TOOLBAR_SELECTION_PADDING;
             let right = left
                 + (span_width * metrics.cell_width).saturating_sub(1) as f32
                 + TOOLBAR_SELECTION_PADDING * 2.0;
-            canvas.draw_line((left, top), (right, top), &paint);
-            canvas.draw_line((left, bottom), (right, bottom), &paint);
-            canvas.draw_line((left, top), (left, bottom), &paint);
-            canvas.draw_line((right, top), (right, bottom), &paint);
+            outlines.push(ToolbarSpanOutline {
+                color,
+                left,
+                top,
+                right,
+                bottom,
+            });
         }
         column += span_width;
     }
+    outlines
 }
 
 fn toolbar_span_outline_color(
@@ -1417,6 +1463,94 @@ mod tests {
         assert_eq!(
             toolbar_span_outline_color(&state, &highlighted),
             Some(Rgba::rgb(0xff, 0xd7, 0x00))
+        );
+    }
+
+    #[test]
+    fn last_menu_row_selection_bottom_is_rendered_after_later_row_backgrounds() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 10,
+        }));
+
+        assert_toolbar_bottom_edge_visible(&state, 4, Rgba::rgb(0xff, 0x45, 0x00));
+    }
+
+    #[test]
+    fn pending_prefix_highlight_bottom_is_rendered_after_later_row_backgrounds() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(
+            state
+                .toolbar
+                .handle_shortcut(&Key::Character("2".into()), ModifiersState::empty())
+        );
+
+        assert_toolbar_bottom_edge_visible(&state, 3, Rgba::rgb(0xff, 0xd7, 0x00));
+    }
+
+    fn assert_toolbar_bottom_edge_visible(
+        state: &EditorState,
+        logical_row: usize,
+        expected_color: Rgba,
+    ) {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let max_columns = 100;
+        let width = PADDING * 2 + max_columns * metrics.cell_width;
+        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height);
+        let physical_row = crate::toolbar::toolbar_content_row(logical_row);
+        let spans = crate::toolbar::boxed_toolbar_spans(
+            &state.toolbar.toolbar_spans(logical_row),
+            max_columns,
+        );
+        let outline = toolbar_span_outlines(physical_row, &spans, state, &metrics, 0)
+            .into_iter()
+            .find(|outline| outline.color == expected_color)
+            .expect("expected toolbar outline");
+
+        assert!(
+            outline.bottom > row_top(physical_row + 1, &metrics, 0) as f32,
+            "test outline must extend into the following row"
+        );
+        assert!(outline.bottom < height as f32);
+
+        let mut pixels = vec![0xff; width * height * 4];
+        let image_info = ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::BGRA8888,
+            AlphaType::Premul,
+            None,
+        );
+        {
+            let mut surface =
+                surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                    .expect("test surface");
+            render_toolbar(surface.canvas(), state, &metrics, 0, width);
+        }
+
+        let x = ((outline.left + outline.right) / 2.0) as usize;
+        let y = outline.bottom as usize;
+        let offset = (y * width + x) * 4;
+        assert_eq!(
+            &pixels[offset..offset + 4],
+            &[
+                expected_color.b,
+                expected_color.g,
+                expected_color.r,
+                expected_color.a,
+            ],
+            "toolbar outline bottom was overpainted"
         );
     }
 
