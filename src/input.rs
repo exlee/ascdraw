@@ -207,7 +207,7 @@ fn edit_command_for_key(
             CursorMode::Insert | CursorMode::Text => Some(EditCommand::Backspace),
             CursorMode::Replace => Some(EditCommand::ClearAndBack),
             _ => Some(EditCommand::Clear),
-        }
+        };
     }
 
     if !mode.accepts_text()
@@ -665,16 +665,14 @@ mod tests {
                 Some(EditCommand::Backspace)
             );
         }
-        for mode in [CursorMode::Replace] {
-            assert_eq!(
-                edit_command_for_key(
-                    &Key::Named(NamedKey::Backspace),
-                    ModifiersState::empty(),
-                    mode,
-                ),
-                Some(EditCommand::ClearAndBack)
-            );
-        }
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::Backspace),
+                ModifiersState::empty(),
+                CursorMode::Replace,
+            ),
+            Some(EditCommand::ClearAndBack)
+        );
 
         assert_eq!(
             edit_command_for_key(
