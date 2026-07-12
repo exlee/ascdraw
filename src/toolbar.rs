@@ -252,22 +252,22 @@ impl Tooltip {
         match self {
             Self::None => "",
             Self::Line => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Shift-direction draws; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Space/Backspace clears; r then character replaces"
+                "Directions: Shift draws, Alt erases, Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps; Escape collapses; Space/Backspace clears; r then character replaces"
             }
             Self::Stamp => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
+                "Directions: Shift stamps, Alt erases, Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps; Escape collapses; Backspace clears; Space fills with stamp"
             }
             Self::Shapes => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
+                "Directions: Shift moves, Alt erases, Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps; Escape collapses/cancels preview; Space starts/confirms"
             }
             Self::UtilitiesSelect => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Backspace clears; r then character replaces"
+                "Directions: Shift applies utility, Alt erases, Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps"
             }
             Self::UtilitiesPush => {
-                "Push: Shift-hjkl/arrows inserts a blank row or column; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase"
+                "Push: Shift-direction inserts blanks; Alt erases; Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps"
             }
             Self::UtilitiesPull => {
-                "Pull: Shift-hjkl/arrows removes eligible blanks and pulls content; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase"
+                "Pull: Shift-direction pulls; Alt erases; Ctrl resizes; add Ctrl/Alt/Shift second for 5/10 steps"
             }
             Self::Text => {
                 "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Ret> exits text mode; arrows move freely over the canvas"
@@ -2024,8 +2024,9 @@ mod tests {
             assert_eq!(mode.tooltip(), tooltip);
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
             assert_eq!(toolbar.tooltip(), tooltip);
-            assert!(tooltip.text().contains("Ctrl-hjkl/arrows resize selection"));
-            assert!(tooltip.text().contains("Alt-hjkl/arrows erase"));
+            assert!(tooltip.text().contains("Ctrl resizes"));
+            assert!(tooltip.text().contains("Alt erases"));
+            assert!(tooltip.text().contains("5/10 steps"));
         }
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());

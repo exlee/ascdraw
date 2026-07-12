@@ -14,6 +14,7 @@ use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::EditorState;
 use crate::history::{EditHistory, HistorySnapshot};
+use crate::input::OrderedModifierTracker;
 use crate::layout::{
     LayoutMetrics, ViewportOffset, content_intersects_inner_screen, content_top_padding,
     cursor_is_visible, layout_metrics, navigation_origin, normalized_cursor_and_origin,
@@ -29,6 +30,7 @@ pub struct EditorWindow {
     pub window: Rc<Window>,
     pub surface: Surface<Rc<Window>, Rc<Window>>,
     pub modifiers: ModifiersState,
+    pub ordered_modifiers: OrderedModifierTracker,
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     pub state: EditorState,
@@ -327,6 +329,7 @@ pub fn create_editor_window(
         window,
         surface,
         modifiers: ModifiersState::empty(),
+        ordered_modifiers: OrderedModifierTracker::default(),
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
         state,

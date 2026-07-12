@@ -9,9 +9,9 @@ The editor opens in **Line** mode.
 | Action | Keys |
 | --- | --- |
 | Move the cursor | Arrow keys or `h` `j` `k` `l` |
-| Draw a line | Shift + direction |
-| Resize the canvas selection | Ctrl + direction |
-| Erase while moving | Alt + direction |
+| Draw/apply the active tool | Shift + direction (add Ctrl for 5 steps, Alt for 10) |
+| Resize the canvas selection | Ctrl + direction (add Alt for 5 steps, Shift for 10) |
+| Erase | Alt + direction (add Ctrl for 5 steps, Shift for 10) |
 | Collapse the selection to 1x1 | Escape |
 | Clear the selected rectangle | Backspace, or Space in Line mode |
 | Replace the selected rectangle | `r`, then a character |
@@ -42,7 +42,7 @@ Text entry is independent of the selected toolbar tool. Press Return to enter it
 
 ### Selection, Stamp, Shape, and Utils
 
-Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. Alt + a direction moves while erasing the traversed canvas content. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
+Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. Alt + a direction moves while erasing the traversed canvas content. The first held modifier selects the operation; a second modifier selects 5 or 10 stepwise cells: Shift then Ctrl is 5 and Shift then Alt is 10, Alt then Ctrl is 5 and Alt then Shift is 10, Ctrl then Alt is 5 and Ctrl then Shift is 10. With all three held, the first modifier remains the operation and the next modifier pressed selects the step size. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
 
 Ctrl/Cmd-C copies the exact selected rectangle and Ctrl/Cmd-V pastes clipboard text as a rectangular overwrite at the selection's top-left corner.
 Ctrl/Cmd-Z undoes and Ctrl/Cmd-R redoes document edits independently in each window.

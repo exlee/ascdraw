@@ -42,6 +42,96 @@ pub enum HistoryCommand {
     Redo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectionModifier {
+    Shift,
+    Alt,
+    Control,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderedModifierTracker {
+    held: Vec<DirectionModifier>,
+}
+
+impl OrderedModifierTracker {
+    /// Updates the held modifier order from a winit state transition. Normal
+    /// one-at-a-time transitions preserve press order. If a platform reports
+    /// multiple additions together, Shift, Alt, Control is the stable fallback.
+    pub fn update(&mut self, state: ModifiersState) {
+        self.held.retain(|modifier| modifier.is_held(state));
+        for modifier in [
+            DirectionModifier::Shift,
+            DirectionModifier::Alt,
+            DirectionModifier::Control,
+        ] {
+            if modifier.is_held(state) && !self.held.contains(&modifier) {
+                self.held.push(modifier);
+            }
+        }
+    }
+
+    fn primary_and_secondary(&self) -> Option<(DirectionModifier, Option<DirectionModifier>)> {
+        Some((*self.held.first()?, self.held.get(1).copied()))
+    }
+}
+
+impl DirectionModifier {
+    fn is_held(self, state: ModifiersState) -> bool {
+        match self {
+            Self::Shift => state.shift_key(),
+            Self::Alt => state.alt_key(),
+            Self::Control => state.control_key(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderedDirectionCommand {
+    pub command: EditCommand,
+    pub steps: usize,
+}
+
+pub fn ordered_direction_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    ordered: &OrderedModifierTracker,
+    mode: CursorMode,
+) -> Option<OrderedDirectionCommand> {
+    if mode.accepts_text() || modifiers.super_key() {
+        return None;
+    }
+    let direction = direction_for_key(key)?;
+    let (primary, secondary) = ordered.primary_and_secondary()?;
+    let command = match primary {
+        DirectionModifier::Shift => shift_direction_command(direction, mode),
+        DirectionModifier::Alt => EditCommand::Erase(direction),
+        DirectionModifier::Control => EditCommand::ExtendSelection(direction),
+    };
+    let steps = match (primary, secondary) {
+        (_, None) => 1,
+        (DirectionModifier::Shift, Some(DirectionModifier::Control))
+        | (DirectionModifier::Alt, Some(DirectionModifier::Control))
+        | (DirectionModifier::Control, Some(DirectionModifier::Alt)) => 5,
+        (DirectionModifier::Shift, Some(DirectionModifier::Alt))
+        | (DirectionModifier::Alt, Some(DirectionModifier::Shift))
+        | (DirectionModifier::Control, Some(DirectionModifier::Shift)) => 10,
+        (primary, Some(secondary)) if primary == secondary => 1,
+        _ => 1,
+    };
+    Some(OrderedDirectionCommand { command, steps })
+}
+
+fn shift_direction_command(direction: Direction, mode: CursorMode) -> EditCommand {
+    match mode {
+        CursorMode::MoveDraw => EditCommand::Draw(direction),
+        CursorMode::Stamp => EditCommand::DrawStamp(direction),
+        CursorMode::Utilities => EditCommand::ApplyUtility(direction),
+        CursorMode::Shapes => EditCommand::Move(direction),
+        _ => EditCommand::Move(direction),
+    }
+}
+
 /// Returns global history commands before every mode-specific or configurable shortcut.
 pub fn history_command(key: &Key, modifiers: ModifiersState) -> Option<HistoryCommand> {
     if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
@@ -594,6 +684,224 @@ mod tests {
                 None
             );
         }
+    }
+
+    fn tracker(states: &[ModifiersState]) -> OrderedModifierTracker {
+        let mut tracker = OrderedModifierTracker::default();
+        for state in states {
+            tracker.update(*state);
+        }
+        tracker
+    }
+
+    #[test]
+    fn ordered_modifier_tracker_preserves_press_release_and_repress_order() {
+        let mut ordered = tracker(&[
+            ModifiersState::ALT,
+            ModifiersState::ALT | ModifiersState::CONTROL,
+            ModifiersState::ALT | ModifiersState::CONTROL | ModifiersState::SHIFT,
+        ]);
+        assert_eq!(
+            ordered.held,
+            vec![
+                DirectionModifier::Alt,
+                DirectionModifier::Control,
+                DirectionModifier::Shift
+            ]
+        );
+
+        ordered.update(ModifiersState::CONTROL | ModifiersState::SHIFT);
+        assert_eq!(
+            ordered.held,
+            vec![DirectionModifier::Control, DirectionModifier::Shift]
+        );
+        ordered.update(ModifiersState::ALT | ModifiersState::CONTROL | ModifiersState::SHIFT);
+        assert_eq!(
+            ordered.held,
+            vec![
+                DirectionModifier::Control,
+                DirectionModifier::Shift,
+                DirectionModifier::Alt
+            ]
+        );
+        ordered.update(ModifiersState::CONTROL | ModifiersState::ALT);
+        assert_eq!(
+            ordered.held,
+            vec![DirectionModifier::Control, DirectionModifier::Alt]
+        );
+        ordered.update(ModifiersState::CONTROL | ModifiersState::ALT);
+        assert_eq!(
+            ordered.held,
+            vec![DirectionModifier::Control, DirectionModifier::Alt]
+        );
+        ordered.update(ModifiersState::empty());
+        assert!(ordered.held.is_empty());
+    }
+
+    #[test]
+    fn simultaneous_additions_have_a_stable_fallback_and_three_use_earliest_secondary() {
+        let ordered = tracker(&[ModifiersState::SHIFT | ModifiersState::ALT]);
+        assert_eq!(
+            ordered.held,
+            vec![DirectionModifier::Shift, DirectionModifier::Alt]
+        );
+        assert_eq!(
+            ordered_direction_command(
+                &Key::Character("l".into()),
+                ModifiersState::SHIFT | ModifiersState::ALT,
+                &ordered,
+                CursorMode::MoveDraw,
+            ),
+            Some(OrderedDirectionCommand {
+                command: EditCommand::Draw(Direction::Right),
+                steps: 10,
+            })
+        );
+
+        let all = tracker(&[
+            ModifiersState::CONTROL,
+            ModifiersState::CONTROL | ModifiersState::ALT,
+            ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT,
+        ]);
+        assert_eq!(
+            ordered_direction_command(
+                &Key::Named(NamedKey::ArrowDown),
+                ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT,
+                &all,
+                CursorMode::MoveDraw,
+            ),
+            Some(OrderedDirectionCommand {
+                command: EditCommand::ExtendSelection(Direction::Down),
+                steps: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn every_ordered_pair_selects_its_primary_operation_and_step_size() {
+        let cases = [
+            (
+                DirectionModifier::Shift,
+                DirectionModifier::Control,
+                EditCommand::Draw(Direction::Right),
+                5,
+            ),
+            (
+                DirectionModifier::Control,
+                DirectionModifier::Shift,
+                EditCommand::ExtendSelection(Direction::Right),
+                10,
+            ),
+            (
+                DirectionModifier::Shift,
+                DirectionModifier::Alt,
+                EditCommand::Draw(Direction::Right),
+                10,
+            ),
+            (
+                DirectionModifier::Alt,
+                DirectionModifier::Shift,
+                EditCommand::Erase(Direction::Right),
+                10,
+            ),
+            (
+                DirectionModifier::Alt,
+                DirectionModifier::Control,
+                EditCommand::Erase(Direction::Right),
+                5,
+            ),
+            (
+                DirectionModifier::Control,
+                DirectionModifier::Alt,
+                EditCommand::ExtendSelection(Direction::Right),
+                5,
+            ),
+        ];
+        for (primary, secondary, command, steps) in cases {
+            let ordered = OrderedModifierTracker {
+                held: vec![primary, secondary],
+            };
+            let modifiers = match (primary, secondary) {
+                (DirectionModifier::Shift, DirectionModifier::Control)
+                | (DirectionModifier::Control, DirectionModifier::Shift) => {
+                    ModifiersState::SHIFT | ModifiersState::CONTROL
+                }
+                (DirectionModifier::Shift, DirectionModifier::Alt)
+                | (DirectionModifier::Alt, DirectionModifier::Shift) => {
+                    ModifiersState::SHIFT | ModifiersState::ALT
+                }
+                _ => ModifiersState::ALT | ModifiersState::CONTROL,
+            };
+            assert_eq!(
+                ordered_direction_command(
+                    &Key::Named(NamedKey::ArrowRight),
+                    modifiers,
+                    &ordered,
+                    CursorMode::MoveDraw,
+                ),
+                Some(OrderedDirectionCommand { command, steps })
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_directions_support_hjkl_mode_routing_and_exclude_text_modes() {
+        let ordered = tracker(&[
+            ModifiersState::SHIFT,
+            ModifiersState::SHIFT | ModifiersState::CONTROL,
+        ]);
+        for (mode, command) in [
+            (CursorMode::Stamp, EditCommand::DrawStamp(Direction::Left)),
+            (CursorMode::Shapes, EditCommand::Move(Direction::Left)),
+            (
+                CursorMode::Utilities,
+                EditCommand::ApplyUtility(Direction::Left),
+            ),
+        ] {
+            assert_eq!(
+                ordered_direction_command(
+                    &Key::Character("h".into()),
+                    ModifiersState::SHIFT | ModifiersState::CONTROL,
+                    &ordered,
+                    mode,
+                ),
+                Some(OrderedDirectionCommand { command, steps: 5 })
+            );
+        }
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            assert_eq!(
+                ordered_direction_command(
+                    &Key::Character("h".into()),
+                    ModifiersState::SHIFT | ModifiersState::CONTROL,
+                    &ordered,
+                    mode,
+                ),
+                None
+            );
+        }
+
+        let single = tracker(&[ModifiersState::ALT]);
+        assert_eq!(
+            ordered_direction_command(
+                &Key::Named(NamedKey::ArrowUp),
+                ModifiersState::ALT,
+                &single,
+                CursorMode::MoveDraw,
+            ),
+            Some(OrderedDirectionCommand {
+                command: EditCommand::Erase(Direction::Up),
+                steps: 1,
+            })
+        );
+        assert_eq!(
+            ordered_direction_command(
+                &Key::Named(NamedKey::ArrowUp),
+                ModifiersState::ALT | ModifiersState::SUPER,
+                &single,
+                CursorMode::MoveDraw,
+            ),
+            None
+        );
     }
 
     #[test]
