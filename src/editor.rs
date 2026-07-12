@@ -1029,21 +1029,33 @@ fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
         lines.push(Vec::new());
     }
     let line = &mut lines[coord.line];
-    let (index, column) = index_and_column_for_coord(line, coord.column);
-    if column < coord.column && index == line.len() {
-        line.extend((column..coord.column).map(|_| blank_atom()));
+    let boundary = coord.column.saturating_add(1);
+    let mut prefix = Vec::new();
+    let mut suffix = Vec::new();
+    let mut column = 0usize;
+    for atom in line.iter() {
+        let width = atom_width(atom);
+        let end = column.saturating_add(width);
+        if end <= coord.column {
+            prefix.push(atom.clone());
+        } else if column < coord.column {
+            prefix.extend((column..coord.column).map(|_| blank_atom()));
+        }
+        if column >= boundary {
+            suffix.push(atom.clone());
+        } else if end > boundary {
+            suffix.extend((boundary..end).map(|_| blank_atom()));
+        }
+        column = end;
     }
-    let width = line.get(index).map(atom_width).unwrap_or(1);
-    let replacement = std::iter::once(Atom {
+    let prefix_width = display_width(&prefix);
+    prefix.extend((prefix_width..coord.column).map(|_| blank_atom()));
+    prefix.push(Atom {
         face: Face::default(),
         contents,
-    })
-    .chain((1..width).map(|_| blank_atom()));
-    if index < line.len() {
-        line.splice(index..=index, replacement);
-    } else {
-        line.extend(replacement);
-    }
+    });
+    prefix.extend(suffix);
+    *line = prefix;
 }
 
 fn rectangle_cells(
@@ -2135,6 +2147,128 @@ mod tests {
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(contents(&state.grid.lines[0]), "┌──┐");
         assert_eq!(contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    #[test]
+    fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.grid.lines = [11, 7, 0, 7, 11]
+            .into_iter()
+            .map(|width| (0..width).map(|_| blank_atom()).collect())
+            .collect();
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord { line: 0, column: 2 },
+            end: Coord {
+                line: 4,
+                column: 10,
+            },
+        });
+
+        let preview = state.lines_with_shape_preview().expect("preview is active");
+        assert_eq!(
+            preview
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            [
+                "  ┌───────┐",
+                "  │       │",
+                "  │       │",
+                "  │       │",
+                "  └───────┘",
+            ]
+        );
+
+        state.confirm_shape();
+        assert_eq!(
+            state
+                .grid
+                .lines
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            [
+                "  ┌───────┐",
+                "  │       │",
+                "  │       │",
+                "  │       │",
+                "  └───────┘",
+            ]
+        );
+    }
+
+    #[test]
+    fn reversed_rounded_shape_extends_one_cell_past_content_and_adds_missing_rows() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        state.grid.lines = vec![(0..4).map(|_| blank_atom()).collect()];
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord { line: 4, column: 4 },
+            end: Coord { line: 0, column: 0 },
+        });
+
+        let expected = ["╭───╮", "│   │", "│   │", "│   │", "╰───╯"];
+        let preview = state.lines_with_shape_preview().expect("preview is active");
+        assert_eq!(
+            preview
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            expected
+        );
+
+        state.confirm_shape();
+        assert_eq!(
+            state
+                .grid
+                .lines
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn shape_boundary_inside_wide_grapheme_blanks_it_without_moving_the_edge() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        let outside_face = Face {
+            fg: "#123456".into(),
+            ..Face::default()
+        };
+        state.grid.lines = vec![
+            vec![blank_atom(), blank_atom(), blank_atom(), blank_atom()],
+            vec![
+                blank_atom(),
+                Atom {
+                    face: outside_face.clone(),
+                    contents: "界".into(),
+                },
+                Atom {
+                    face: outside_face.clone(),
+                    contents: "Z".into(),
+                },
+            ],
+            vec![blank_atom(), blank_atom(), blank_atom(), blank_atom()],
+        ];
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord { line: 0, column: 0 },
+            end: Coord { line: 2, column: 2 },
+        });
+
+        let preview = state.lines_with_shape_preview().expect("preview is active");
+        assert_eq!(contents(&preview[1]), "│ │Z");
+        assert_eq!(preview[1][3].face, outside_face);
+
+        state.confirm_shape();
+        assert_eq!(contents(&state.grid.lines[1]), "│ │Z");
+        assert_eq!(state.grid.lines[1][3].face, outside_face);
     }
 
     #[test]
