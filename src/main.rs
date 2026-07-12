@@ -39,7 +39,8 @@ use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
 use input::{
     ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
-    history_command, pointer_position_to_coord, pointer_position_to_toolbar_position,
+    history_command, ordered_direction_command, pointer_position_to_coord,
+    pointer_position_to_toolbar_position,
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
@@ -180,6 +181,11 @@ fn try_main() -> Result<ExitCode> {
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
                             editor.modifiers = modifiers.state();
+                            editor.ordered_modifiers.update(editor.modifiers);
+                        }
+                        WindowEvent::Focused(false) => {
+                            editor.modifiers = ModifiersState::empty();
+                            editor.ordered_modifiers.update(editor.modifiers);
                         }
                         WindowEvent::Ime(Ime::Commit(text)) => {
                             if !text.is_empty()
@@ -263,12 +269,13 @@ fn try_main() -> Result<ExitCode> {
                             } else {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
-                                let handled = handle_editor_key(
+                                let handled = handle_editor_key_with_order(
                                     &mut editor.state,
                                     &event.logical_key,
                                     event.text.as_deref(),
                                     event.repeat,
                                     editor.modifiers,
+                                    &editor.ordered_modifiers,
                                 );
                                 if let Some(document_changed) = handled {
                                     let document_changed = editor.finish_state_change(
@@ -406,13 +413,27 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
-fn handle_editor_key(
+fn handle_editor_key_with_order(
     state: &mut EditorState,
     key: &Key,
     text: Option<&str>,
     repeat: bool,
     modifiers: ModifiersState,
+    ordered_modifiers: &input::OrderedModifierTracker,
 ) -> Option<bool> {
+    if let Some(command) =
+        ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
+    {
+        state.toolbar.cancel_shortcut();
+        let mut document_changed = false;
+        for _ in 0..command.steps {
+            document_changed |= apply_edit_command(state, command.command);
+        }
+        if matches!(command.command, EditCommand::ExtendSelection(_)) {
+            document_changed = false;
+        }
+        return Some(document_changed);
+    }
     if let Some(command @ (EditCommand::ExtendSelection(_) | EditCommand::Erase(_))) =
         edit_command(key, repeat, modifiers, state.cursor_mode)
     {
@@ -436,6 +457,19 @@ fn handle_editor_key(
         return Some(true);
     }
     None
+}
+
+#[cfg(test)]
+fn handle_editor_key(
+    state: &mut EditorState,
+    key: &Key,
+    text: Option<&str>,
+    repeat: bool,
+    modifiers: ModifiersState,
+) -> Option<bool> {
+    let mut ordered = input::OrderedModifierTracker::default();
+    ordered.update(modifiers);
+    handle_editor_key_with_order(state, key, text, repeat, modifiers, &ordered)
 }
 
 fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
@@ -617,6 +651,164 @@ mod tests {
         );
         assert_eq!(state.selection.active(), Coord { line: 0, column: 1 });
         assert!(state.toolbar.pending_shortcut().is_none());
+    }
+
+    fn ordered_modifiers(states: &[ModifiersState]) -> input::OrderedModifierTracker {
+        let mut ordered = input::OrderedModifierTracker::default();
+        for state in states {
+            ordered.update(*state);
+        }
+        ordered
+    }
+
+    fn dispatch_ordered(
+        state: &mut EditorState,
+        key: Key,
+        states: &[ModifiersState],
+    ) -> Option<bool> {
+        let modifiers = *states.last().expect("at least one modifier state");
+        let ordered = ordered_modifiers(states);
+        handle_editor_key_with_order(state, &key, None, false, modifiers, &ordered)
+    }
+
+    #[test]
+    fn ordered_shift_draws_connected_five_and_ten_cell_paths() {
+        for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
+            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            let combined = ModifiersState::SHIFT | secondary;
+            assert_eq!(
+                dispatch_ordered(
+                    &mut state,
+                    Key::Named(NamedKey::ArrowRight),
+                    &[ModifiersState::SHIFT, combined],
+                ),
+                Some(true)
+            );
+            assert_eq!(state.grid.cursor_pos.column, steps);
+            assert_eq!(state.grid.lines[0].len(), steps + 1);
+            assert!(
+                state.grid.lines[0]
+                    .iter()
+                    .all(|atom| { !atom.contents.chars().all(char::is_whitespace) })
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_alt_erases_every_intermediate_cell_even_after_a_blank() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+        state.insert(" abcdef");
+        state.move_to(Coord::default());
+        assert_eq!(
+            dispatch_ordered(
+                &mut state,
+                Key::Character("l".into()),
+                &[
+                    ModifiersState::ALT,
+                    ModifiersState::ALT | ModifiersState::CONTROL,
+                ],
+            ),
+            Some(true)
+        );
+        assert_eq!(state.grid.cursor_pos.column, 5);
+        assert_eq!(line_contents(&state.grid.lines[0]), "      f");
+    }
+
+    #[test]
+    fn ordered_control_grows_from_the_anchor_by_five_and_ten_without_document_change() {
+        for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
+            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            let combined = ModifiersState::CONTROL | secondary;
+            assert_eq!(
+                dispatch_ordered(
+                    &mut state,
+                    Key::Character("l".into()),
+                    &[ModifiersState::CONTROL, combined],
+                ),
+                Some(false)
+            );
+            assert_eq!(state.selection.anchor(), Coord::default());
+            assert_eq!(
+                state.selection.active(),
+                Coord {
+                    line: 0,
+                    column: steps
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_shift_preserves_stamp_shape_and_utility_routing() {
+        let states = [
+            ModifiersState::SHIFT,
+            ModifiersState::SHIFT | ModifiersState::CONTROL,
+        ];
+
+        let mut stamp = EditorState::new(&app::ThemeConfig::default(), "test");
+        assert!(stamp.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert_eq!(
+            dispatch_ordered(&mut stamp, Key::Character("l".into()), &states),
+            Some(true)
+        );
+        assert_eq!(stamp.grid.cursor_pos.column, 5);
+        assert!(stamp.grid.lines[0].len() >= 6);
+
+        let mut shape = EditorState::new(&app::ThemeConfig::default(), "test");
+        assert!(shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        assert!(!apply_edit_command(
+            &mut shape,
+            EditCommand::StartOrConfirmShape
+        ));
+        assert_eq!(
+            dispatch_ordered(&mut shape, Key::Character("l".into()), &states),
+            Some(false)
+        );
+        assert_eq!(shape.grid.cursor_pos.column, 5);
+        assert!(shape.lines_with_shape_preview().is_some());
+
+        let mut utility = EditorState::new(&app::ThemeConfig::default(), "test");
+        utility.insert("x");
+        utility.move_to(Coord::default());
+        assert!(utility.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+        assert!(utility.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        }));
+        assert_eq!(
+            dispatch_ordered(&mut utility, Key::Character("l".into()), &states),
+            Some(true)
+        );
+        assert_eq!(utility.grid.lines[0].len(), 6);
+        assert_eq!(line_contents(&utility.grid.lines[0]), "x     ");
+    }
+
+    #[test]
+    fn one_ordered_keypress_is_one_history_record_and_origin_prepends_aggregate() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+        let before = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        assert_eq!(
+            dispatch_ordered(
+                &mut state,
+                Key::Named(NamedKey::ArrowLeft),
+                &[
+                    ModifiersState::SHIFT,
+                    ModifiersState::SHIFT | ModifiersState::CONTROL,
+                ],
+            ),
+            Some(true)
+        );
+        assert_eq!(state.take_pending_prepend(), (5, 0));
+        let after = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        let mut history = history::EditHistory::default();
+        assert!(history.record_change(before.clone(), &after));
+        assert_eq!(history.undo(after), Some(before));
     }
 
     #[test]

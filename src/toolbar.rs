@@ -1,8 +1,13 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use crate::drawing::{CornerStyle, LineEnding, LineStyle};
+use crate::drawing::{ARROWS, CornerStyle, DECORATORS, LINE_ENDINGS, LineEnding, LineStyle};
 use crate::export::ExportAction;
+#[cfg(test)]
+use crate::{
+    drawing::{DIRECTIONAL_ENDINGS, line_ending_glyph},
+    model::Direction,
+};
 
 pub const TOOLBAR_ROW_GAP: usize = 0;
 
@@ -137,9 +142,17 @@ fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
 }
 
 const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
+const LINE_START_OPTIONS: [&str; LINE_ENDINGS.len()] = [
+    "None", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
+];
+const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
+    "None", "▷", "▶", "→", "▹", "▸", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
+];
 const LINE_OPTIONS: [&[&str]; 4] = [
-    &["·", "◀", "◆", "●"],
-    &["·", "▶", "◆", "●"],
+    &LINE_START_OPTIONS,
+    &LINE_END_OPTIONS,
     &["─", "━", "═"],
     &["Smooth", "Sharp"],
 ];
@@ -152,11 +165,6 @@ const SQUARES_AND_DIAMONDS: [&str; 6] = ["□", "■", "▫", "▪", "◆", "◊
 const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø"];
 #[cfg(test)]
 const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
-const DECORATORS: [&str; 20] = [
-    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
-    "¤",
-];
-
 #[cfg(test)]
 const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["△", "▷", "▽", "◁"],
@@ -165,10 +173,6 @@ const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["▵", "▹", "▿", "◃"],
     ["▴", "▸", "▾", "◂"],
     ["↕", "↔", "↕", "↔"],
-];
-const ARROWS: [&str; 22] = [
-    "△", "▷", "▽", "◁", "▲", "▶", "▼", "◀", "↑", "→", "↓", "←", "▵", "▹", "▿", "◃", "▴", "▸", "▾",
-    "◂", "↕", "↔",
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
 const QUADRANT_BLOCKS: [&str; 15] = [
@@ -183,7 +187,6 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &["·", "░", "▒", "▓", "█"],
 ];
-const UTILITY_LABELS: [&str; 1] = ["Tool"];
 const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -313,6 +316,7 @@ pub struct ToolbarState {
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
     export_open: bool,
+    active_export_category: Option<usize>,
     pending_export_action: Option<ExportAction>,
 }
 
@@ -331,11 +335,13 @@ pub enum ToolbarAction {
     SelectMain(MainMode),
     SelectSubmenu { submenu: usize, option: usize },
     ToggleExportMenu,
+    SelectExportCategory(usize),
     RunExport(ExportAction),
 }
 
-const EXPORT_LABELS: [&str; 3] = ["Clipboard", "Save", "Load"];
-const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 3] = [
+const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
+const EXPORT_MODE_OFFSET: usize = 2;
+const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
         ("TXT", ExportAction::ClipboardTxt),
         ("PNG", ExportAction::ClipboardPng),
@@ -349,6 +355,7 @@ const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 3] = [
         ("TXT", ExportAction::LoadTxt),
         ("JSON", ExportAction::LoadJson),
     ],
+    &[("Clear", ExportAction::Clear)],
 ];
 
 struct MenuLayout<'a> {
@@ -363,8 +370,7 @@ impl ToolbarState {
         if matches!(key, Key::Named(NamedKey::Escape))
             && (self.shortcut_prefix.is_some() || self.export_open)
         {
-            self.shortcut_prefix = None;
-            self.export_open = false;
+            self.close_export_menu();
             return true;
         }
 
@@ -381,21 +387,25 @@ impl ToolbarState {
         match self.shortcut_prefix.take() {
             None => {
                 if digit == 0 {
-                    self.export_open = !self.export_open;
-                    self.shortcut_prefix =
-                        self.export_open.then_some(PendingShortcut::ExportCategory);
+                    self.toggle_export_menu();
                 } else if self.export_open {
-                    self.shortcut_prefix = digit
-                        .checked_sub(1)
-                        .filter(|category| *category < EXPORT_LABELS.len())
-                        .map(PendingShortcut::ExportOption);
+                    self.select_export_mode_digit(digit);
+                } else if self.main_mode == MainMode::Utilities
+                    && let Some(option) = digit
+                        .checked_sub(2)
+                        .filter(|option| *option < UTILITY_OPTIONS[0].len())
+                {
+                    self.apply_action(ToolbarAction::SelectSubmenu { submenu: 0, option });
                 } else {
                     self.shortcut_prefix = if digit == 1 {
                         Some(PendingShortcut::Mode)
                     } else {
                         digit
                             .checked_sub(2)
-                            .filter(|category| *category < self.layout().labels.len())
+                            .filter(|category| {
+                                self.layout()
+                                    .is_some_and(|layout| *category < layout.labels.len())
+                            })
                             .map(PendingShortcut::Category)
                     };
                 }
@@ -411,8 +421,7 @@ impl ToolbarState {
             Some(PendingShortcut::Category(category)) => {
                 let option_count = self
                     .layout()
-                    .options
-                    .get(category)
+                    .and_then(|layout| layout.options.get(category))
                     .map_or(0, |options| options.len());
                 match category_shortcut(option_count, digit) {
                     Some(CategoryShortcut::Select(option)) => {
@@ -437,12 +446,9 @@ impl ToolbarState {
             }
             Some(PendingShortcut::ExportCategory) => {
                 if digit == 0 {
-                    self.export_open = false;
+                    self.close_export_menu();
                 } else {
-                    self.shortcut_prefix = digit
-                        .checked_sub(1)
-                        .filter(|category| *category < EXPORT_LABELS.len())
-                        .map(PendingShortcut::ExportOption);
+                    self.select_export_mode_digit(digit);
                 }
             }
             Some(PendingShortcut::ExportOption(category)) => {
@@ -458,11 +464,12 @@ impl ToolbarState {
     }
 
     pub fn cancel_shortcut(&mut self) {
-        self.shortcut_prefix = None;
+        self.cancel_pending_shortcut();
     }
 
     pub fn close_export_menu(&mut self) {
         self.export_open = false;
+        self.active_export_category = None;
         self.shortcut_prefix = None;
     }
 
@@ -479,8 +486,51 @@ impl ToolbarState {
         self.close_export_menu();
     }
 
+    fn toggle_export_menu(&mut self) {
+        if self.export_open {
+            self.close_export_menu();
+        } else {
+            self.export_open = true;
+            self.active_export_category = None;
+            self.shortcut_prefix = Some(PendingShortcut::ExportCategory);
+        }
+    }
+
+    fn select_export_mode_digit(&mut self, digit: usize) {
+        if digit == 1 {
+            self.close_export_menu();
+            self.shortcut_prefix = Some(PendingShortcut::Mode);
+            return;
+        }
+        let Some(category) = digit
+            .checked_sub(EXPORT_MODE_OFFSET)
+            .filter(|category| *category < EXPORT_LABELS.len())
+        else {
+            return;
+        };
+        self.select_export_category(category);
+    }
+
+    fn select_export_category(&mut self, category: usize) -> bool {
+        let Some(options) = EXPORT_OPTIONS.get(category) else {
+            return false;
+        };
+        if let [(_, action)] = options {
+            self.queue_export(*action);
+        } else {
+            self.export_open = true;
+            self.active_export_category = Some(category);
+            self.shortcut_prefix = Some(PendingShortcut::ExportOption(category));
+        }
+        true
+    }
+
     fn cancel_pending_shortcut(&mut self) -> bool {
-        self.shortcut_prefix.take().is_some()
+        let pending = self.shortcut_prefix.take();
+        if matches!(pending, Some(PendingShortcut::ExportOption(_))) {
+            self.active_export_category = None;
+        }
+        pending.is_some()
     }
 
     pub fn main_mode(&self) -> MainMode {
@@ -495,12 +545,14 @@ impl ToolbarState {
         if self.export_open {
             return 2;
         }
-        self.layout()
-            .options
-            .iter()
-            .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
-            .max()
-            .unwrap_or(0)
+        self.layout().map_or(2, |layout| {
+            layout
+                .options
+                .iter()
+                .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
+                .max()
+                .unwrap_or(0)
+        })
     }
 
     pub fn content_rows(&self) -> usize {
@@ -517,6 +569,8 @@ impl ToolbarState {
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
                 if self.export_open {
                     self.export_menu_spans(row)
+                } else if self.main_mode == MainMode::Utilities {
+                    self.utilities_menu_spans(row)
                 } else {
                     self.menu_spans(row)
                 }
@@ -546,7 +600,9 @@ impl ToolbarState {
             };
             spans.push(ToolbarSpan {
                 contents,
-                selected: row == MAIN_LABEL_ROW && *mode == self.main_mode,
+                selected: row == MAIN_LABEL_ROW
+                    && *mode == self.main_mode
+                    && self.active_export_category.is_none(),
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
@@ -574,22 +630,46 @@ impl ToolbarState {
                 spans.push(plain_span(GAP.to_string()));
             }
             let cell_start = spans_width(&spans);
-            let path = format!("0.{}.", category + 1);
+            let mode_number = category + EXPORT_MODE_OFFSET;
+            let flattened = EXPORT_OPTIONS[category].len() == 1;
+            let path = if flattened {
+                mode_number.to_string()
+            } else {
+                format!("{mode_number}.")
+            };
             let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
-            let cell_width = prefix_width
-                + EXPORT_OPTIONS[category]
+            let options_width = if flattened {
+                0
+            } else {
+                EXPORT_OPTIONS[category]
                     .iter()
                     .map(|(option, _)| UnicodeWidthStr::width(*option))
                     .sum::<usize>()
-                + EXPORT_OPTIONS[category].len().saturating_sub(1);
+                    + EXPORT_OPTIONS[category].len().saturating_sub(1)
+            };
+            let cell_width = prefix_width + options_width;
             if label_row {
-                spans.push(plain_span(pad_right_to_width(
-                    format!("{label}:"),
-                    prefix_width,
-                )));
+                spans.push(ToolbarSpan {
+                    contents: pad_right_to_width(
+                        if flattened {
+                            (*label).to_string()
+                        } else {
+                            format!("{label}:")
+                        },
+                        prefix_width,
+                    ),
+                    selected: self.active_export_category == Some(category),
+                    highlighted: false,
+                    tooltip: false,
+                    action: Some(if flattened {
+                        ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1)
+                    } else {
+                        ToolbarAction::SelectExportCategory(category)
+                    }),
+                    right_aligned: false,
+                });
             } else {
                 let highlighted_prefix = match self.pending_shortcut() {
-                    Some(PendingShortcut::ExportCategory) => Some("0.".to_string()),
                     Some(PendingShortcut::ExportOption(pending)) if pending == category => {
                         Some(path.clone())
                     }
@@ -601,6 +681,10 @@ impl ToolbarState {
                     prefix_width,
                     highlighted_prefix.as_deref(),
                 );
+            }
+            if flattened {
+                pad_spans_to_width(&mut spans, cell_start + cell_width);
+                continue;
             }
             for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
                 if position > 0 {
@@ -625,7 +709,9 @@ impl ToolbarState {
     }
 
     fn menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let layout = self.layout();
+        let layout = self
+            .layout()
+            .expect("hierarchical menu rendering excludes Utilities");
         let relative_row = row - MENU_FIRST_ROW;
         let page = relative_row / 2;
         let label_row = relative_row.is_multiple_of(2);
@@ -706,6 +792,30 @@ impl ToolbarState {
                 });
             }
             pad_spans_to_width(&mut spans, cell_start + cell_width);
+        }
+        spans
+    }
+
+    fn utilities_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let label_row = row == MENU_FIRST_ROW;
+        let mut spans = Vec::new();
+        for (option, label) in UTILITY_OPTIONS[0].iter().enumerate() {
+            if option > 0 {
+                spans.push(plain_span(GAP.to_string()));
+            }
+            let action = ToolbarAction::SelectSubmenu { submenu: 0, option };
+            spans.push(ToolbarSpan {
+                contents: if label_row {
+                    (*label).to_string()
+                } else {
+                    aligned_shortcut(option + 2, label)
+                },
+                selected: label_row && option == self.utility_selected,
+                highlighted: false,
+                tooltip: false,
+                action: Some(action),
+                right_aligned: false,
+            });
         }
         spans
     }
@@ -823,10 +933,10 @@ impl ToolbarState {
                 true
             }
             ToolbarAction::ToggleExportMenu => {
-                self.export_open = !self.export_open;
-                self.shortcut_prefix = None;
+                self.toggle_export_menu();
                 true
             }
+            ToolbarAction::SelectExportCategory(category) => self.select_export_category(category),
             ToolbarAction::RunExport(action) => {
                 self.queue_export(action);
                 true
@@ -834,32 +944,27 @@ impl ToolbarState {
         }
     }
 
-    fn layout(&self) -> MenuLayout<'_> {
+    fn layout(&self) -> Option<MenuLayout<'_>> {
         match self.main_mode {
-            MainMode::Line => MenuLayout {
+            MainMode::Line => Some(MenuLayout {
                 labels: &LINE_LABELS,
                 options: &LINE_OPTIONS,
                 selected: &self.line_selected,
                 exclusive_submenu: None,
-            },
-            MainMode::Stamp => MenuLayout {
+            }),
+            MainMode::Stamp => Some(MenuLayout {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
                 exclusive_submenu: Some(self.stamp_active_category),
-            },
-            MainMode::Shapes => MenuLayout {
+            }),
+            MainMode::Shapes => Some(MenuLayout {
                 labels: &SHAPE_LABELS,
                 options: &SHAPE_OPTIONS,
                 selected: &self.shape_selected,
                 exclusive_submenu: None,
-            },
-            MainMode::Utilities => MenuLayout {
-                labels: &UTILITY_LABELS,
-                options: &UTILITY_OPTIONS,
-                selected: std::slice::from_ref(&self.utility_selected),
-                exclusive_submenu: None,
-            },
+            }),
+            MainMode::Utilities => None,
         }
     }
 }
@@ -1007,13 +1112,10 @@ fn line_style(selected: usize) -> LineStyle {
 }
 
 fn line_ending(selected: usize) -> LineEnding {
-    match selected {
-        0 => LineEnding::None,
-        1 => LineEnding::Arrow,
-        2 => LineEnding::Diamond,
-        3 => LineEnding::Circle,
-        _ => unreachable!("line ending selection is always normalized"),
-    }
+    LINE_ENDINGS
+        .get(selected)
+        .copied()
+        .expect("line ending selection is always normalized")
 }
 
 #[cfg(test)]
@@ -1129,9 +1231,9 @@ mod tests {
     fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
-        assert_eq!(toolbar.menu_row_count(), 2);
-        assert_eq!(toolbar.content_rows(), 4);
-        assert_eq!(toolbar.rows(), 6);
+        assert_eq!(toolbar.menu_row_count(), 6);
+        assert_eq!(toolbar.content_rows(), 8);
+        assert_eq!(toolbar.rows(), 10);
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
@@ -1179,10 +1281,116 @@ mod tests {
         }
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
 
-        assert!(row(&toolbar, 2).contains("Start: · ◀ ◆ ●"));
-        assert!(row(&toolbar, 3).contains("2. 1 2 3 4"));
+        assert!(row(&toolbar, 2).contains("Start: None ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
+        assert!(row(&toolbar, 3).contains("2.1. 1    2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, 3).contains("4. 1 2 3"));
         assert!(row(&toolbar, 3).contains("5. 1      2"));
+    }
+
+    #[test]
+    fn line_endings_exactly_map_the_documented_directional_and_decorator_sets() {
+        assert_eq!(
+            LINE_ENDINGS.len(),
+            1 + DIRECTIONAL_ENDINGS.len() + DECORATORS.len()
+        );
+        assert_eq!(&LINE_START_OPTIONS[7..], DECORATORS);
+        assert_eq!(&LINE_END_OPTIONS[7..], DECORATORS);
+        assert_eq!(&LINE_START_OPTIONS[1..7], ["◁", "◀", "←", "◃", "◂", "↔"]);
+        assert_eq!(&LINE_END_OPTIONS[1..7], ["▷", "▶", "→", "▹", "▸", "↔"]);
+
+        for (index, ending) in LINE_ENDINGS.into_iter().enumerate() {
+            assert_eq!(line_ending(index), ending);
+            if index == 0 {
+                assert_eq!(LINE_START_OPTIONS[index], "None");
+                assert_eq!(LINE_END_OPTIONS[index], "None");
+                continue;
+            }
+            assert_eq!(
+                LINE_START_OPTIONS[index],
+                line_ending_glyph(ending, Direction::Right, LineStyle::Thin).to_string()
+            );
+            assert_eq!(
+                LINE_END_OPTIONS[index],
+                line_ending_glyph(ending, Direction::Left, LineStyle::Thin).to_string()
+            );
+            for option in [LINE_START_OPTIONS[index], LINE_END_OPTIONS[index]] {
+                assert_eq!(UnicodeSegmentation::graphemes(option, true).count(), 1);
+                assert_eq!(UnicodeWidthStr::width(option), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn line_start_and_end_use_independent_three_page_keyboard_paths() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["2", "1", "0"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_start(), LineEnding::Fixed('▫'));
+        assert_eq!(toolbar.line_end(), LineEnding::None);
+
+        for key in ["3", "3", "7"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_start(), LineEnding::Fixed('▫'));
+        assert_eq!(toolbar.line_end(), LineEnding::Fixed('¤'));
+    }
+
+    #[test]
+    fn line_endpoint_pages_highlight_and_mouse_map_with_stable_columns() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "2");
+        for row_index in [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 3, MENU_FIRST_ROW + 5] {
+            let highlighted: String = toolbar
+                .toolbar_spans(row_index)
+                .iter()
+                .filter(|span| span.highlighted)
+                .map(|span| span.contents.as_str())
+                .collect();
+            assert_eq!(highlighted, "2.");
+        }
+        press(&mut toolbar, "1");
+        let highlighted: String = toolbar
+            .toolbar_spans(MENU_FIRST_ROW + 1)
+            .iter()
+            .filter(|span| span.highlighted)
+            .map(|span| span.contents.as_str())
+            .collect();
+        assert_eq!(highlighted, "2.1.");
+
+        let expected = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 26,
+        };
+        let box_width = 320;
+        let row_index = MENU_FIRST_ROW + 4;
+        let visible = boxed_toolbar_spans(&toolbar.toolbar_spans(row_index), box_width);
+        let column = span_starts(&visible)
+            .into_iter()
+            .find_map(|(start, span)| (span.action == Some(expected)).then_some(start))
+            .expect("third endpoint page remains mouse selectable");
+        assert_eq!(
+            toolbar.action_at(row_index, column, box_width),
+            Some(expected)
+        );
+
+        let start_columns: Vec<_> = [MENU_FIRST_ROW, MENU_FIRST_ROW + 2, MENU_FIRST_ROW + 4]
+            .into_iter()
+            .map(|row_index| {
+                let spans = toolbar.toolbar_spans(row_index);
+                span_starts(&spans)
+                    .into_iter()
+                    .find_map(|(start, span)| {
+                        matches!(
+                            span.action,
+                            Some(ToolbarAction::SelectSubmenu { submenu: 0, .. })
+                        )
+                        .then_some(start)
+                    })
+                    .unwrap()
+            })
+            .collect();
+        assert!(start_columns.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
@@ -1239,9 +1447,9 @@ mod tests {
     fn every_menu_category_keeps_fixed_prefix_and_option_columns_across_pages() {
         let mut toolbar = ToolbarState::default();
 
-        for mode in MainMode::ALL {
+        for mode in [MainMode::Line, MainMode::Stamp, MainMode::Shapes] {
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
-            let layout = toolbar.layout();
+            let layout = toolbar.layout().expect("hierarchical editor mode");
             let expected: Vec<_> = layout
                 .labels
                 .iter()
@@ -1357,17 +1565,28 @@ mod tests {
         let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
 
         for (category, label) in EXPORT_LABELS.iter().enumerate() {
+            let flattened = EXPORT_OPTIONS[category].len() == 1;
+            let path = if flattened {
+                (category + EXPORT_MODE_OFFSET).to_string()
+            } else {
+                format!("{}.", category + EXPORT_MODE_OFFSET)
+            };
+            let rendered_label = if flattened {
+                (*label).to_string()
+            } else {
+                format!("{label}:")
+            };
             assert_eq!(
-                prefix_start(&labels, &format!("{label}:")),
+                prefix_start(&labels, &rendered_label),
                 path_cell_start(
                     &shortcuts,
-                    &format!("0.{}.", category + 1),
-                    menu_prefix_width(
-                        label,
-                        std::iter::once(format!("0.{}.", category + 1).as_str()),
-                    ),
+                    &path,
+                    menu_prefix_width(label, std::iter::once(path.as_str())),
                 )
             );
+            if flattened {
+                continue;
+            }
             let action = ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1);
             let label_option = span_starts(&labels)
                 .into_iter()
@@ -1477,10 +1696,7 @@ mod tests {
         let mut toolbar = ToolbarState::default();
 
         press(&mut toolbar, "0");
-        assert_eq!(
-            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
-            vec!["0.", "0.", "0."]
-        );
+        assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)).is_empty());
         assert!(
             toolbar
                 .toolbar_spans(MAIN_LABEL_ROW)
@@ -1491,7 +1707,7 @@ mod tests {
         press(&mut toolbar, "2");
         assert_eq!(
             highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
-            vec!["0.2."]
+            vec!["2."]
         );
     }
 
@@ -1625,25 +1841,90 @@ mod tests {
     #[test]
     fn utils_push_and_pull_are_keyboard_and_mouse_selectable() {
         let mut toolbar = ToolbarState::default();
-        for key in ["1", "4", "2", "2"] {
+        for key in ["1", "4", "3"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert!(row(&toolbar, 2).contains("Tool: Select Push Pull"));
+        assert_eq!(row(&toolbar, 2), "Select    Push    Pull");
+        assert_eq!(row(&toolbar, 3), "2         3       4   ");
+        assert!(!row(&toolbar, 2).contains("Tool"));
+        for obsolete in ["2.1", "2.2", "2.3"] {
+            assert!(!row(&toolbar, 3).contains(obsolete));
+        }
 
         let expected = ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 2,
         };
-        let pull_column = (0..80)
-            .find(|column| toolbar.action_at(2, *column, 80) == Some(expected))
-            .expect("Pull is visible and clickable");
-        let action = toolbar.action_at(2, pull_column, 80).unwrap();
-        assert!(toolbar.apply_action(action));
+        for row in [2, 3] {
+            let pull_column = (0..80)
+                .find(|column| toolbar.action_at(row, *column, 80) == Some(expected))
+                .expect("Pull label and shortcut are visible and clickable");
+            let action = toolbar.action_at(row, pull_column, 80).unwrap();
+            assert!(toolbar.apply_action(action));
+        }
         assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPull);
+        assert_eq!(
+            toolbar
+                .toolbar_spans(2)
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
+        assert!(
+            toolbar
+                .toolbar_spans(3)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
+    }
+
+    #[test]
+    fn utils_are_direct_peer_shortcuts_with_no_pending_prefix() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["1", "4"] {
+            press(&mut toolbar, key);
+        }
+
+        for (key, utility, tooltip) in [
+            ("2", UtilityKind::Select, Tooltip::UtilitiesSelect),
+            ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
+            ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
+        ] {
+            press(&mut toolbar, key);
+            assert_eq!(toolbar.utility_kind(), utility);
+            assert_eq!(toolbar.tooltip(), tooltip);
+            assert_eq!(toolbar.pending_shortcut(), None);
+            assert!(
+                toolbar
+                    .toolbar_spans(MENU_FIRST_ROW + 1)
+                    .iter()
+                    .all(|span| !span.highlighted)
+            );
+        }
+
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+    }
+
+    #[test]
+    fn utils_peer_menu_clips_cleanly_at_narrow_widths() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+
+        for width in 0..24 {
+            for row in MENU_FIRST_ROW..=MENU_FIRST_ROW + 1 {
+                let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+                assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
+                assert!(spans.iter().all(|span| !span.highlighted));
+            }
+        }
     }
 
     #[test]
@@ -1718,7 +1999,7 @@ mod tests {
     fn keyboard_export_paths_queue_actions_and_escape_closes_without_changing_mode() {
         let mut toolbar = ToolbarState::default();
         let mode = toolbar.main_mode();
-        for key in ["0", "1", "1"] {
+        for key in ["0", "2", "1"] {
             press(&mut toolbar, key);
         }
         assert_eq!(
@@ -1733,6 +2014,156 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert!(!toolbar.export_menu_open());
         assert_eq!(toolbar.main_mode(), mode);
+    }
+
+    #[test]
+    fn export_modes_are_peers_of_editor_mode_and_escape_restores_it() {
+        let mut toolbar = ToolbarState::default();
+        assert_eq!(
+            toolbar
+                .toolbar_spans(MAIN_LABEL_ROW)
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
+
+        press(&mut toolbar, "0");
+        assert_eq!(toolbar.active_export_category, None);
+        assert!(
+            toolbar
+                .toolbar_spans(MENU_FIRST_ROW)
+                .iter()
+                .all(|span| !span.selected)
+        );
+
+        press(&mut toolbar, "3");
+        assert_eq!(toolbar.active_export_category, Some(1));
+        assert!(
+            toolbar
+                .toolbar_spans(MAIN_LABEL_ROW)
+                .iter()
+                .filter(|span| matches!(span.action, Some(ToolbarAction::SelectMain(_))))
+                .all(|span| !span.selected)
+        );
+        let selected: Vec<_> = toolbar
+            .toolbar_spans(MENU_FIRST_ROW)
+            .into_iter()
+            .filter(|span| span.selected)
+            .map(|span| span.contents.trim().to_string())
+            .collect();
+        assert_eq!(selected, vec!["Save:"]);
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["3."]
+        );
+
+        assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, None);
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert_eq!(
+            toolbar
+                .toolbar_spans(MAIN_LABEL_ROW)
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn export_keyboard_paths_use_peer_mode_numbers() {
+        for (keys, expected) in [
+            (&["0", "2", "2"][..], ExportAction::ClipboardPng),
+            (&["0", "3", "2"][..], ExportAction::SaveJson),
+            (&["0", "4", "1"][..], ExportAction::LoadTxt),
+            (&["0", "5"][..], ExportAction::Clear),
+        ] {
+            let mut toolbar = ToolbarState::default();
+            for key in keys {
+                press(&mut toolbar, key);
+            }
+            assert_eq!(toolbar.take_export_action(), Some(expected));
+            assert!(!toolbar.export_menu_open());
+            assert_eq!(toolbar.pending_shortcut(), None);
+        }
+    }
+
+    #[test]
+    fn editor_mode_selection_closes_and_deselects_an_export_mode() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["0", "3"] {
+            press(&mut toolbar, key);
+        }
+        assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, None);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+
+        press(&mut toolbar, "0");
+        press(&mut toolbar, "1");
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
+        press(&mut toolbar, "3");
+        assert_eq!(toolbar.main_mode(), MainMode::Shapes);
+    }
+
+    #[test]
+    fn mouse_category_selection_matches_keyboard_state_and_action() {
+        let mut toolbar = ToolbarState::default();
+        assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+        let width = 100;
+        let category_column = span_starts(&boxed_toolbar_spans(
+            &toolbar.toolbar_spans(MENU_FIRST_ROW),
+            width,
+        ))
+        .into_iter()
+        .find_map(|(column, span)| {
+            (span.action == Some(ToolbarAction::SelectExportCategory(1))).then_some(column)
+        })
+        .expect("Save category is clickable");
+        let select = toolbar
+            .action_at(MENU_FIRST_ROW, category_column, width)
+            .expect("Save category hit tests");
+        assert!(toolbar.apply_action(select));
+        assert_eq!(toolbar.active_export_category, Some(1));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(1))
+        );
+
+        assert!(toolbar.apply_action(ToolbarAction::RunExport(ExportAction::SaveJson)));
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::SaveJson));
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, None);
+    }
+
+    #[test]
+    fn clear_is_keyboard_selectable_as_its_own_export_category() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["0", "5"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
+        assert!(!toolbar.export_menu_open());
+    }
+
+    #[test]
+    fn clear_path_highlighting_and_layout_match_the_other_export_actions() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "0");
+        assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)).is_empty());
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Load:"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Clear"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains('5'));
+        assert!(!row(&toolbar, MENU_FIRST_ROW + 1).contains("0."));
+        assert_eq!(EXPORT_OPTIONS[2].len(), 2);
+        assert_eq!(EXPORT_OPTIONS[3], &[("Clear", ExportAction::Clear)]);
+        for width in 0..48 {
+            let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width);
+            assert_eq!(UnicodeWidthStr::width(spans_text(&boxed).as_str()), width);
+        }
     }
 
     #[test]
@@ -1767,6 +2198,30 @@ mod tests {
     }
 
     #[test]
+    fn clear_export_action_is_visible_and_mouse_selectable() {
+        let mut toolbar = ToolbarState::default();
+        let width = 80;
+        assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+
+        let clear_column = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width)
+            .iter()
+            .scan(0, |column, span| {
+                let start = *column;
+                *column += UnicodeWidthStr::width(span.contents.as_str());
+                Some((start, span.action))
+            })
+            .find_map(|(column, action)| {
+                (action == Some(ToolbarAction::RunExport(ExportAction::Clear))).then_some(column)
+            })
+            .expect("Clear is visible");
+        let action = toolbar
+            .action_at(MENU_FIRST_ROW, clear_column, width)
+            .unwrap();
+        assert!(toolbar.apply_action(action));
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
+    }
+
+    #[test]
     fn main_modes_map_to_distinct_typed_tooltips() {
         let mut toolbar = ToolbarState::default();
         let expected = [
@@ -1779,8 +2234,9 @@ mod tests {
             assert_eq!(mode.tooltip(), tooltip);
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
             assert_eq!(toolbar.tooltip(), tooltip);
-            assert!(tooltip.text().contains("Ctrl-hjkl/arrows resize selection"));
-            assert!(tooltip.text().contains("Alt-hjkl/arrows erase"));
+            assert!(tooltip.text().contains("Ctrl resizes"));
+            assert!(tooltip.text().contains("Alt erases"));
+            assert!(tooltip.text().contains("5/10 steps"));
         }
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());

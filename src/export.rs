@@ -21,6 +21,7 @@ pub enum ExportAction {
     SavePng,
     LoadTxt,
     LoadJson,
+    Clear,
 }
 
 impl ExportAction {
@@ -141,6 +142,10 @@ pub fn perform(
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             state.replace_canvas(lines_from_json(&contents)?);
+            Ok(ExportOutcome::DocumentLoaded)
+        }
+        ExportAction::Clear => {
+            state.clear_canvas();
             Ok(ExportOutcome::DocumentLoaded)
         }
         ExportAction::ClipboardPng | ExportAction::SavePng => Ok(ExportOutcome::Unchanged),
@@ -463,5 +468,26 @@ mod tests {
         assert_eq!(target.grid.lines[0][0].face.fg, "#0000ff");
         assert_eq!(target.grid.lines.len(), 2);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn clear_replaces_the_canvas_without_using_the_platform() {
+        let mut state = state_with_selection();
+        let mut platform = MockPlatform {
+            fail_clipboard_read: true,
+            fail_clipboard_write: true,
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform(ExportAction::Clear, &mut state, &mut platform).unwrap(),
+            ExportOutcome::DocumentLoaded
+        );
+        assert_eq!(state.grid.lines, vec![Vec::new()]);
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert!(state.selection.is_collapsed());
+        assert!(platform.save.is_none());
+        assert!(platform.open.is_none());
+        assert!(platform.clipboard.is_none());
     }
 }
