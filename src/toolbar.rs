@@ -1,11 +1,12 @@
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 
-pub const TOOLBAR_ROWS: usize = 7;
-pub const TOOLBAR_ROW_GAP: usize = 6;
-pub const TOOLTIP_ROW: usize = TOOLBAR_ROWS - 1;
+pub const TOOLBAR_CONTENT_ROWS: usize = 7;
+pub const TOOLBAR_ROWS: usize = TOOLBAR_CONTENT_ROWS + 2;
+pub const TOOLBAR_ROW_GAP: usize = 0;
+pub const TOOLTIP_ROW: usize = TOOLBAR_CONTENT_ROWS - 1;
 
 const MAIN_LABEL_ROW: usize = 0;
 const MAIN_SHORTCUT_ROW: usize = 1;
@@ -20,6 +21,80 @@ pub fn toolbar_height(cell_height: usize) -> usize {
 
 pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
     row * TOOLBAR_ROW_GAP
+}
+
+pub fn toolbar_content_row(row: usize) -> usize {
+    row + 1
+}
+
+pub fn toolbar_border_spans(width: usize, top: bool) -> Vec<ToolbarSpan> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if width == 1 {
+        return vec![plain_span(if top { "┌" } else { "└" }.to_string())];
+    }
+    vec![plain_span(format!(
+        "{}{}{}",
+        if top { '┌' } else { '└' },
+        "─".repeat(width - 2),
+        if top { '┐' } else { '┘' }
+    ))]
+}
+
+pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSpan> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if width == 1 {
+        return vec![plain_span("│".to_string())];
+    }
+
+    let interior_width = width - 2;
+    let left_padding = usize::from(interior_width > 0);
+    let right_padding = usize::from(interior_width > 1);
+    let content_width = interior_width - left_padding - right_padding;
+    let mut remaining = content_width;
+    let mut boxed = vec![plain_span("│".to_string())];
+    if left_padding > 0 {
+        boxed.push(plain_span(" ".to_string()));
+    }
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let (contents, used) = clipped_to_width(&span.contents, remaining);
+        if used > 0 {
+            boxed.push(ToolbarSpan {
+                contents,
+                selected: span.selected,
+                action: span.action,
+            });
+            remaining -= used;
+        }
+    }
+    if remaining > 0 {
+        boxed.push(plain_span(" ".repeat(remaining)));
+    }
+    if right_padding > 0 {
+        boxed.push(plain_span(" ".to_string()));
+    }
+    boxed.push(plain_span("│".to_string()));
+    boxed
+}
+
+fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
+    let mut clipped = String::new();
+    let mut width = 0;
+    for character in contents.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > max_width {
+            break;
+        }
+        clipped.push(character);
+        width += character_width;
+    }
+    (clipped, width)
 }
 
 const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
@@ -514,6 +589,53 @@ mod tests {
             .iter()
             .map(|span| span.contents.as_str())
             .collect()
+    }
+
+    fn spans_text(spans: &[ToolbarSpan]) -> String {
+        spans.iter().map(|span| span.contents.as_str()).collect()
+    }
+
+    #[test]
+    fn toolbar_box_has_exact_light_borders_and_consistent_width() {
+        let toolbar = ToolbarState::default();
+        let width = 36;
+        let top = spans_text(&toolbar_border_spans(width, true));
+        let contents = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
+        let bottom = spans_text(&toolbar_border_spans(width, false));
+
+        assert_eq!(top, format!("┌{}┐", "─".repeat(width - 2)));
+        assert_eq!(bottom, format!("└{}┘", "─".repeat(width - 2)));
+        assert!(contents.starts_with("│ Mode: "));
+        assert!(contents.ends_with(" │"));
+        for line in [&top, &contents, &bottom] {
+            assert_eq!(UnicodeWidthStr::width(line.as_str()), width);
+        }
+    }
+
+    #[test]
+    fn toolbar_box_clips_cleanly_at_narrow_widths() {
+        let toolbar = ToolbarState::default();
+        for width in 0..12 {
+            for spans in [
+                toolbar_border_spans(width, true),
+                boxed_toolbar_spans(&toolbar.toolbar_spans(0), width),
+                toolbar_border_spans(width, false),
+            ] {
+                assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
+            }
+        }
+        assert_eq!(
+            spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 8)),
+            "│ Mode │"
+        );
+    }
+
+    #[test]
+    fn boxed_toolbar_height_reserves_both_border_rows() {
+        assert_eq!(TOOLBAR_ROWS, TOOLBAR_CONTENT_ROWS + 2);
+        assert_eq!(toolbar_content_row(0), 1);
+        assert_eq!(toolbar_content_row(TOOLTIP_ROW), TOOLBAR_ROWS - 2);
+        assert_eq!(toolbar_height(18), TOOLBAR_ROWS * 18);
     }
 
     #[test]

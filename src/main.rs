@@ -207,6 +207,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
                                 position.x,
                                 position.y,
+                                editor.window.inner_size().width as usize,
                                 &editor.renderer,
                                 editor.window.scale_factor(),
                                 &config,

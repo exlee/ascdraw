@@ -200,28 +200,126 @@ pub fn pointer_position_to_coord(
 pub fn pointer_position_to_toolbar_position(
     x: f64,
     y: f64,
+    viewport_width: usize,
     renderer: &Renderer,
     scale_factor: f64,
     config: &AppConfig,
 ) -> Option<(usize, usize)> {
     let metrics = renderer.title_metrics(scale_factor);
+    toolbar_position(
+        x,
+        y,
+        viewport_width,
+        metrics.cell_width,
+        metrics.cell_height,
+        content_top_padding(scale_factor, config.transparent_menubar),
+    )
+}
+
+fn toolbar_position(
+    x: f64,
+    y: f64,
+    viewport_width: usize,
+    cell_width: usize,
+    cell_height: usize,
+    top_padding: usize,
+) -> Option<(usize, usize)> {
     let toolbar_x = x - PADDING as f64;
-    let toolbar_y = y - content_top_padding(scale_factor, config.transparent_menubar) as f64;
+    let toolbar_y = y - top_padding as f64;
     if toolbar_x < 0.0 || toolbar_y < 0.0 {
         return None;
     }
-    let stride = metrics.cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
+    let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
     let row = (toolbar_y / stride as f64).floor() as usize;
-    if row >= crate::toolbar::TOOLBAR_ROWS || toolbar_y as usize % stride >= metrics.cell_height {
+    if row == 0
+        || row + 1 >= crate::toolbar::TOOLBAR_ROWS
+        || toolbar_y as usize % stride >= cell_height
+    {
         return None;
     }
-    let column = (toolbar_x / metrics.cell_width.max(1) as f64).floor() as usize;
-    Some((row, column))
+    let column = (toolbar_x / cell_width.max(1) as f64).floor() as usize;
+    let box_width = viewport_width.saturating_sub(PADDING * 2) / cell_width.max(1);
+    if column < 2 || column >= box_width.saturating_sub(2) {
+        return None;
+    }
+    Some((row - 1, column - 2))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boxed_toolbar_hit_testing_skips_borders_and_translates_content_offsets() {
+        let top = 30;
+        let cell_width = 10;
+        let cell_height = 16;
+        let viewport_width = PADDING * 2 + 20 * cell_width;
+
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 8 * cell_width + 1) as f64,
+                top as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+            ),
+            None,
+            "top border is inert"
+        );
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 8 * cell_width + 1) as f64,
+                (top + cell_height + 1) as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+            ),
+            Some((0, 6))
+        );
+        assert_eq!(
+            crate::toolbar::ToolbarState::default().action_at(0, 6),
+            Some(crate::toolbar::ToolbarAction::SelectMain(
+                crate::toolbar::MainMode::Line
+            ))
+        );
+        for border_column in [0, 1, 18, 19] {
+            assert_eq!(
+                toolbar_position(
+                    (PADDING + border_column * cell_width + 1) as f64,
+                    (top + cell_height + 1) as f64,
+                    viewport_width,
+                    cell_width,
+                    cell_height,
+                    top,
+                ),
+                None,
+                "box border or padding column {border_column} is inert"
+            );
+        }
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 2 * cell_width) as f64,
+                (top + (crate::toolbar::TOOLBAR_ROWS - 1) * cell_height) as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+            ),
+            None,
+            "bottom border is inert"
+        );
+    }
+
+    #[test]
+    fn too_narrow_toolbar_has_no_clickable_interior() {
+        assert_eq!(
+            toolbar_position((PADDING + 2) as f64, 17.0, PADDING * 2 + 3, 1, 16, 0,),
+            None
+        );
+    }
 
     #[test]
     fn maps_editor_navigation_keys() {

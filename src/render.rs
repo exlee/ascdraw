@@ -221,11 +221,21 @@ fn render_toolbar(
     width: usize,
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    render_toolbar_spans(
+        canvas,
+        0,
+        &crate::toolbar::toolbar_border_spans(max_columns, true),
+        state,
+        max_columns,
+        metrics,
+        top_padding,
+    );
     for row in 0..crate::toolbar::TOOLTIP_ROW {
+        let physical_row = crate::toolbar::toolbar_content_row(row);
         render_toolbar_spans(
             canvas,
-            row,
-            &state.toolbar.toolbar_spans(row),
+            physical_row,
+            &crate::toolbar::boxed_toolbar_spans(&state.toolbar.toolbar_spans(row), max_columns),
             state,
             max_columns,
             metrics,
@@ -233,32 +243,40 @@ fn render_toolbar(
         );
     }
 
-    let tooltip = [Atom {
-        face: Face::default(),
-        contents: match state.cursor_mode {
-            CursorMode::Text => {
-                "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
-            }
-            CursorMode::Replace => {
-                "<Shift-Ret> to exit replace mode, arrows move freely over the canvas".to_string()
-            }
-            _ => state.toolbar.tooltip().to_string(),
-        },
-    }];
-    render_line(
+    let tooltip = match state.cursor_mode {
+        CursorMode::Text => {
+            "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
+        }
+        CursorMode::Replace => {
+            "<Shift-Ret> to exit replace mode, arrows move freely over the canvas".to_string()
+        }
+        _ => state.toolbar.tooltip().to_string(),
+    };
+    let tooltip_spans = crate::toolbar::boxed_toolbar_spans(
+        &[crate::toolbar::ToolbarSpan {
+            contents: tooltip,
+            selected: false,
+            action: None,
+        }],
+        max_columns,
+    );
+    render_toolbar_spans(
         canvas,
-        crate::toolbar::TOOLTIP_ROW,
-        &tooltip,
-        &state.grid.default_face,
+        crate::toolbar::toolbar_content_row(crate::toolbar::TOOLTIP_ROW),
+        &tooltip_spans,
+        state,
         max_columns,
         metrics,
-        DrawOrigin::Grid {
-            top_padding: top_padding
-                + crate::toolbar::toolbar_row_offset(
-                    crate::toolbar::TOOLTIP_ROW,
-                    metrics.cell_height,
-                ),
-        },
+        top_padding,
+    );
+    render_toolbar_spans(
+        canvas,
+        crate::toolbar::TOOLBAR_ROWS - 1,
+        &crate::toolbar::toolbar_border_spans(max_columns, false),
+        state,
+        max_columns,
+        metrics,
+        top_padding,
     );
 }
 

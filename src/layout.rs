@@ -138,6 +138,19 @@ mod tests {
         assert_eq!(cursor_top_left(cursor, (8, 16), 48, viewport), before);
     }
 
+    #[test]
+    fn boxed_toolbar_height_anchors_grid_below_both_borders() {
+        let top_padding = content_top_padding_for_scale_factor(1.0, false);
+        let cell_height = 18;
+        let grid_top = top_padding + crate::toolbar::toolbar_height(cell_height);
+
+        assert_eq!(
+            grid_top,
+            PADDING + crate::toolbar::TOOLBAR_ROWS * cell_height
+        );
+        assert_eq!(grid_top, 182);
+    }
+
     fn cursor_top_left(
         cursor: Coord,
         cell_size: (usize, usize),
