@@ -22,6 +22,7 @@ mod macos;
 mod model;
 mod render;
 mod runtime;
+pub mod selection;
 mod title_policy;
 mod toolbar;
 mod user_keys;
@@ -337,12 +338,9 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.draw_stamp(direction);
             true
         }
-        EditCommand::Erase(direction) => {
-            state.erase(direction);
-            true
-        }
+        EditCommand::ExtendSelection(direction) => state.extend_selection(direction),
         EditCommand::Clear => {
-            state.clear_cell();
+            state.clear_selection();
             true
         }
         EditCommand::ToggleTextEntry => {
@@ -365,13 +363,13 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.place_stamp();
             true
         }
-        EditCommand::ToggleShapePreview => {
-            state.toggle_shape_preview();
-            false
-        }
         EditCommand::ConfirmShape => {
             state.confirm_shape();
             true
+        }
+        EditCommand::EscapeCanvas => {
+            state.cancel_canvas_transients();
+            false
         }
         EditCommand::Home => {
             state.move_home();
@@ -414,10 +412,7 @@ mod tests {
         let mut state = EditorState::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
 
-        assert!(!apply_edit_command(
-            &mut state,
-            EditCommand::ToggleShapePreview
-        ));
+        assert!(!apply_edit_command(&mut state, EditCommand::EscapeCanvas));
         for command in [
             EditCommand::Move(Direction::Right),
             EditCommand::Move(Direction::Right),

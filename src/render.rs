@@ -20,12 +20,15 @@ use crate::face_resolution::{
 };
 use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, layout_metrics};
 use crate::model::{Atom, Face};
+use crate::selection::SelectionBounds;
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
+const CANVAS_SELECTION_STROKE_WIDTH: f32 = 1.0;
+const DRAWING_CURSOR_INSET: f32 = 2.0;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -200,6 +203,7 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         );
     }
 
+    render_canvas_selection(canvas, state, metrics, layout.grid_top);
     render_grid_cursor(
         canvas,
         state,
@@ -209,6 +213,70 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         metrics,
     );
     canvas.restore();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CanvasSelectionOutline {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+fn canvas_selection_outline(
+    bounds: SelectionBounds,
+    metrics: &CellMetrics,
+    grid_top: usize,
+) -> CanvasSelectionOutline {
+    CanvasSelectionOutline {
+        left: (PADDING + bounds.left * metrics.cell_width) as f32,
+        top: row_top(bounds.top, metrics, grid_top) as f32,
+        right: (PADDING + bounds.left * metrics.cell_width + bounds.width() * metrics.cell_width)
+            .saturating_sub(1) as f32,
+        bottom: (row_top(bounds.top, metrics, grid_top) + bounds.height() * metrics.cell_height)
+            .saturating_sub(1) as f32,
+    }
+}
+
+fn render_canvas_selection(
+    canvas: &Canvas,
+    state: &EditorState,
+    metrics: &CellMetrics,
+    grid_top: usize,
+) {
+    let outline = canvas_selection_outline(state.selection_bounds(), metrics, grid_top);
+    let color = resolve_derived_face(
+        &state.grid.default_face,
+        &state.theme.selection,
+        FALLBACK_FG,
+        FALLBACK_BG,
+    )
+    .fg;
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_color(color.to_color())
+        .set_stroke_width(CANVAS_SELECTION_STROKE_WIDTH);
+    canvas.draw_line(
+        (outline.left, outline.top),
+        (outline.right, outline.top),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.left, outline.bottom),
+        (outline.right, outline.bottom),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.left, outline.top),
+        (outline.left, outline.bottom),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.right, outline.top),
+        (outline.right, outline.bottom),
+        &paint,
+    );
 }
 
 fn render_toolbar(
@@ -635,19 +703,45 @@ fn render_hollow_drawing_cursor(
 ) {
     render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
-    let left = (PADDING + column * metrics.cell_width) as f32 + 1.0;
-    let right = (PADDING + (column + 1) * metrics.cell_width) as f32 - 1.0;
-    let top = top as f32 + 1.0;
-    let bottom = top + metrics.cell_height.saturating_sub(2) as f32;
+    let outline = drawing_cursor_outline(column, top, metrics);
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
         .set_color(cursor_resolved.fg.to_color())
         .set_stroke_width(DRAWING_CURSOR_STROKE_WIDTH);
-    canvas.draw_line((left, top), (right, top), &paint);
-    canvas.draw_line((left, bottom), (right, bottom), &paint);
-    canvas.draw_line((left, top), (left, bottom), &paint);
-    canvas.draw_line((right, top), (right, bottom), &paint);
+    canvas.draw_line(
+        (outline.left, outline.top),
+        (outline.right, outline.top),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.left, outline.bottom),
+        (outline.right, outline.bottom),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.left, outline.top),
+        (outline.left, outline.bottom),
+        &paint,
+    );
+    canvas.draw_line(
+        (outline.right, outline.top),
+        (outline.right, outline.bottom),
+        &paint,
+    );
+}
+
+fn drawing_cursor_outline(
+    column: usize,
+    top: usize,
+    metrics: &CellMetrics,
+) -> CanvasSelectionOutline {
+    CanvasSelectionOutline {
+        left: (PADDING + column * metrics.cell_width) as f32 + DRAWING_CURSOR_INSET,
+        top: top as f32 + DRAWING_CURSOR_INSET,
+        right: (PADDING + (column + 1) * metrics.cell_width) as f32 - DRAWING_CURSOR_INSET,
+        bottom: top as f32 + metrics.cell_height as f32 - DRAWING_CURSOR_INSET,
+    }
 }
 
 fn render_block_cursor(
@@ -1391,6 +1485,68 @@ mod tests {
         for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
             assert!(!is_drawing_mode(mode));
         }
+    }
+
+    #[test]
+    fn canvas_selection_geometry_uses_inclusive_cell_bounds() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let outline = canvas_selection_outline(
+            SelectionBounds {
+                left: 2,
+                right: 4,
+                top: 3,
+                bottom: 5,
+            },
+            &metrics,
+            100,
+        );
+        assert_eq!(
+            outline,
+            CanvasSelectionOutline {
+                left: 36.0,
+                top: 148.0,
+                right: 59.0,
+                bottom: 195.0,
+            }
+        );
+    }
+
+    #[test]
+    fn active_corner_cursor_is_inset_from_the_selection_border() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let selection = canvas_selection_outline(
+            SelectionBounds {
+                left: 1,
+                right: 2,
+                top: 1,
+                bottom: 2,
+            },
+            &metrics,
+            50,
+        );
+        let cursor_top = row_top(2, &metrics, 50);
+        let cursor = drawing_cursor_outline(2, cursor_top, &metrics);
+
+        assert!(cursor.left > PADDING as f32 + 2.0 * metrics.cell_width as f32);
+        assert!(cursor.right < selection.right);
+        assert!(cursor.bottom < selection.bottom);
+        assert!(cursor.top > row_top(2, &metrics, 50) as f32);
     }
 
     #[test]

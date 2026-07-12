@@ -1,6 +1,6 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-use winit::keyboard::{Key, ModifiersState};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::app::{CursorMode, ThemeConfig};
 use crate::drawing::{
@@ -9,6 +9,7 @@ use crate::drawing::{
 };
 use crate::layout::ContentBounds;
 use crate::model::{Atom, Coord, Direction, Face};
+use crate::selection::{CanvasSelection, SelectionBounds, replace_range, selected_text};
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub struct EditorState {
     pub window_title: String,
     pub cursor_mode: CursorMode,
     pub toolbar: ToolbarState,
+    pub selection: CanvasSelection,
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
@@ -67,6 +69,7 @@ impl EditorState {
             window_title: window_title.into(),
             cursor_mode: CursorMode::MoveDraw,
             toolbar: ToolbarState::default(),
+            selection: CanvasSelection::collapsed_at(Coord::default()),
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
@@ -90,6 +93,9 @@ impl EditorState {
         let old_mode = self.toolbar.main_mode();
         if !self.toolbar.handle_shortcut(key, modifiers) {
             return false;
+        }
+        if matches!(key, Key::Named(NamedKey::Escape)) {
+            self.cancel_canvas_transients();
         }
         if self.toolbar.main_mode() != old_mode {
             self.end_stroke();
@@ -150,6 +156,8 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.shape_preview = None;
+        self.collapse_selection();
         self.sync_cursor_mode_with_toolbar();
         true
     }
@@ -183,6 +191,7 @@ impl EditorState {
             }
         }
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn write_text(&mut self, text: &str) {
@@ -200,18 +209,9 @@ impl EditorState {
             return;
         };
         self.end_stroke();
-        let line = &mut self.grid.lines[self.grid.cursor_pos.line];
-        let atom = Atom {
-            face: Face::default(),
-            contents: grapheme.to_string(),
-        };
-        if self.cursor_index < line.len() {
-            line[self.cursor_index] = atom;
-        } else {
-            line.push(atom);
-        }
+        self.replace_selection(Some(grapheme));
         self.sync_cursor_mode_with_toolbar();
-        self.sync_cursor_column();
+        self.restore_active_cursor_index();
     }
 
     fn replace(&mut self, text: &str) {
@@ -236,6 +236,7 @@ impl EditorState {
             }
         }
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn newline(&mut self) {
@@ -245,6 +246,7 @@ impl EditorState {
         self.grid.lines.insert(self.grid.cursor_pos.line, remainder);
         self.cursor_index = 0;
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn backspace(&mut self) {
@@ -259,6 +261,7 @@ impl EditorState {
             self.grid.lines[self.grid.cursor_pos.line].extend(current);
         }
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn delete(&mut self) {
@@ -271,18 +274,21 @@ impl EditorState {
             self.grid.lines[line].extend(next);
         }
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn move_home(&mut self) {
         self.end_stroke();
         self.cursor_index = 0;
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn move_end(&mut self) {
         self.end_stroke();
         self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
         self.sync_cursor_column();
+        self.collapse_selection();
     }
 
     pub fn move_to(&mut self, coord: Coord) -> bool {
@@ -294,6 +300,7 @@ impl EditorState {
             .map_or(0, |line| display_width(line));
         self.end_stroke();
         self.move_to_without_ending_stroke(coord);
+        self.collapse_selection();
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.end = self.grid.cursor_pos;
         }
@@ -325,6 +332,30 @@ impl EditorState {
         changed
     }
 
+    pub fn extend_selection(&mut self, direction: Direction) -> bool {
+        let prepended = self.prepare_adjacent(direction);
+        let to = adjacent_coord(self.grid.cursor_pos, direction)
+            .expect("canvas edge was structurally extended");
+        self.end_stroke();
+        self.shape_preview = None;
+        self.move_selection_to_without_ending_stroke(to);
+        self.selection.set_active(self.grid.cursor_pos);
+        prepended
+    }
+
+    fn move_selection_to_without_ending_stroke(&mut self, coord: Coord) {
+        while self.grid.lines.len() <= coord.line {
+            self.grid.lines.push(Vec::new());
+        }
+        let line = &mut self.grid.lines[coord.line];
+        let current_width = display_width(line);
+        if current_width <= coord.column {
+            line.extend((current_width..coord.column).map(|_| blank_atom()));
+        }
+        self.grid.cursor_pos = coord;
+        self.cursor_index = index_for_column(line, coord.column);
+    }
+
     pub fn move_or_draw(&mut self, direction: Direction, draw: bool) -> bool {
         let prepended = self.prepare_adjacent(direction);
         let from = self.grid.cursor_pos;
@@ -335,6 +366,7 @@ impl EditorState {
         if !draw {
             self.end_stroke();
             self.move_to_without_ending_stroke(to);
+            self.collapse_selection();
             return prepended;
         }
 
@@ -369,6 +401,7 @@ impl EditorState {
             self.add_connection(to, direction.opposite(), line_style, corner_style)
         else {
             self.active_stroke = None;
+            self.collapse_selection();
             return true;
         };
 
@@ -398,27 +431,8 @@ impl EditorState {
             end_base_glyph,
             moving_ending,
         });
+        self.collapse_selection();
         true
-    }
-
-    pub fn move_or_erase(&mut self, direction: Direction) {
-        self.prepare_adjacent(direction);
-        self.end_stroke();
-        let from = self.grid.cursor_pos;
-        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
-        self.erase_connection_or_cell(from, direction);
-        self.move_to_without_ending_stroke(to);
-        self.erase_connection_or_cell(to, direction.opposite());
-    }
-
-    fn erase_connection_or_cell(&mut self, coord: Coord, direction: Direction) {
-        let is_line = self.line_markers.iter().any(|marker| marker.coord == coord)
-            || self.cell_contents(coord).is_some_and(is_line_glyph);
-        if is_line {
-            self.remove_connection(coord, direction);
-        } else {
-            self.clear_cell();
-        }
     }
 
     fn remove_connection(&mut self, coord: Coord, direction: Direction) {
@@ -539,31 +553,15 @@ impl EditorState {
         self.active_stroke = None;
     }
 
-    pub fn clear_cell(&mut self) {
+    pub fn clear_selection(&mut self) {
         self.end_stroke();
-        let coord = self.grid.cursor_pos;
-        self.remove_line_marker(coord);
-        let line = &mut self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        if column != coord.column {
-            return;
-        }
-        let Some(width) = line.get(index).map(atom_width) else {
-            return;
-        };
-        line.splice(index..=index, (0..width).map(|_| blank_atom()));
-        self.cursor_index = index;
-        self.sync_cursor_column();
+        self.replace_selection(None);
     }
 
     pub fn place_stamp(&mut self) {
         self.end_stroke();
-        let coord = self.grid.cursor_pos;
         let stamp = self.toolbar.stamp().to_string();
-        self.remove_line_marker(coord);
-        replace_cell(&mut self.grid.lines, coord, stamp);
-        self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
-        self.sync_cursor_column();
+        self.replace_selection(Some(&stamp));
     }
 
     pub fn draw_stamp(&mut self, direction: Direction) {
@@ -573,22 +571,8 @@ impl EditorState {
         self.shape_preview = None;
         self.place_stamp();
         self.move_to_without_ending_stroke(to);
+        self.collapse_selection();
         self.place_stamp();
-    }
-
-    pub fn erase(&mut self, direction: Direction) {
-        if self.cursor_mode == CursorMode::MoveDraw {
-            self.move_or_erase(direction);
-            return;
-        }
-
-        self.prepare_adjacent(direction);
-        let to = adjacent_coord(self.grid.cursor_pos, direction)
-            .expect("canvas edge was structurally extended");
-        self.shape_preview = None;
-        self.clear_cell();
-        self.move_to_without_ending_stroke(to);
-        self.clear_cell();
     }
 
     pub fn toggle_shape_preview(&mut self) {
@@ -604,6 +588,26 @@ impl EditorState {
                 end: self.grid.cursor_pos,
             })
         };
+    }
+
+    pub fn cancel_canvas_transients(&mut self) {
+        let had_preview = self.shape_preview.take().is_some();
+        let had_selection = !self.selection.is_collapsed();
+        self.end_stroke();
+        self.toolbar.cancel_shortcut();
+        self.collapse_selection();
+        if !had_preview && !had_selection && self.cursor_mode == CursorMode::Shapes {
+            self.toggle_shape_preview();
+        }
+    }
+
+    pub fn selection_bounds(&self) -> SelectionBounds {
+        self.selection.bounds()
+    }
+
+    #[allow(dead_code)] // Public extraction hook for the queued export implementation.
+    pub fn selected_text(&self) -> String {
+        selected_text(&self.grid.lines, self.selection.bounds())
     }
 
     pub fn confirm_shape(&mut self) {
@@ -647,6 +651,68 @@ impl EditorState {
     fn sync_cursor_column(&mut self) {
         self.grid.cursor_pos.column =
             display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
+    }
+
+    fn collapse_selection(&mut self) {
+        self.selection.collapse(self.grid.cursor_pos);
+    }
+
+    fn restore_active_cursor_index(&mut self) {
+        let active = self.selection.active();
+        self.grid.cursor_pos = active;
+        self.cursor_index = index_for_column(&self.grid.lines[active.line], active.column);
+    }
+
+    fn replace_selection(&mut self, replacement: Option<&str>) {
+        let bounds = self.selection.bounds();
+        self.cleanup_selection_connections(bounds);
+        self.line_markers
+            .retain(|marker| !bounds.contains(marker.coord));
+        replace_range(&mut self.grid.lines, bounds, replacement);
+        self.restore_active_cursor_index();
+    }
+
+    fn cleanup_selection_connections(&mut self, bounds: SelectionBounds) {
+        if bounds.top > 0 {
+            for column in bounds.left..=bounds.right {
+                self.remove_connection(
+                    Coord {
+                        line: bounds.top - 1,
+                        column,
+                    },
+                    Direction::Down,
+                );
+            }
+        }
+        if bounds.left > 0 {
+            for line in bounds.top..=bounds.bottom {
+                self.remove_connection(
+                    Coord {
+                        line,
+                        column: bounds.left - 1,
+                    },
+                    Direction::Right,
+                );
+            }
+        }
+        for column in bounds.left..=bounds.right {
+            self.remove_connection(
+                Coord {
+                    line: bounds.bottom.saturating_add(1),
+                    column,
+                },
+                Direction::Up,
+            );
+        }
+        for line in bounds.top..=bounds.bottom {
+            self.remove_connection(
+                Coord {
+                    line,
+                    column: bounds.right.saturating_add(1),
+                },
+                Direction::Left,
+            );
+        }
     }
 
     pub fn take_pending_prepend(&mut self) -> (usize, usize) {
@@ -700,6 +766,7 @@ impl EditorState {
     fn prepend_line(&mut self) {
         self.grid.lines.insert(0, Vec::new());
         self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
+        self.selection.shift(0, 1);
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end.line = stroke.end.line.saturating_add(1);
         }
@@ -719,6 +786,7 @@ impl EditorState {
         }
         self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(1);
         self.cursor_index = self.cursor_index.saturating_add(1);
+        self.selection.shift(1, 0);
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end.column = stroke.end.column.saturating_add(1);
         }
@@ -1006,6 +1074,194 @@ mod tests {
     }
 
     #[test]
+    fn selection_extension_keeps_its_anchor_and_normal_movement_collapses() {
+        let mut state = state();
+        state.move_to(Coord { line: 2, column: 2 });
+
+        state.extend_selection(Direction::Left);
+        state.extend_selection(Direction::Left);
+        state.extend_selection(Direction::Up);
+        assert_eq!(
+            state.selection_bounds(),
+            SelectionBounds {
+                left: 0,
+                right: 2,
+                top: 1,
+                bottom: 2,
+            }
+        );
+        assert_eq!(state.selection.active(), state.grid.cursor_pos);
+
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Right);
+        assert_eq!(state.selection.anchor(), Coord { line: 2, column: 2 });
+        assert_eq!(state.selection.active(), Coord { line: 1, column: 3 });
+        assert_eq!(state.selection_bounds().left, 2);
+        assert_eq!(state.selection_bounds().right, 3);
+
+        state.move_cursor(Direction::Down);
+        assert!(state.selection.is_collapsed());
+        assert_eq!(state.selection.active(), state.grid.cursor_pos);
+
+        state.extend_selection(Direction::Right);
+        state.move_to(Coord { line: 4, column: 7 });
+        assert_eq!(
+            state.selection_bounds(),
+            SelectionBounds {
+                left: 7,
+                right: 7,
+                top: 4,
+                bottom: 4
+            }
+        );
+    }
+
+    #[test]
+    fn top_and_left_prepend_shift_anchor_while_active_enters_new_cell() {
+        let mut state = state();
+        state.move_to(Coord { line: 0, column: 0 });
+
+        assert!(state.extend_selection(Direction::Up));
+        assert_eq!(state.selection.anchor(), Coord { line: 1, column: 0 });
+        assert_eq!(state.selection.active(), Coord { line: 0, column: 0 });
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 0 });
+
+        assert!(state.extend_selection(Direction::Left));
+        assert_eq!(state.selection.anchor(), Coord { line: 1, column: 1 });
+        assert_eq!(state.selection.active(), Coord { line: 0, column: 0 });
+        assert_eq!(state.take_pending_prepend(), (1, 1));
+    }
+
+    #[test]
+    fn range_clear_is_rectangular_across_short_rows_and_wide_graphemes() {
+        let mut state = state();
+        state.grid.lines = vec![
+            vec![
+                Atom {
+                    face: Face::default(),
+                    contents: "a".into(),
+                },
+                Atom {
+                    face: Face::default(),
+                    contents: "😀".into(),
+                },
+                Atom {
+                    face: Face::default(),
+                    contents: "z".into(),
+                },
+            ],
+            Vec::new(),
+        ];
+        state.move_to(Coord { line: 0, column: 1 });
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Down);
+
+        state.clear_selection();
+
+        assert_eq!(state.selected_text(), "  \n  ");
+        assert_eq!(contents(&state.grid.lines[0]), "a  z");
+        assert_eq!(display_width(&state.grid.lines[1]), 3);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
+        assert_eq!(
+            state.selection_bounds(),
+            SelectionBounds {
+                left: 1,
+                right: 2,
+                top: 0,
+                bottom: 1
+            }
+        );
+    }
+
+    #[test]
+    fn single_replace_fills_the_range_and_restores_mode_without_moving_active_corner() {
+        let mut state = state();
+        state.grid.lines = vec![
+            vec![blank_atom(), blank_atom(), blank_atom()],
+            vec![blank_atom(), blank_atom(), blank_atom()],
+        ];
+        state.move_to(Coord { line: 0, column: 0 });
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Down);
+        let active = state.grid.cursor_pos;
+
+        assert!(state.begin_single_replace());
+        state.write_text("界ignored");
+
+        assert_eq!(state.selected_text(), "界 \n界 ");
+        assert_eq!(state.grid.cursor_pos, active);
+        assert_eq!(state.selection.active(), active);
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn stamp_space_fills_every_selected_cell_and_keeps_the_range() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        state.move_to(Coord { line: 0, column: 0 });
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Down);
+
+        state.place_stamp();
+
+        assert_eq!(state.selected_text(), "○○\n○○");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 1 });
+        assert_eq!(
+            state.selection_bounds(),
+            SelectionBounds {
+                left: 0,
+                right: 1,
+                top: 0,
+                bottom: 1
+            }
+        );
+    }
+
+    #[test]
+    fn selected_text_excludes_everything_outside_the_normalized_rectangle() {
+        let mut state = state();
+        state.insert("outside\n012345\noutside");
+        state.move_to(Coord { line: 1, column: 4 });
+        for _ in 0..3 {
+            state.extend_selection(Direction::Left);
+        }
+
+        assert_eq!(state.selected_text(), "1234");
+    }
+
+    #[test]
+    fn escape_and_text_cancellation_collapse_expanded_selection() {
+        let mut state = state();
+        state.extend_selection(Direction::Right);
+        state.cancel_canvas_transients();
+        assert!(state.selection.is_collapsed());
+
+        state.extend_selection(Direction::Right);
+        state.toggle_replace_mode();
+        assert!(state.cancel_text_entry());
+        assert!(state.selection.is_collapsed());
+    }
+
+    #[test]
+    fn prefix_escape_also_collapses_selection_without_changing_toolbar_mode() {
+        let mut state = state();
+        state.extend_selection(Direction::Right);
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Character("1".into()), ModifiersState::empty(),)
+        );
+
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty(),)
+        );
+
+        assert!(state.selection.is_collapsed());
+        assert_eq!(state.toolbar.pending_shortcut(), None);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+    }
+
+    #[test]
     fn single_replace_cannot_start_in_text_insert_or_replace_modes() {
         let mut state = state();
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
@@ -1230,36 +1486,6 @@ mod tests {
     }
 
     #[test]
-    fn erasing_movement_removes_only_the_traversed_segments() {
-        let mut state = state();
-        state.move_or_draw(Direction::Right, true);
-        state.move_or_draw(Direction::Right, true);
-
-        state.move_or_erase(Direction::Left);
-        assert_eq!(contents(&state.grid.lines[0]), "╶╴ ");
-        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-
-        state.move_or_erase(Direction::Left);
-        assert_eq!(contents(&state.grid.lines[0]), "   ");
-        assert_eq!(state.grid.cursor_pos, Coord::default());
-    }
-
-    #[test]
-    fn line_mode_erasing_movement_clears_non_line_cells() {
-        let mut state = state();
-        state.insert("x●◆");
-        state.move_to(Coord::default());
-
-        state.move_or_erase(Direction::Right);
-        assert_eq!(contents(&state.grid.lines[0]), "  ◆");
-        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-
-        state.move_or_erase(Direction::Right);
-        assert_eq!(contents(&state.grid.lines[0]), "   ");
-        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
-    }
-
-    #[test]
     fn draw_preserves_non_line_text() {
         let mut state = state();
         state.insert("x");
@@ -1347,7 +1573,7 @@ mod tests {
         state.insert("😀x");
         state.move_to(Coord { line: 0, column: 0 });
 
-        state.clear_cell();
+        state.clear_selection();
 
         assert_eq!(contents(&state.grid.lines[0]), "  x");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 0 });
@@ -1441,25 +1667,6 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "○○");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-    }
-
-    #[test]
-    fn stamp_and_shape_erasers_clear_cells_while_moving() {
-        for mode in [MainMode::Stamp, MainMode::Shapes] {
-            let mut state = state();
-            state.apply_toolbar_action(ToolbarAction::SelectMain(mode));
-            replace_cell(&mut state.grid.lines, Coord::default(), "●".to_string());
-            replace_cell(
-                &mut state.grid.lines,
-                Coord { line: 0, column: 1 },
-                "◆".to_string(),
-            );
-
-            state.erase(Direction::Right);
-
-            assert_eq!(contents(&state.grid.lines[0]), "  ");
-            assert_eq!(state.grid.cursor_pos.column, 1);
-        }
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub struct Atom {
     pub contents: String,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Coord {
     pub line: usize,
     pub column: usize,

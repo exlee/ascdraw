@@ -334,6 +334,8 @@ fn grid_top(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AppConfig;
+    use crate::model::Direction;
 
     #[test]
     fn autosave_requires_a_change_and_more_than_five_idle_seconds() {
@@ -418,5 +420,19 @@ mod tests {
             ),
             None
         );
+
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.move_to(Coord {
+            line: 11,
+            column: 11,
+        });
+        state.extend_selection(Direction::Left);
+        let previous = state.clone();
+        state.extend_selection(Direction::Right);
+        state.extend_selection(Direction::Right);
+        assert_ne!(state.selection, previous.selection);
+        state = previous.clone();
+        assert_eq!(state.selection, previous.selection);
+        assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
     }
 }

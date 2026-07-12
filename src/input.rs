@@ -12,15 +12,15 @@ pub enum EditCommand {
     Move(Direction),
     Draw(Direction),
     DrawStamp(Direction),
-    Erase(Direction),
+    ExtendSelection(Direction),
     Clear,
     ToggleTextEntry,
     ToggleReplaceMode,
     BeginSingleReplace,
     CancelTextEntry,
     PlaceStamp,
-    ToggleShapePreview,
     ConfirmShape,
+    EscapeCanvas,
     Home,
     End,
     Backspace,
@@ -56,6 +56,10 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
+    if matches!(key, Key::Named(NamedKey::Escape)) {
+        return Some(EditCommand::EscapeCanvas);
+    }
+
     if matches!(key, Key::Named(NamedKey::Enter)) {
         return Some(if modifiers.shift_key() {
             EditCommand::ToggleReplaceMode
@@ -83,8 +87,8 @@ fn edit_command_for_key(
         return Some(EditCommand::Clear);
     }
 
-    if modifiers.alt_key() {
-        return direction_for_key(key).map(EditCommand::Erase);
+    if modifiers.alt_key() && !mode.accepts_text() {
+        return direction_for_key(key).map(EditCommand::ExtendSelection);
     }
 
     if mode == CursorMode::MoveDraw {
@@ -123,7 +127,6 @@ fn edit_command_for_key(
 
     if mode == CursorMode::Shapes {
         return match key {
-            Key::Named(NamedKey::Escape) => Some(EditCommand::ToggleShapePreview),
             _ if is_space_key(key) => Some(EditCommand::ConfirmShape),
             _ => direction_for_key(key).map(EditCommand::Move),
         };
@@ -468,12 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn maps_alt_directions_to_line_erasing_in_every_mode() {
+    fn maps_alt_directions_to_selection_extension_in_canvas_modes() {
         for mode in [
-            CursorMode::Insert,
-            CursorMode::Replace,
             CursorMode::MoveDraw,
-            CursorMode::Text,
             CursorMode::Stamp,
             CursorMode::Shapes,
             CursorMode::Utilities,
@@ -484,21 +484,27 @@ mod tests {
             ] {
                 assert_eq!(
                     edit_command_for_key(&key, ModifiersState::ALT, mode),
-                    Some(EditCommand::Erase(direction))
+                    Some(EditCommand::ExtendSelection(direction))
                 );
             }
+        }
+        for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
+            assert_ne!(
+                edit_command_for_key(&Key::Character("h".into()), ModifiersState::ALT, mode,),
+                Some(EditCommand::ExtendSelection(Direction::Left))
+            );
         }
     }
 
     #[test]
-    fn shape_escape_toggles_preview_and_space_confirms() {
+    fn canvas_escape_cancels_transients_and_shape_space_confirms() {
         assert_eq!(
             edit_command_for_key(
                 &Key::Named(NamedKey::Escape),
                 ModifiersState::empty(),
                 CursorMode::Shapes,
             ),
-            Some(EditCommand::ToggleShapePreview)
+            Some(EditCommand::EscapeCanvas)
         );
         assert_eq!(
             edit_command_for_key(
