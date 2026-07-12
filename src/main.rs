@@ -428,6 +428,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.draw_stamp(direction);
             true
         }
+        EditCommand::ApplyUtility(direction) => state.apply_utility(direction),
         EditCommand::ExtendSelection(direction) => state.extend_selection(direction),
         EditCommand::Clear => {
             state.clear_selection();

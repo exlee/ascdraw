@@ -408,7 +408,8 @@ fn grid_top(
 mod tests {
     use super::*;
     use crate::app::AppConfig;
-    use crate::model::Direction;
+    use crate::model::{Atom, Direction, Face};
+    use crate::toolbar::{MainMode, ToolbarAction};
 
     #[test]
     fn autosave_requires_a_change_and_more_than_five_idle_seconds() {
@@ -543,6 +544,45 @@ mod tests {
         });
         let previous = state.clone();
         assert!(state.paste_text_rectangle(" "));
+        assert_eq!(
+            resolve_navigation_origin(
+                (2, 2),
+                state.grid.cursor_pos,
+                (10, 10),
+                &state.content_cells(),
+            ),
+            None
+        );
+
+        state = previous.clone();
+        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.selection, previous.selection);
+        assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
+    }
+
+    #[test]
+    fn rejected_utility_transform_can_restore_document_and_coordinates_atomically() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.grid.lines.resize_with(6, Vec::new);
+        state.grid.lines[5].resize_with(5, || Atom {
+            face: Face::default(),
+            contents: " ".into(),
+        });
+        state.grid.lines[5].push(Atom {
+            face: Face::default(),
+            contents: "x".into(),
+        });
+        state.move_to(Coord {
+            line: 11,
+            column: 11,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        let previous = state.clone();
+        assert!(state.apply_utility(Direction::Left));
         assert_eq!(
             resolve_navigation_origin(
                 (2, 2),

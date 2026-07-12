@@ -14,6 +14,8 @@ use crate::selection::{
 };
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip};
 
+mod utility;
+
 #[derive(Debug, Clone)]
 pub struct GridState {
     pub lines: Vec<Vec<Atom>>,
@@ -1154,6 +1156,7 @@ fn index_for_column(atoms: &[Atom], column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::toolbar::UtilityKind;
 
     fn state() -> EditorState {
         EditorState::new(&ThemeConfig::default(), "ascdraw")
@@ -2042,6 +2045,164 @@ mod tests {
             .count();
         assert!(non_blank >= 8);
         assert!(non_blank < 7 * 5);
+    }
+
+    #[test]
+    fn push_inserts_each_requested_row_and_column() {
+        let mut right = utility_state(
+            &["ab", "cd"],
+            UtilityKind::Push,
+            Coord { line: 0, column: 1 },
+        );
+        assert!(right.apply_utility(Direction::Right));
+        assert_eq!(line_contents(&right), vec!["ab ", "cd "]);
+
+        let mut left = utility_state(
+            &["ab", "cd"],
+            UtilityKind::Push,
+            Coord { line: 0, column: 1 },
+        );
+        assert!(left.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&left), vec![" ab", " cd"]);
+        assert_eq!(left.grid.cursor_pos.column, 2);
+
+        let mut up = utility_state(&["a", "b"], UtilityKind::Push, Coord { line: 1, column: 0 });
+        assert!(up.apply_utility(Direction::Up));
+        assert_eq!(line_contents(&up), vec!["", "a", "b"]);
+        assert_eq!(up.grid.cursor_pos.line, 2);
+
+        let mut down = utility_state(&["a", "b"], UtilityKind::Push, Coord { line: 0, column: 0 });
+        assert!(down.apply_utility(Direction::Down));
+        assert_eq!(line_contents(&down), vec!["a", "", "b"]);
+        assert_eq!(down.grid.cursor_pos.line, 0);
+    }
+
+    #[test]
+    fn pull_horizontal_directions_follow_the_literal_asymmetry_and_blank_guard() {
+        let mut left = utility_state(&["a bx", "abx", ""], UtilityKind::Pull, Coord::default());
+        assert!(left.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&left), vec!["abx", "abx", ""]);
+
+        let mut right = utility_state(&["a bx", "abx", ""], UtilityKind::Pull, Coord::default());
+        assert!(right.apply_utility(Direction::Right));
+        assert_eq!(line_contents(&right), vec![" abx", "abx", ""]);
+        assert_eq!(right.grid.cursor_pos.column, 1);
+
+        let mut blocked = utility_state(&["a界x"], UtilityKind::Pull, Coord::default());
+        assert!(!blocked.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&blocked), vec!["a界x"]);
+    }
+
+    #[test]
+    fn pull_vertical_directions_shift_only_columns_with_explicit_blanks() {
+        let mut up = utility_state(
+            &["AX", " Y", "BX", "CX"],
+            UtilityKind::Pull,
+            Coord::default(),
+        );
+        assert!(up.apply_utility(Direction::Up));
+        assert_eq!(line_contents(&up), vec!["AX", "BY", "CX", " X"]);
+
+        let mut down = utility_state(
+            &["AX", "BX", " Y", "ZX"],
+            UtilityKind::Pull,
+            Coord { line: 3, column: 0 },
+        );
+        assert!(down.apply_utility(Direction::Down));
+        assert_eq!(line_contents(&down), vec![" X", "AX", "BY", "ZX"]);
+
+        let mut ragged = utility_state(
+            &["Q", "  ", "a", "bX", "c"],
+            UtilityKind::Pull,
+            Coord::default(),
+        );
+        assert!(ragged.apply_utility(Direction::Up));
+        assert_eq!(line_contents(&ragged), vec!["Q", "a ", "bX", "c ", " "]);
+    }
+
+    #[test]
+    fn utility_origin_prepend_and_wide_boundary_are_safe() {
+        let mut left = utility_state(&["界x"], UtilityKind::Push, Coord::default());
+        assert!(left.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&left), vec![" 界x"]);
+        assert_eq!(left.grid.cursor_pos.column, 1);
+        assert_eq!(left.take_pending_prepend(), (1, 0));
+
+        let mut up = utility_state(&["x"], UtilityKind::Push, Coord::default());
+        assert!(up.apply_utility(Direction::Up));
+        assert_eq!(line_contents(&up), vec!["", "x"]);
+        assert_eq!(up.take_pending_prepend(), (0, 1));
+
+        let mut inside_wide = utility_state(&["界x"], UtilityKind::Push, Coord::default());
+        assert!(!inside_wide.apply_utility(Direction::Right));
+        assert_eq!(line_contents(&inside_wide), vec!["界x"]);
+
+        let mut pull_down = utility_state(&["x"], UtilityKind::Pull, Coord::default());
+        assert!(pull_down.apply_utility(Direction::Down));
+        assert_eq!(line_contents(&pull_down), vec!["", "x"]);
+        assert_eq!(pull_down.grid.cursor_pos.line, 1);
+    }
+
+    #[test]
+    fn push_remaps_selection_markers_stroke_and_preview_coordinates() {
+        let mut state = utility_state(&["abc"], UtilityKind::Push, Coord { line: 0, column: 2 });
+        state
+            .selection
+            .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
+        state.active_stroke = Some(ActiveStroke {
+            end: Coord { line: 0, column: 2 },
+            end_base_glyph: "─".into(),
+            moving_ending: LineEnding::None,
+        });
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 2 },
+            ending: LineEnding::Arrow,
+            base_glyph: "─".into(),
+        });
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord { line: 0, column: 1 },
+            end: Coord { line: 0, column: 2 },
+        });
+
+        assert!(state.apply_utility(Direction::Left));
+        assert_eq!(state.selection.anchor().column, 2);
+        assert_eq!(state.selection.active().column, 3);
+        assert_eq!(state.active_stroke.as_ref().unwrap().end.column, 3);
+        assert_eq!(state.line_markers[0].coord.column, 3);
+        let preview = state.shape_preview.unwrap();
+        assert_eq!((preview.anchor.column, preview.end.column), (2, 3));
+    }
+
+    fn utility_state(rows: &[&str], utility: UtilityKind, cursor: Coord) -> EditorState {
+        let mut state = state();
+        state.grid.lines = rows
+            .iter()
+            .map(|row| {
+                UnicodeSegmentation::graphemes(*row, true)
+                    .map(|contents| Atom {
+                        face: Face::default(),
+                        contents: contents.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: match utility {
+                UtilityKind::Select => 0,
+                UtilityKind::Push => 1,
+                UtilityKind::Pull => 2,
+            },
+        });
+        state.grid.cursor_pos = cursor;
+        state.cursor_index = index_for_column(&state.grid.lines[cursor.line], cursor.column);
+        state.selection.collapse(cursor);
+        state
+    }
+
+    fn line_contents(state: &EditorState) -> Vec<String> {
+        state.grid.lines.iter().map(|line| contents(line)).collect()
     }
 
     fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {

@@ -183,8 +183,8 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &["·", "░", "▒", "▓", "█"],
 ];
-const UTILITY_LABELS: [&str; 1] = ["Select"];
-const UTILITY_OPTIONS: [&[&str]; 1] = [["⌖"].as_slice()];
+const UTILITY_LABELS: [&str; 1] = ["Tool"];
+const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
@@ -201,6 +201,14 @@ pub enum ShapeKind {
     Rect,
     RoundedRect,
     Ellipse,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UtilityKind {
+    #[default]
+    Select,
+    Push,
+    Pull,
 }
 
 impl MainMode {
@@ -220,7 +228,7 @@ impl MainMode {
             Self::Line => Tooltip::Line,
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
-            Self::Utilities => Tooltip::Utilities,
+            Self::Utilities => Tooltip::UtilitiesSelect,
         }
     }
 }
@@ -232,7 +240,9 @@ pub enum Tooltip {
     Line,
     Stamp,
     Shapes,
-    Utilities,
+    UtilitiesSelect,
+    UtilitiesPush,
+    UtilitiesPull,
     Text,
     Replace,
     Export,
@@ -251,8 +261,14 @@ impl Tooltip {
             Self::Shapes => {
                 "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
             }
-            Self::Utilities => {
+            Self::UtilitiesSelect => {
                 "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
+            }
+            Self::UtilitiesPush => {
+                "Push: Shift-hjkl/arrows inserts a blank row or column in that direction"
+            }
+            Self::UtilitiesPull => {
+                "Pull: Shift-hjkl/arrows removes eligible blanks and pulls content"
             }
             Self::Text => {
                 "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Ret> exits text mode; arrows move freely over the canvas"
@@ -289,6 +305,7 @@ pub struct ToolbarState {
     stamp_selected: [usize; STAMP_LABELS.len()],
     stamp_active_category: usize,
     shape_selected: [usize; SHAPE_LABELS.len()],
+    utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
     export_open: bool,
     pending_export_action: Option<ExportAction>,
@@ -692,6 +709,13 @@ impl ToolbarState {
         if self.export_open {
             return Tooltip::Export;
         }
+        if self.main_mode == MainMode::Utilities {
+            return match self.utility_kind() {
+                UtilityKind::Select => Tooltip::UtilitiesSelect,
+                UtilityKind::Push => Tooltip::UtilitiesPush,
+                UtilityKind::Pull => Tooltip::UtilitiesPull,
+            };
+        }
         self.main_mode.tooltip()
     }
 
@@ -738,6 +762,15 @@ impl ToolbarState {
             .map(|index| SHAPE_OPTIONS[2][index + 1])
     }
 
+    pub fn utility_kind(&self) -> UtilityKind {
+        match self.utility_selected {
+            0 => UtilityKind::Select,
+            1 => UtilityKind::Push,
+            2 => UtilityKind::Pull,
+            _ => unreachable!("utility selection is always normalized"),
+        }
+    }
+
     pub fn action_at(&self, row: usize, column: usize, box_width: usize) -> Option<ToolbarAction> {
         let mut start = 0;
         for span in boxed_toolbar_spans(&self.toolbar_spans(row), box_width) {
@@ -764,7 +797,7 @@ impl ToolbarState {
                     MainMode::Line => LINE_OPTIONS.get(submenu),
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
                     MainMode::Shapes => SHAPE_OPTIONS.get(submenu),
-                    MainMode::Utilities => return submenu == 0 && option == 0,
+                    MainMode::Utilities => UTILITY_OPTIONS.get(submenu),
                 }
                 .map(|options| options.len());
                 if option_count.is_none_or(|count| option >= count) {
@@ -777,7 +810,7 @@ impl ToolbarState {
                         self.stamp_selected.get_mut(submenu)
                     }
                     MainMode::Shapes => self.shape_selected.get_mut(submenu),
-                    MainMode::Utilities => unreachable!("utilities returned above"),
+                    MainMode::Utilities => (submenu == 0).then_some(&mut self.utility_selected),
                 };
                 let Some(selected) = selected else {
                     return false;
@@ -820,7 +853,7 @@ impl ToolbarState {
             MainMode::Utilities => MenuLayout {
                 labels: &UTILITY_LABELS,
                 options: &UTILITY_OPTIONS,
-                selected: &[0],
+                selected: std::slice::from_ref(&self.utility_selected),
                 exclusive_submenu: None,
             },
         }
@@ -1586,6 +1619,30 @@ mod tests {
     }
 
     #[test]
+    fn utils_push_and_pull_are_keyboard_and_mouse_selectable() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["1", "4", "2", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.main_mode(), MainMode::Utilities);
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
+        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
+        assert!(row(&toolbar, 2).contains("Tool: Select Push Pull"));
+
+        let expected = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 2,
+        };
+        let pull_column = (0..80)
+            .find(|column| toolbar.action_at(2, *column, 80) == Some(expected))
+            .expect("Pull is visible and clickable");
+        let action = toolbar.action_at(2, pull_column, 80).unwrap();
+        assert!(toolbar.apply_action(action));
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
+        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPull);
+    }
+
+    #[test]
     fn mouse_hit_testing_tracks_later_page_options_after_column_padding() {
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
@@ -1712,7 +1769,7 @@ mod tests {
             Tooltip::Line,
             Tooltip::Stamp,
             Tooltip::Shapes,
-            Tooltip::Utilities,
+            Tooltip::UtilitiesSelect,
         ];
         for (mode, tooltip) in MainMode::ALL.into_iter().zip(expected) {
             assert_eq!(mode.tooltip(), tooltip);
@@ -1723,7 +1780,7 @@ mod tests {
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
         assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
-        assert_ne!(Tooltip::Shapes.text(), Tooltip::Utilities.text());
+        assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesSelect.text());
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(toolbar.tooltip().text().contains("Space fills with stamp"));

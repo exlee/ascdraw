@@ -57,6 +57,8 @@ mod tests {
     use super::*;
     use crate::app::AppConfig;
     use crate::editor::EditorState;
+    use crate::model::Direction;
+    use crate::toolbar::{MainMode, ToolbarAction};
 
     fn snapshot(text: &str, viewport: ViewportOffset) -> HistorySnapshot {
         let mut state = EditorState::new(&AppConfig::default().theme, "test");
@@ -127,5 +129,42 @@ mod tests {
         assert!(first.record_change(blank.clone(), &edited));
         assert_eq!(first.undo(edited), Some(blank.clone()));
         assert!(second.undo(blank).is_none());
+    }
+
+    #[test]
+    fn utility_edits_round_trip_and_no_op_does_not_clear_redo() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert("ab");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        assert!(state.apply_utility(Direction::Left));
+        let after = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset { x: 3, y: 4 },
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before.clone(), &after));
+
+        let restored = history.undo(after.clone()).unwrap();
+        assert_eq!(restored, before);
+        state.restore_edit_snapshot(restored.edit.clone());
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 2,
+        });
+        assert!(!state.apply_utility(Direction::Left));
+        let no_op = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: restored.viewport,
+        };
+        assert!(!history.record_change(restored.clone(), &no_op));
+        assert_eq!(history.redo(no_op), Some(after));
     }
 }

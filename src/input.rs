@@ -12,6 +12,7 @@ pub enum EditCommand {
     Move(Direction),
     Draw(Direction),
     DrawStamp(Direction),
+    ApplyUtility(Direction),
     ExtendSelection(Direction),
     Clear,
     ToggleTextEntry,
@@ -169,7 +170,13 @@ fn edit_command_for_key(
     }
 
     if mode == CursorMode::Utilities {
-        return direction_for_key(key).map(EditCommand::Move);
+        return direction_for_key(key).map(|direction| {
+            if modifiers.shift_key() {
+                EditCommand::ApplyUtility(direction)
+            } else {
+                EditCommand::Move(direction)
+            }
+        });
     }
 
     match key {
@@ -579,6 +586,38 @@ mod tests {
                 Some(EditCommand::ToggleTextEntry)
             );
         }
+    }
+
+    #[test]
+    fn utilities_route_shift_directions_to_tools_without_changing_other_modes() {
+        for key in [
+            Key::Character("h".into()),
+            Key::Character("j".into()),
+            Key::Character("k".into()),
+            Key::Character("l".into()),
+            Key::Named(NamedKey::ArrowLeft),
+            Key::Named(NamedKey::ArrowDown),
+            Key::Named(NamedKey::ArrowUp),
+            Key::Named(NamedKey::ArrowRight),
+        ] {
+            let direction = direction_for_key(&key).unwrap();
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::SHIFT, CursorMode::Utilities),
+                Some(EditCommand::ApplyUtility(direction))
+            );
+            assert_eq!(
+                edit_command_for_key(&key, ModifiersState::empty(), CursorMode::Utilities),
+                Some(EditCommand::Move(direction))
+            );
+        }
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::SHIFT,
+                CursorMode::MoveDraw,
+            ),
+            Some(EditCommand::Draw(Direction::Right))
+        );
     }
 
     #[test]
