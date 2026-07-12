@@ -340,6 +340,7 @@ fn try_main() -> Result<ExitCode> {
                                         editor.state.toolbar.action_at(row, column, width)
                                     });
                             if let Some(action) = toolbar_action {
+                                editor.note_keypress(Instant::now());
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 editor.state.apply_toolbar_action(action);

@@ -208,6 +208,35 @@ mod tests {
     }
 
     #[test]
+    fn undo_and_redo_snapshots_do_not_change_durable_menu_selections() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        });
+        let menu_selections = state.toolbar.durable_selections();
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        state.insert("x");
+        let after = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before, &after));
+
+        let undone = history.undo(after).unwrap();
+        state.restore_edit_snapshot(undone.edit.clone());
+        assert_eq!(state.toolbar.durable_selections(), menu_selections);
+        let redone = history.redo(undone).unwrap();
+        state.restore_edit_snapshot(redone.edit);
+        assert_eq!(state.toolbar.durable_selections(), menu_selections);
+    }
+
+    #[test]
     fn literal_selection_clear_is_one_transaction_and_blank_clear_retains_redo() {
         let mut state = EditorState::new(&AppConfig::default().theme, "test");
         state.insert("x ");

@@ -9,6 +9,9 @@ use crate::{
     model::Direction,
 };
 
+mod selections;
+pub use selections::DurableMenuSelections;
+
 pub const TOOLBAR_ROW_GAP: usize = 0;
 
 const MAIN_LABEL_ROW: usize = 0;

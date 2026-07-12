@@ -426,6 +426,7 @@ mod tests {
         fs::write(&path, "new\n😀").unwrap();
         let mut state = state_with_selection();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        let menu_selections = state.toolbar.durable_selections();
         state.toggle_shape_preview();
         let mut platform = MockPlatform {
             open: Some(path.clone()),
@@ -441,6 +442,7 @@ mod tests {
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(state.cursor_mode, CursorMode::Shapes);
         assert_eq!(state.selected_text(), "n");
+        assert_eq!(state.toolbar.durable_selections(), menu_selections);
         let _ = fs::remove_file(path);
     }
 
@@ -455,6 +457,8 @@ mod tests {
         target.grid.lines = lines_from_text("unrelated outside content");
         target.move_to(Coord { line: 0, column: 5 });
         target.extend_selection(crate::model::Direction::Right);
+        target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        let menu_selections = target.toolbar.durable_selections();
         let mut platform = MockPlatform {
             open: Some(path.clone()),
             ..MockPlatform::default()
@@ -468,12 +472,19 @@ mod tests {
         assert_eq!(target.grid.lines[0][0].contents, "a");
         assert_eq!(target.grid.lines[0][0].face.fg, "#0000ff");
         assert_eq!(target.grid.lines.len(), 2);
+        assert_eq!(target.toolbar.durable_selections(), menu_selections);
         let _ = fs::remove_file(path);
     }
 
     #[test]
     fn clear_replaces_the_canvas_without_using_the_platform() {
         let mut state = state_with_selection();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        });
+        let menu_selections = state.toolbar.durable_selections();
         let mut platform = MockPlatform {
             fail_clipboard_read: true,
             fail_clipboard_write: true,
@@ -490,5 +501,6 @@ mod tests {
         assert!(platform.save.is_none());
         assert!(platform.open.is_none());
         assert!(platform.clipboard.is_none());
+        assert_eq!(state.toolbar.durable_selections(), menu_selections);
     }
 }

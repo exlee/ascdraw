@@ -40,6 +40,7 @@ pub struct EditorWindow {
     transparent_menubar: bool,
     document_path: PathBuf,
     document_dirty: bool,
+    menu_selections_dirty: bool,
     last_keypress: Instant,
 }
 
@@ -135,6 +136,8 @@ impl EditorWindow {
         previous_viewport: ViewportOffset,
         document_changed: bool,
     ) -> bool {
+        let menu_selections_changed =
+            durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
         let prepend = self.state.take_pending_prepend();
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
@@ -160,6 +163,7 @@ impl EditorWindow {
             && prepend == (0, 0)
             && self.state.grid.cursor_pos == previous_state.grid.cursor_pos
         {
+            self.menu_selections_dirty |= menu_selections_changed;
             return false;
         }
 
@@ -173,6 +177,7 @@ impl EditorWindow {
             viewport_cells,
             &content,
         ) {
+            self.menu_selections_dirty |= menu_selections_changed;
             if origin != current {
                 self.viewport.set_origin(origin, cell_size);
             }
@@ -275,7 +280,11 @@ impl EditorWindow {
     }
 
     pub fn autosave_if_idle(&mut self, now: Instant) -> Result<bool> {
-        if !should_autosave(self.document_dirty, self.last_keypress, now) {
+        if !should_autosave(
+            self.document_dirty || self.menu_selections_dirty,
+            self.last_keypress,
+            now,
+        ) {
             return Ok(false);
         }
         self.save_document()?;
@@ -285,11 +294,20 @@ impl EditorWindow {
     pub fn save_document(&mut self) -> Result<bool> {
         save_document_if_dirty(
             &mut self.document_dirty,
+            &mut self.menu_selections_dirty,
             &self.document_path,
             &self.state.grid.lines,
+            &self.state.toolbar.durable_selections(),
             document::save,
         )
     }
+}
+
+fn durable_menu_selections_changed(
+    previous: &crate::toolbar::ToolbarState,
+    current: &crate::toolbar::ToolbarState,
+) -> bool {
+    previous.durable_selections() != current.durable_selections()
 }
 
 fn pan_viewport(
@@ -374,16 +392,19 @@ fn content_bounds(content: &[Coord]) -> Option<(Coord, Coord)> {
 }
 
 fn save_document_if_dirty(
-    dirty: &mut bool,
+    document_dirty: &mut bool,
+    menu_selections_dirty: &mut bool,
     path: &Path,
     lines: &[Vec<Atom>],
-    save: impl FnOnce(&Path, &[Vec<Atom>]) -> Result<()>,
+    menu_selections: &crate::toolbar::DurableMenuSelections,
+    save: impl FnOnce(&Path, &[Vec<Atom>], &crate::toolbar::DurableMenuSelections) -> Result<()>,
 ) -> Result<bool> {
-    if !*dirty {
+    if !*document_dirty && !*menu_selections_dirty {
         return Ok(false);
     }
-    save(path, lines)?;
-    *dirty = false;
+    save(path, lines, menu_selections)?;
+    *document_dirty = false;
+    *menu_selections_dirty = false;
     Ok(true)
 }
 
@@ -456,6 +477,9 @@ pub fn create_editor_window(
         } else {
             document.lines
         };
+        if let Some(menu_selections) = document.menu_selections {
+            state.restore_menu_selections(&menu_selections);
+        }
     }
     let mut editor = EditorWindow {
         window,
@@ -471,6 +495,7 @@ pub fn create_editor_window(
         transparent_menubar: config.transparent_menubar,
         document_path: document_path.to_path_buf(),
         document_dirty: false,
+        menu_selections_dirty: false,
         last_keypress: Instant::now(),
     };
     editor.ensure_cursor_in_viewport();
@@ -990,58 +1015,149 @@ mod tests {
     }
 
     #[test]
+    fn only_actual_durable_keyboard_or_mouse_selections_mark_menu_state_changed() {
+        let previous = crate::toolbar::ToolbarState::default();
+
+        let mut keyboard_prefix = previous.clone();
+        assert!(
+            keyboard_prefix.handle_shortcut(&Key::Character("1".into()), ModifiersState::empty(),)
+        );
+        assert!(!durable_menu_selections_changed(
+            &previous,
+            &keyboard_prefix
+        ));
+
+        let mut keyboard_selection = keyboard_prefix;
+        assert!(
+            keyboard_selection
+                .handle_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
+        );
+        assert!(durable_menu_selections_changed(
+            &previous,
+            &keyboard_selection
+        ));
+
+        let mut mouse_selection = previous.clone();
+        assert!(mouse_selection.apply_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(durable_menu_selections_changed(&previous, &mouse_selection));
+
+        let mut unchanged = previous.clone();
+        assert!(unchanged.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
+        assert!(!durable_menu_selections_changed(&previous, &unchanged));
+
+        let mut export = previous.clone();
+        assert!(export.apply_action(ToolbarAction::ToggleExportMenu));
+        assert!(!durable_menu_selections_changed(&previous, &export));
+    }
+
+    #[test]
     fn dirty_shutdown_save_writes_latest_document_without_waiting_for_idle() {
-        let mut dirty = true;
+        let mut document_dirty = true;
+        let mut menu_dirty = false;
         let path = Path::new("latest-document.toml");
         let lines = vec![vec![Atom {
             face: Face::default(),
             contents: "latest".into(),
         }]];
+        let menu = crate::toolbar::ToolbarState::default().durable_selections();
         let mut writes = 0;
 
         assert!(
-            save_document_if_dirty(&mut dirty, path, &lines, |saved_path, saved_lines| {
-                writes += 1;
-                assert_eq!(saved_path, path);
-                assert_eq!(saved_lines, lines);
-                Ok(())
-            })
+            save_document_if_dirty(
+                &mut document_dirty,
+                &mut menu_dirty,
+                path,
+                &lines,
+                &menu,
+                |saved_path, saved_lines, saved_menu| {
+                    writes += 1;
+                    assert_eq!(saved_path, path);
+                    assert_eq!(saved_lines, lines);
+                    assert_eq!(saved_menu, &menu);
+                    Ok(())
+                }
+            )
             .unwrap()
         );
 
         assert_eq!(writes, 1);
-        assert!(!dirty);
+        assert!(!document_dirty);
+        assert!(!menu_dirty);
     }
 
     #[test]
     fn clean_shutdown_save_does_not_write() {
-        let mut dirty = false;
+        let mut document_dirty = false;
+        let mut menu_dirty = false;
+        let menu = crate::toolbar::ToolbarState::default().durable_selections();
 
         assert!(
             !save_document_if_dirty(
-                &mut dirty,
+                &mut document_dirty,
+                &mut menu_dirty,
                 Path::new("clean-document.toml"),
                 &[],
-                |_, _| panic!("clean documents must not be written"),
+                &menu,
+                |_, _, _| panic!("clean documents must not be written"),
             )
             .unwrap()
         );
-        assert!(!dirty);
+        assert!(!document_dirty);
+        assert!(!menu_dirty);
     }
 
     #[test]
     fn failed_shutdown_save_keeps_document_dirty() {
-        let mut dirty = true;
+        let mut document_dirty = true;
+        let mut menu_dirty = true;
+        let menu = crate::toolbar::ToolbarState::default().durable_selections();
         let error = save_document_if_dirty(
-            &mut dirty,
+            &mut document_dirty,
+            &mut menu_dirty,
             Path::new("failed-document.toml"),
             &[],
-            |_, _| Err(anyhow!("disk full")),
+            &menu,
+            |_, _, _| Err(anyhow!("disk full")),
         )
         .unwrap_err();
 
         assert_eq!(error.to_string(), "disk full");
-        assert!(dirty);
+        assert!(document_dirty);
+        assert!(menu_dirty);
+    }
+
+    #[test]
+    fn menu_only_shutdown_save_writes_without_marking_the_canvas_dirty() {
+        let mut document_dirty = false;
+        let mut menu_dirty = true;
+        let mut toolbar = crate::toolbar::ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        });
+        let menu = toolbar.durable_selections();
+        let mut writes = 0;
+
+        assert!(
+            save_document_if_dirty(
+                &mut document_dirty,
+                &mut menu_dirty,
+                Path::new("menu-only.toml"),
+                &[],
+                &menu,
+                |_, saved_lines, saved_menu| {
+                    writes += 1;
+                    assert!(saved_lines.is_empty());
+                    assert_eq!(saved_menu, &menu);
+                    Ok(())
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(writes, 1);
+        assert!(!document_dirty);
+        assert!(!menu_dirty);
     }
 
     #[test]

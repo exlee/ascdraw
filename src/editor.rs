@@ -12,7 +12,9 @@ use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_text,
 };
-use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip};
+use crate::toolbar::{
+    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip,
+};
 
 mod utility;
 
@@ -134,6 +136,15 @@ impl EditorState {
         self.grid.default_face = theme.default.clone();
         self.grid.cursor_face = theme.cursor_block.clone();
         self.theme = theme.clone();
+    }
+
+    pub fn restore_menu_selections(&mut self, selections: &DurableMenuSelections) {
+        self.end_stroke();
+        self.shape_preview = None;
+        self.single_replace_pending = false;
+        self.collapse_selection();
+        self.toolbar.restore_durable_selections(selections);
+        self.sync_cursor_mode_with_toolbar();
     }
 
     pub fn tooltip(&self) -> Tooltip {
@@ -1268,6 +1279,39 @@ mod tests {
         assert_eq!(state.theme.selection.fg, "#123456");
         assert!(state.shape_preview.is_none());
         assert_eq!(state.pending_prepend, (0, 0));
+    }
+
+    #[test]
+    fn restoring_durable_menu_state_syncs_mode_and_clears_transient_editor_state() {
+        let mut selected = ToolbarState::default();
+        selected.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        selected.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        });
+        let selections = selected.durable_selections();
+
+        let mut state = state();
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 2, column: 2 });
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord::default(),
+            end: Coord { line: 1, column: 1 },
+        });
+        state.cursor_mode = CursorMode::Replace;
+        state.single_replace_pending = true;
+        state.restore_menu_selections(&selections);
+
+        assert_eq!(state.toolbar.durable_selections(), selections);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Utilities);
+        assert_eq!(state.toolbar.utility_kind(), UtilityKind::View);
+        assert_eq!(state.cursor_mode, CursorMode::Utilities);
+        assert!(state.selection.is_collapsed());
+        assert!(state.shape_preview.is_none());
+        assert!(!state.single_replace_pending);
+        assert!(!state.toolbar.export_menu_open());
+        assert_eq!(state.toolbar.pending_shortcut(), None);
     }
 
     #[test]

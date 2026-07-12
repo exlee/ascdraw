@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Atom;
+use crate::toolbar::DurableMenuSelections;
 
 const DOCUMENT_VERSION: u32 = 1;
 
@@ -14,13 +15,20 @@ const DOCUMENT_VERSION: u32 = 1;
 pub struct Document {
     version: u32,
     pub lines: Vec<Vec<Atom>>,
+    #[serde(
+        default,
+        rename = "menu-selections",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub menu_selections: Option<DurableMenuSelections>,
 }
 
 impl Document {
-    pub fn new(lines: Vec<Vec<Atom>>) -> Self {
+    pub fn new(lines: Vec<Vec<Atom>>, menu_selections: Option<DurableMenuSelections>) -> Self {
         Self {
             version: DOCUMENT_VERSION,
             lines,
+            menu_selections,
         }
     }
 }
@@ -44,13 +52,20 @@ pub fn load(path: &Path) -> Result<Option<Document>> {
     Ok(Some(document))
 }
 
-pub fn save(path: &Path, lines: &[Vec<Atom>]) -> Result<()> {
+pub fn save(
+    path: &Path,
+    lines: &[Vec<Atom>],
+    menu_selections: &DurableMenuSelections,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let contents = toml::to_string_pretty(&Document::new(lines.to_vec()))
-        .context("failed to serialize document")?;
+    let contents = toml::to_string_pretty(&Document::new(
+        lines.to_vec(),
+        Some(menu_selections.clone()),
+    ))
+    .context("failed to serialize document")?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
@@ -107,10 +122,47 @@ mod tests {
             contents: "┌".to_string(),
         }]];
 
-        save(&path, &lines).unwrap();
+        let menu_selections = crate::toolbar::ToolbarState::default().durable_selections();
+        save(&path, &lines, &menu_selections).unwrap();
         let loaded = load(&path).unwrap().unwrap();
         let _ = fs::remove_file(path);
 
         assert_eq!(loaded.lines, lines);
+        assert_eq!(loaded.menu_selections, Some(menu_selections));
+    }
+
+    #[test]
+    fn version_one_document_without_menu_selections_preserves_canvas() {
+        let atom = Atom {
+            face: Face::default(),
+            contents: "x".to_owned(),
+        };
+        let serialized_atom =
+            toml::to_string(&Document::new(vec![vec![atom.clone()]], None)).unwrap();
+        assert!(!serialized_atom.contains("menu-selections"));
+
+        let document: Document = toml::from_str(&serialized_atom).unwrap();
+        assert_eq!(document.lines, vec![vec![atom]]);
+        assert_eq!(document.menu_selections, None);
+    }
+
+    #[test]
+    fn serialized_menu_payload_contains_no_transient_toolbar_state() {
+        let selections = crate::toolbar::ToolbarState::default().durable_selections();
+        let contents =
+            toml::to_string_pretty(&Document::new(vec![Vec::new()], Some(selections))).unwrap();
+
+        assert!(contents.contains("[menu-selections]"));
+        for transient in [
+            "shortcut-prefix",
+            "export-open",
+            "active-export-category",
+            "pending-export-action",
+            "cursor-mode",
+            "\nselection =",
+            "tooltip",
+        ] {
+            assert!(!contents.contains(transient));
+        }
     }
 }
