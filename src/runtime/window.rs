@@ -206,6 +206,27 @@ impl EditorWindow {
         false
     }
 
+    pub fn finish_project_load(
+        &mut self,
+        previous_state: EditorState,
+        previous_viewport: ViewportOffset,
+    ) -> bool {
+        self.menu_selections_dirty |=
+            durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
+        self.ensure_cursor_in_viewport();
+        let previous = HistorySnapshot {
+            edit: previous_state.edit_snapshot(),
+            viewport: previous_viewport,
+        };
+        let current = self.history_snapshot();
+        let changed = self.history.record_project_load(previous, &current);
+        if changed {
+            self.mark_document_dirty();
+        }
+        self.request_redraw();
+        changed
+    }
+
     pub fn ensure_cursor_in_viewport(&mut self) {
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
@@ -981,7 +1002,13 @@ mod tests {
             Some(ExportAction::Clear)
         );
         assert_eq!(
-            export::perform(ExportAction::Clear, state, &mut platform).unwrap(),
+            export::perform(
+                ExportAction::Clear,
+                state,
+                &mut ViewportOffset::default(),
+                &mut platform,
+            )
+            .unwrap(),
             ExportOutcome::CanvasCleared
         );
         assert_eq!(state.grid.cursor_pos, cursor);

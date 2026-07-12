@@ -415,12 +415,20 @@ fn perform_pending_export(editor: &mut EditorWindow) {
     let previous_state = editor.state.clone();
     let previous_viewport = editor.viewport;
     let mut platform = NativeExportPlatform;
-    match export::perform(action, &mut editor.state, &mut platform) {
+    match export::perform(
+        action,
+        &mut editor.state,
+        &mut editor.viewport,
+        &mut platform,
+    ) {
         Ok(ExportOutcome::DocumentLoaded) => {
             editor.viewport = layout::ViewportOffset::default();
             if editor.finish_state_change(previous_state, previous_viewport, true) {
                 editor.mark_document_dirty();
             }
+        }
+        Ok(ExportOutcome::ProjectLoaded) => {
+            editor.finish_project_load(previous_state, previous_viewport);
         }
         Ok(ExportOutcome::CanvasCleared) => {
             if editor.finish_state_change(previous_state, previous_viewport, true) {

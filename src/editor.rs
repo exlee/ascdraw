@@ -850,6 +850,26 @@ impl EditorState {
         self.sync_cursor_mode_with_toolbar();
     }
 
+    pub fn restore_project(
+        &mut self,
+        lines: Vec<Vec<Atom>>,
+        cursor: Coord,
+        selection: CanvasSelection,
+        menu_selections: &DurableMenuSelections,
+    ) {
+        self.replace_canvas(lines);
+        self.restore_menu_selections(menu_selections);
+        self.grid.cursor_pos = cursor;
+        self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
+        self.selection = selection;
+        self.active_stroke = None;
+        self.line_markers.clear();
+        self.shape_preview = None;
+        self.single_replace_pending = false;
+        self.pending_prepend = (0, 0);
+        self.sync_cursor_mode_with_toolbar();
+    }
+
     pub fn clear_canvas(&mut self) {
         let cursor = self.grid.cursor_pos;
         let already_blank = self.content_cells().is_empty()

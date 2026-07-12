@@ -27,6 +27,19 @@ impl EditHistory {
         true
     }
 
+    pub fn record_project_load(
+        &mut self,
+        previous: HistorySnapshot,
+        current: &HistorySnapshot,
+    ) -> bool {
+        if previous == *current {
+            return false;
+        }
+        push_bounded(&mut self.undo, previous);
+        self.redo.clear();
+        true
+    }
+
     pub fn undo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
         let previous = self.undo.pop_back()?;
         push_bounded(&mut self.redo, current);
@@ -100,6 +113,19 @@ mod tests {
 
         assert!(!history.record_change(previous, &current));
         assert_eq!(history.lengths(), (0, 0));
+    }
+
+    #[test]
+    fn project_load_records_cursor_selection_and_viewport_as_one_atomic_change() {
+        let before = snapshot("same", ViewportOffset::default());
+        let mut loaded = before.clone();
+        loaded.viewport = ViewportOffset { x: -9, y: 14 };
+        loaded.edit.set_cursor_for_test(0, 2);
+        let mut history = EditHistory::default();
+
+        assert!(history.record_project_load(before.clone(), &loaded));
+        assert_eq!(history.undo(loaded.clone()), Some(before.clone()));
+        assert_eq!(history.redo(before), Some(loaded));
     }
 
     #[test]

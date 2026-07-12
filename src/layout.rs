@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::model::Coord;
 use crate::render::CellMetrics;
 use crate::toolbar::ToolbarState;
@@ -19,7 +21,9 @@ pub struct LayoutMetrics {
     pub tooltip_visible: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Renderer-pixel translation applied to the canvas.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub struct ViewportOffset {
     pub x: i64,
     pub y: i64,

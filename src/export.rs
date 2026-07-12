@@ -7,10 +7,15 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::editor::EditorState;
+use crate::layout::ViewportOffset;
 use crate::model::{Atom, Face};
-use crate::selection::selected_atoms;
+use crate::selection::CanvasSelection;
+use crate::toolbar::DurableMenuSelections;
 
-const SELECTION_DOCUMENT_VERSION: u32 = 1;
+const PROJECT_FORMAT: &str = "ascdraw";
+const PROJECT_VERSION: u32 = 1;
+const LEGACY_SELECTION_VERSION: u32 = 1;
+const MAX_PROJECT_COORDINATE: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportAction {
@@ -34,6 +39,7 @@ impl ExportAction {
 pub enum ExportOutcome {
     Unchanged,
     DocumentLoaded,
+    ProjectLoaded,
     CanvasCleared,
 }
 
@@ -71,7 +77,7 @@ impl ExportPlatform for NativeExportPlatform {
         let (name, extension) = file_kind_details(kind);
         rfd::FileDialog::new()
             .add_filter(name, &[extension])
-            .set_file_name(format!("selection.{extension}"))
+            .set_file_name(default_file_name(kind))
             .save_file()
     }
 
@@ -102,9 +108,17 @@ fn file_kind_details(kind: FileKind) -> (&'static str, &'static str) {
     }
 }
 
+fn default_file_name(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Txt => "selection.txt",
+        FileKind::Json => "ascdraw.json",
+    }
+}
+
 pub fn perform(
     action: ExportAction,
     state: &mut EditorState,
+    viewport: &mut ViewportOffset,
     platform: &mut impl ExportPlatform,
 ) -> Result<ExportOutcome> {
     match action {
@@ -124,7 +138,7 @@ pub fn perform(
             let Some(path) = platform.choose_save_path(FileKind::Json) else {
                 return Ok(ExportOutcome::Unchanged);
             };
-            save_selection_json(&path, state)?;
+            save_project_json(&path, state, *viewport)?;
             Ok(ExportOutcome::Unchanged)
         }
         ExportAction::LoadTxt => {
@@ -142,7 +156,21 @@ pub fn perform(
             };
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            state.replace_canvas(lines_from_json(&contents)?);
+            match project_from_json(&contents)? {
+                LoadedJson::Project(project) => {
+                    let mut staged = state.clone();
+                    staged.restore_project(
+                        project.lines,
+                        project.cursor,
+                        project.selection,
+                        &project.menu_selections,
+                    );
+                    *state = staged;
+                    *viewport = project.viewport;
+                    return Ok(ExportOutcome::ProjectLoaded);
+                }
+                LoadedJson::Legacy(lines) => state.replace_canvas(lines),
+            }
             Ok(ExportOutcome::DocumentLoaded)
         }
         ExportAction::Clear => {
@@ -154,7 +182,7 @@ pub fn perform(
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-struct SelectionDocument {
+struct LegacySelectionDocument {
     version: u32,
     width: usize,
     height: usize,
@@ -166,42 +194,173 @@ struct NativeJsonDocument {
     lines: Vec<Vec<Atom>>,
 }
 
-fn selection_document(state: &EditorState) -> SelectionDocument {
-    let bounds = state.selection_bounds();
-    SelectionDocument {
-        version: SELECTION_DOCUMENT_VERSION,
-        width: bounds.width(),
-        height: bounds.height(),
-        lines: selected_atoms(&state.grid.lines, bounds),
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+struct ProjectDocument {
+    format: String,
+    version: u32,
+    canvas: ProjectCanvas,
+    cursor: crate::model::Coord,
+    selection: CanvasSelection,
+    /// Signed renderer-pixel translation, round-tripped exactly when valid.
+    viewport: ViewportOffset,
+    menu_selections: DurableMenuSelections,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+struct ProjectCanvas {
+    rows: Vec<String>,
+}
+
+#[derive(Debug)]
+struct RestoredProject {
+    lines: Vec<Vec<Atom>>,
+    cursor: crate::model::Coord,
+    selection: CanvasSelection,
+    viewport: ViewportOffset,
+    menu_selections: DurableMenuSelections,
+}
+
+#[derive(Debug)]
+enum LoadedJson {
+    Project(Box<RestoredProject>),
+    Legacy(Vec<Vec<Atom>>),
+}
+
+fn project_document(state: &EditorState, viewport: ViewportOffset) -> ProjectDocument {
+    ProjectDocument {
+        format: PROJECT_FORMAT.to_owned(),
+        version: PROJECT_VERSION,
+        canvas: ProjectCanvas {
+            rows: state
+                .grid
+                .lines
+                .iter()
+                .map(|line| line.iter().map(|atom| atom.contents.as_str()).collect())
+                .collect(),
+        },
+        cursor: state.grid.cursor_pos,
+        selection: state.selection,
+        viewport,
+        menu_selections: state.toolbar.durable_selections(),
     }
 }
 
-fn save_selection_json(path: &Path, state: &EditorState) -> Result<()> {
-    let contents = serde_json::to_string_pretty(&selection_document(state))
-        .context("failed to serialize selected canvas rectangle")?;
+fn save_project_json(path: &Path, state: &EditorState, viewport: ViewportOffset) -> Result<()> {
+    let contents = serde_json::to_string_pretty(&project_document(state, viewport))
+        .context("failed to serialize ascdraw project")?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
-fn lines_from_json(contents: &str) -> Result<Vec<Vec<Atom>>> {
-    if let Ok(document) = serde_json::from_str::<SelectionDocument>(contents) {
-        if document.version != SELECTION_DOCUMENT_VERSION {
-            bail!("unsupported selection JSON version {}", document.version);
+fn project_from_json(contents: &str) -> Result<LoadedJson> {
+    let value: serde_json::Value =
+        serde_json::from_str(contents).context("failed to parse canvas JSON")?;
+    if value.get("format").is_some() {
+        let document: ProjectDocument =
+            serde_json::from_value(value).context("failed to parse ascdraw project JSON")?;
+        return restore_project_document(document)
+            .map(Box::new)
+            .map(LoadedJson::Project);
+    }
+    if value.get("width").is_some() || value.get("height").is_some() {
+        let document: LegacySelectionDocument =
+            serde_json::from_value(value).context("failed to parse legacy selection JSON")?;
+        if document.version != LEGACY_SELECTION_VERSION {
+            bail!(
+                "unsupported legacy selection JSON version {}",
+                document.version
+            );
         }
         if document.height != document.lines.len() {
             bail!(
-                "selection JSON height {} does not match {} rows",
+                "legacy selection JSON height {} does not match {} rows",
                 document.height,
                 document.lines.len()
             );
         }
-        return normalize_lines(document.lines, document.width);
+        return normalize_legacy_lines(document.lines, document.width).map(LoadedJson::Legacy);
     }
     let document: NativeJsonDocument =
-        serde_json::from_str(contents).context("failed to parse canvas JSON")?;
-    Ok(nonempty_lines(document.lines))
+        serde_json::from_value(value).context("failed to parse legacy canvas JSON")?;
+    Ok(LoadedJson::Legacy(nonempty_lines(default_faced_lines(
+        document.lines,
+    ))))
 }
 
-fn normalize_lines(lines: Vec<Vec<Atom>>, width: usize) -> Result<Vec<Vec<Atom>>> {
+fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject> {
+    if document.format != PROJECT_FORMAT {
+        bail!("unsupported project format {:?}", document.format);
+    }
+    if document.version != PROJECT_VERSION {
+        bail!("unsupported ascdraw project version {}", document.version);
+    }
+    validate_coordinate("cursor", document.cursor)?;
+    validate_coordinate("selection anchor", document.selection.anchor())?;
+    validate_coordinate("selection active", document.selection.active())?;
+    let mut lines: Vec<Vec<Atom>> = document
+        .canvas
+        .rows
+        .iter()
+        .map(|row| row_atoms(row))
+        .collect();
+    lines = nonempty_lines(lines);
+    for (name, coord) in [
+        ("cursor", document.cursor),
+        ("selection anchor", document.selection.anchor()),
+        ("selection active", document.selection.active()),
+    ] {
+        pad_to_coordinate(&mut lines, name, coord)?;
+    }
+    Ok(RestoredProject {
+        lines,
+        cursor: document.cursor,
+        selection: document.selection,
+        viewport: document.viewport,
+        menu_selections: document.menu_selections,
+    })
+}
+
+fn validate_coordinate(name: &str, coord: crate::model::Coord) -> Result<()> {
+    if coord.line > MAX_PROJECT_COORDINATE || coord.column > MAX_PROJECT_COORDINATE {
+        bail!(
+            "{name} ({}, {}) exceeds the safe project coordinate limit {MAX_PROJECT_COORDINATE}",
+            coord.line,
+            coord.column
+        );
+    }
+    Ok(())
+}
+
+fn pad_to_coordinate(
+    lines: &mut Vec<Vec<Atom>>,
+    name: &str,
+    coord: crate::model::Coord,
+) -> Result<()> {
+    while lines.len() <= coord.line {
+        lines.push(Vec::new());
+    }
+    let line = &mut lines[coord.line];
+    let mut column = 0;
+    for atom in line.iter() {
+        let width = atom_display_width(atom);
+        if column < coord.column && coord.column < column.saturating_add(width) {
+            bail!(
+                "{name} column {} falls inside a wide grapheme on row {}",
+                coord.column,
+                coord.line
+            );
+        }
+        column = column.saturating_add(width);
+    }
+    if column < coord.column {
+        line.extend((column..coord.column).map(|_| blank_atom()));
+    }
+    Ok(())
+}
+
+fn normalize_legacy_lines(lines: Vec<Vec<Atom>>, width: usize) -> Result<Vec<Vec<Atom>>> {
+    let lines = default_faced_lines(lines);
     let mut normalized = Vec::with_capacity(lines.len());
     for (row, line) in lines.into_iter().enumerate() {
         let actual_width = display_width(&line);
@@ -213,6 +372,26 @@ fn normalize_lines(lines: Vec<Vec<Atom>>, width: usize) -> Result<Vec<Vec<Atom>>
         normalized.push(line);
     }
     Ok(nonempty_lines(normalized))
+}
+
+fn default_faced_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .flat_map(|atom| row_atoms(&atom.contents))
+                .collect()
+        })
+        .collect()
+}
+
+fn row_atoms(row: &str) -> Vec<Atom> {
+    UnicodeSegmentation::graphemes(row, true)
+        .map(|contents| Atom {
+            face: Face::default(),
+            contents: contents.to_owned(),
+        })
+        .collect()
 }
 
 pub fn lines_from_text(text: &str) -> Vec<Vec<Atom>> {
@@ -249,12 +428,11 @@ fn nonempty_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
 }
 
 fn display_width(line: &[Atom]) -> usize {
-    line.iter()
-        .map(|atom| {
-            UnicodeWidthStr::width(atom.contents.as_str())
-                .max(usize::from(!atom.contents.is_empty()))
-        })
-        .sum()
+    line.iter().map(atom_display_width).sum()
+}
+
+fn atom_display_width(atom: &Atom) -> usize {
+    UnicodeWidthStr::width(atom.contents.as_str()).max(usize::from(!atom.contents.is_empty()))
 }
 
 fn blank_atom() -> Atom {
@@ -321,12 +499,20 @@ mod tests {
         ))
     }
 
+    fn perform_action(
+        action: ExportAction,
+        state: &mut EditorState,
+        platform: &mut MockPlatform,
+    ) -> Result<ExportOutcome> {
+        perform(action, state, &mut ViewportOffset::default(), platform)
+    }
+
     #[test]
     fn clipboard_receives_exact_selected_text_only() {
         let mut state = state_with_selection();
         let mut platform = MockPlatform::default();
         assert_eq!(
-            perform(ExportAction::ClipboardTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::ClipboardTxt, &mut state, &mut platform).unwrap(),
             ExportOutcome::Unchanged
         );
         assert_eq!(platform.clipboard.as_deref(), Some("ab\ncd"));
@@ -377,7 +563,7 @@ mod tests {
         let before = state.grid.lines.clone();
         let mut platform = MockPlatform::default();
         assert_eq!(
-            perform(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
             ExportOutcome::Unchanged
         );
         assert_eq!(state.grid.lines, before);
@@ -392,7 +578,7 @@ mod tests {
             ..MockPlatform::default()
         };
         assert_eq!(
-            perform(ExportAction::SaveTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::SaveTxt, &mut state, &mut platform).unwrap(),
             ExportOutcome::Unchanged
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "ab\ncd");
@@ -400,15 +586,22 @@ mod tests {
     }
 
     #[test]
-    fn selection_json_round_trip_preserves_dimensions_faces_and_origin() {
+    fn project_json_is_human_readable_and_contains_no_cell_styles() {
         let mut state = state_with_selection();
-        state.grid.lines[1][2].face.fg = "#ff0000".to_string();
-        let document = selection_document(&state);
-        assert_eq!((document.width, document.height), (2, 2));
-        assert_eq!(document.lines[0][0].face.fg, "#ff0000");
-        let json = serde_json::to_string(&document).unwrap();
-        let loaded = lines_from_json(&json).unwrap();
-        assert_eq!(loaded, document.lines);
+        state.grid.lines[1][2].face = state.theme.selection.clone();
+        let json = serde_json::to_string_pretty(&project_document(
+            &state,
+            ViewportOffset { x: -12, y: 34 },
+        ))
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["format"], PROJECT_FORMAT);
+        assert_eq!(value["version"], PROJECT_VERSION);
+        assert_eq!(value["canvas"]["rows"][1], "  ab   ");
+        for forbidden in ["face", "fg", "bg", "underline", "attributes", "contents"] {
+            assert!(!json.contains(&format!("\"{forbidden}\"")));
+        }
     }
 
     #[test]
@@ -434,7 +627,7 @@ mod tests {
         };
 
         assert_eq!(
-            perform(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
             ExportOutcome::DocumentLoaded
         );
         assert_eq!(state.grid.cursor_pos, Coord::default());
@@ -447,33 +640,198 @@ mod tests {
     }
 
     #[test]
-    fn json_load_accepts_saved_selection_and_resets_to_normalized_origin() {
+    fn json_project_round_trip_restores_full_canvas_state_with_default_faces() {
         let path = temp_path("json");
         let mut source = state_with_selection();
-        source.grid.lines[1][2].face.fg = "#0000ff".to_string();
-        save_selection_json(&path, &source).unwrap();
+        source.grid.lines = vec![row_atoms("😀x  "), Vec::new(), row_atoms(" z")];
+        source.grid.lines[0][0].face = source.theme.selection.clone();
+        source.move_to(Coord { line: 2, column: 1 });
+        source
+            .selection
+            .select(Coord { line: 0, column: 2 }, Coord { line: 2, column: 1 });
+        source.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        source.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 7,
+        });
+        source.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        source.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        });
+        let source_menu = source.toolbar.durable_selections();
+        let source_viewport = ViewportOffset { x: -12, y: 34 };
+        save_project_json(&path, &source, source_viewport).unwrap();
 
         let mut target = EditorState::new(&ThemeConfig::default(), "target");
         target.grid.lines = lines_from_text("unrelated outside content");
-        target.move_to(Coord { line: 0, column: 5 });
-        target.extend_selection(crate::model::Direction::Right);
         target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        let menu_selections = target.toolbar.durable_selections();
+        let mut target_viewport = ViewportOffset::default();
         let mut platform = MockPlatform {
             open: Some(path.clone()),
             ..MockPlatform::default()
         };
         assert_eq!(
-            perform(ExportAction::LoadJson, &mut target, &mut platform).unwrap(),
-            ExportOutcome::DocumentLoaded
+            perform(
+                ExportAction::LoadJson,
+                &mut target,
+                &mut target_viewport,
+                &mut platform,
+            )
+            .unwrap(),
+            ExportOutcome::ProjectLoaded
         );
-        assert_eq!(target.grid.cursor_pos, Coord::default());
-        assert!(target.selection.is_collapsed());
-        assert_eq!(target.grid.lines[0][0].contents, "a");
-        assert_eq!(target.grid.lines[0][0].face.fg, "#0000ff");
-        assert_eq!(target.grid.lines.len(), 2);
-        assert_eq!(target.toolbar.durable_selections(), menu_selections);
+        assert_eq!(target.grid.cursor_pos, Coord { line: 2, column: 1 });
+        assert_eq!(target.selection.anchor(), Coord { line: 0, column: 2 });
+        assert_eq!(target.selection.active(), Coord { line: 2, column: 1 });
+        assert_eq!(target_viewport, source_viewport);
+        assert_eq!(target.toolbar.durable_selections(), source_menu);
+        assert_eq!(target.cursor_mode, CursorMode::Utilities);
+        assert_eq!(
+            target
+                .grid
+                .lines
+                .iter()
+                .map(|line| line
+                    .iter()
+                    .map(|atom| atom.contents.as_str())
+                    .collect::<String>())
+                .collect::<Vec<_>>(),
+            ["😀x  ", "", " z"]
+        );
+        assert!(
+            target
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default())
+        );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_save_uses_project_filename_and_does_not_mutate_editor_state() {
+        assert_eq!(default_file_name(FileKind::Txt), "selection.txt");
+        assert_eq!(default_file_name(FileKind::Json), "ascdraw.json");
+
+        let path = temp_path("json");
+        let mut state = state_with_selection();
+        let viewport = ViewportOffset { x: -7, y: 19 };
+        let before = state.edit_snapshot();
+        let menus = state.toolbar.durable_selections();
+        let mut actual_viewport = viewport;
+        let mut platform = MockPlatform {
+            save: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        assert_eq!(
+            perform(
+                ExportAction::SaveJson,
+                &mut state,
+                &mut actual_viewport,
+                &mut platform,
+            )
+            .unwrap(),
+            ExportOutcome::Unchanged
+        );
+        assert_eq!(state.edit_snapshot(), before);
+        assert_eq!(state.toolbar.durable_selections(), menus);
+        assert_eq!(actual_viewport, viewport);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_project_load_is_atomic() {
+        let path = temp_path("json");
+        let source = EditorState::new(&ThemeConfig::default(), "source");
+        let mut value =
+            serde_json::to_value(project_document(&source, ViewportOffset { x: 4, y: -8 }))
+                .unwrap();
+        value["canvas"]["rows"] = serde_json::json!(["😀"]);
+        value["cursor"] = serde_json::json!({"line": 0, "column": 1});
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let mut target = state_with_selection();
+        let before = target.edit_snapshot();
+        let menus = target.toolbar.durable_selections();
+        let mut viewport = ViewportOffset { x: 22, y: -31 };
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        let error = perform(
+            ExportAction::LoadJson,
+            &mut target,
+            &mut viewport,
+            &mut platform,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("inside a wide grapheme"));
+        assert_eq!(target.edit_snapshot(), before);
+        assert_eq!(target.toolbar.durable_selections(), menus);
+        assert_eq!(viewport, ViewportOffset { x: 22, y: -31 });
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn unsupported_project_format_and_version_are_rejected() {
+        let state = EditorState::new(&ThemeConfig::default(), "source");
+        let document = project_document(&state, ViewportOffset::default());
+        let mut wrong_format = serde_json::to_value(&document).unwrap();
+        wrong_format["format"] = serde_json::json!("some-other-app");
+        assert!(
+            project_from_json(&wrong_format.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported project format")
+        );
+        let mut wrong_version = serde_json::to_value(document).unwrap();
+        wrong_version["version"] = serde_json::json!(PROJECT_VERSION + 1);
+        assert!(
+            project_from_json(&wrong_version.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported ascdraw project version")
+        );
+    }
+
+    #[test]
+    fn legacy_selection_and_native_json_keep_glyphs_but_drop_faces() {
+        let configured_face = ThemeConfig::default().selection;
+        let legacy_atom = Atom {
+            face: configured_face,
+            contents: "┌".to_owned(),
+        };
+        let selection = serde_json::json!({
+            "version": LEGACY_SELECTION_VERSION,
+            "width": 3,
+            "height": 2,
+            "lines": [[legacy_atom.clone()], []]
+        });
+        let LoadedJson::Legacy(selection_lines) =
+            project_from_json(&selection.to_string()).unwrap()
+        else {
+            panic!("legacy selection must use legacy import")
+        };
+        assert_eq!(selection_lines.len(), 2);
+        assert!(selection_lines.iter().all(|line| display_width(line) == 3));
+        assert_eq!(selection_lines[0][0].contents, "┌");
+        assert!(
+            selection_lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default())
+        );
+
+        let native = serde_json::json!({"lines": [[legacy_atom], []]});
+        let LoadedJson::Legacy(native_lines) = project_from_json(&native.to_string()).unwrap()
+        else {
+            panic!("native canvas must use legacy import")
+        };
+        assert_eq!(native_lines.len(), 2);
+        assert_eq!(native_lines[0][0].contents, "┌");
+        assert_eq!(native_lines[0][0].face, Face::default());
     }
 
     #[test]
@@ -492,7 +850,7 @@ mod tests {
         };
 
         assert_eq!(
-            perform(ExportAction::Clear, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::Clear, &mut state, &mut platform).unwrap(),
             ExportOutcome::CanvasCleared
         );
         assert!(state.content_cells().is_empty());
