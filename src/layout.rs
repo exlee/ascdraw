@@ -5,6 +5,7 @@ use crate::toolbar::ToolbarState;
 pub const PADDING: usize = 20;
 pub const SCROLL_MARGIN_CELLS: i64 = 3;
 pub const TOOLTIP_GRID_GAP: usize = PADDING;
+pub const TOOLTIP_BOTTOM_PAD: usize = 15;
 const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -313,7 +314,7 @@ fn vertical_geometry(
     grid_cell_height: usize,
     tooltip_cell_height: usize,
 ) -> (usize, usize, usize, bool) {
-    let tooltip_top = height.saturating_sub(tooltip_cell_height);
+    let tooltip_top = height.saturating_sub(tooltip_cell_height) - TOOLTIP_BOTTOM_PAD;
     let tooltip_visible = tooltip_cell_height > 0
         && height >= tooltip_cell_height
         && tooltip_top >= grid_top.saturating_add(TOOLTIP_GRID_GAP);

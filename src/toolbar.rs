@@ -89,7 +89,7 @@ pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
     if tooltip == Tooltip::None || width == 0 {
         return Vec::new();
     }
-    let (contents, _) = clipped_to_width(tooltip.text(), width);
+    let (contents, _) = clipped_to_width(tooltip.text().as_str(), width);
     vec![ToolbarSpan {
         contents,
         selected: false,
@@ -245,40 +245,46 @@ pub enum Tooltip {
     Text,
     Replace,
     Export,
+    Selection,
 }
 
 impl Tooltip {
-    pub fn text(self) -> &'static str {
-        match self {
+    pub fn text(self) -> String {
+        const MISC_TIP: [&str; 3] = [
+            "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
+            "Ctrl-hjkl/arrows resize selection",
+            "Alt-hjkl/arrows/erase",
+        ];
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as usize;
+
+        let selector = (timestamp % 30) / 10;
+        let misc = MISC_TIP[selector];
+
+        let primary = match self {
             Self::None => "",
             Self::Line => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Shift-direction draws; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Space/Backspace clears; r then character replaces"
+                "Shift-direction draws"
             }
-            Self::Stamp => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
-            }
-            Self::Shapes => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
-            }
-            Self::UtilitiesSelect => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase; Escape collapses; Backspace clears; r then character replaces"
-            }
-            Self::UtilitiesPush => {
-                "Push: Shift-hjkl/arrows inserts a blank row or column; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase"
-            }
+            Self::Stamp => "",
+            Self::Shapes => "",
+            Self::UtilitiesSelect => "",
+            Self::UtilitiesPush => "Push: Shift-hjkl/arrows inserts a blank row or column",
             Self::UtilitiesPull => {
-                "Pull: Shift-hjkl/arrows removes eligible blanks and pulls content; Ctrl-hjkl/arrows resize selection; Alt-hjkl/arrows erase"
+                "Pull: Shift-hjkl/arrows removes eligible blanks and pulls content"
             }
-            Self::Text => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Ret> exits text mode; arrows move freely over the canvas"
-            }
-            Self::Replace => {
-                "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo; <Shift-Ret> exits replace mode; arrows move freely over the canvas"
-            }
+            Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
+            Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
                 "TXT/JSON export selection only; PNG canvas-only screenshot is deferred"
             }
-        }
+            Self::Selection => "Esc collapse; Space/Backspace clears, r then KEY replaces",
+        };
+        let secondary = if primary.is_empty() { "" } else { "; " };
+
+        format!("{primary}{secondary}{misc}")
     }
 }
 

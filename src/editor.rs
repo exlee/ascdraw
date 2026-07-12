@@ -137,6 +137,9 @@ impl EditorState {
         if self.toolbar.export_menu_open() {
             return Tooltip::Export;
         }
+        if !self.selection.is_collapsed() {
+            return Tooltip::Selection;
+        }
         match self.cursor_mode {
             CursorMode::Text => Tooltip::Text,
             CursorMode::Replace => Tooltip::Replace,
