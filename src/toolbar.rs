@@ -9,6 +9,7 @@ use crate::{
     model::Direction,
 };
 
+mod menu_layout;
 mod selections;
 pub use selections::DurableMenuSelections;
 
@@ -585,10 +586,10 @@ impl ToolbarState {
             return 2;
         }
         self.layout().map_or(2, |layout| {
-            layout
+            1 + layout
                 .options
                 .iter()
-                .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
+                .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE))
                 .max()
                 .unwrap_or(0)
         })
@@ -751,93 +752,7 @@ impl ToolbarState {
     }
 
     fn menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let layout = self
-            .layout()
-            .expect("hierarchical menu rendering excludes Utilities");
-        let relative_row = row - MENU_FIRST_ROW;
-        let page = relative_row / 2;
-        let label_row = relative_row.is_multiple_of(2);
-        let mut spans = Vec::new();
-        for category in 0..layout.labels.len() {
-            let options = layout.options[category];
-            let page_start = page * OPTIONS_PER_PAGE;
-            if category > 0 {
-                spans.push(plain_span(GAP.to_string()));
-            }
-            let prefix_width =
-                submenu_prefix_width(layout.labels[category], category, options.len());
-            let cell_width = submenu_cell_width(prefix_width, options);
-            let cell_start = spans_width(&spans);
-            if page_start >= options.len() {
-                spans.push(plain_span(" ".repeat(cell_width)));
-                continue;
-            }
-            if label_row {
-                if page == 0 {
-                    let label = format!("{}:", layout.labels[category]);
-                    spans.push(bold_prefix_span(
-                        pad_right_to_width(label.clone(), prefix_width),
-                        &label,
-                    ));
-                } else {
-                    spans.push(plain_span(" ".repeat(prefix_width)));
-                }
-            } else {
-                let path = submenu_path(category, page, options.len());
-                let highlighted_prefix = match self.pending_shortcut() {
-                    Some(PendingShortcut::Category(pending)) if pending == category => {
-                        Some(format!("{}.", category + 2))
-                    }
-                    Some(PendingShortcut::Option {
-                        category: pending_category,
-                        page: pending_page,
-                    }) if pending_category == category && pending_page == page => {
-                        Some(path.clone())
-                    }
-                    _ => None,
-                };
-                push_shortcut_path(
-                    &mut spans,
-                    &path,
-                    prefix_width,
-                    highlighted_prefix.as_deref(),
-                );
-            }
-
-            for (position, option) in options[page_start..]
-                .iter()
-                .take(OPTIONS_PER_PAGE)
-                .enumerate()
-            {
-                if position > 0 {
-                    spans.push(plain_span(" ".to_string()));
-                }
-                let option_index = page_start + position;
-                let action = ToolbarAction::SelectSubmenu {
-                    submenu: category,
-                    option: option_index,
-                };
-                spans.push(ToolbarSpan {
-                    contents: if label_row {
-                        (*option).to_string()
-                    } else {
-                        aligned_shortcut((position + 1) % 10, option)
-                    },
-                    bold_prefix: 0,
-                    selected: label_row
-                        && option_index == layout.selected[category]
-                        && layout
-                            .exclusive_submenu
-                            .is_none_or(|active| active == category),
-                    highlighted: false,
-                    tooltip: false,
-                    action: Some(action),
-                    right_aligned: false,
-                });
-            }
-            pad_spans_to_width(&mut spans, cell_start + cell_width);
-        }
-        spans
+        menu_layout::hierarchical_menu_spans(self, row)
     }
 
     fn utilities_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
@@ -1117,17 +1032,17 @@ fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> us
 }
 
 fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
-    prefix_width
-        + options
-            .chunks(OPTIONS_PER_PAGE)
-            .map(|page| {
-                page.iter()
-                    .map(|option| UnicodeWidthStr::width(*option))
-                    .sum::<usize>()
-                    + page.len().saturating_sub(1)
-            })
-            .max()
-            .unwrap_or(0)
+    let columns = submenu_option_column_widths(options);
+    prefix_width + columns.iter().sum::<usize>() + columns.len().saturating_sub(1)
+}
+
+fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
+    let mut widths = vec![0; options.len().min(OPTIONS_PER_PAGE)];
+    for (index, option) in options.iter().enumerate() {
+        widths[index % OPTIONS_PER_PAGE] =
+            widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
+    }
+    widths
 }
 
 fn aligned_shortcut(digit: usize, label: &str) -> String {
@@ -1228,6 +1143,28 @@ mod tests {
     fn path_cell_start(spans: &[ToolbarSpan], path: &str, prefix_width: usize) -> usize {
         prefix_start(spans, path)
             .saturating_sub(prefix_width.saturating_sub(UnicodeWidthStr::width(path) + 1))
+    }
+
+    fn category_cell_text(toolbar: &ToolbarState, row: usize, category: usize) -> String {
+        let layout = toolbar.layout().expect("hierarchical editor mode");
+        let start = (0..category)
+            .map(|index| {
+                submenu_cell_width(
+                    submenu_prefix_width(layout.labels[index], index, layout.options[index].len()),
+                    layout.options[index],
+                ) + UnicodeWidthStr::width(GAP)
+            })
+            .sum::<usize>();
+        let width = submenu_cell_width(
+            submenu_prefix_width(
+                layout.labels[category],
+                category,
+                layout.options[category].len(),
+            ),
+            layout.options[category],
+        );
+        let text = spans_text(&toolbar.toolbar_spans(row));
+        text.chars().skip(start).take(width).collect()
     }
 
     fn highlighted_contents(spans: &[ToolbarSpan]) -> Vec<&str> {
@@ -1405,15 +1342,15 @@ mod tests {
     fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
-        assert_eq!(toolbar.menu_row_count(), 6);
-        assert_eq!(toolbar.content_rows(), 8);
-        assert_eq!(toolbar.rows(), 10);
+        assert_eq!(toolbar.menu_row_count(), 4);
+        assert_eq!(toolbar.content_rows(), 6);
+        assert_eq!(toolbar.rows(), 8);
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        assert_eq!(toolbar.menu_row_count(), 6);
-        assert_eq!(toolbar.content_rows(), 8);
-        assert_eq!(toolbar.rows(), 10);
+        assert_eq!(toolbar.menu_row_count(), 4);
+        assert_eq!(toolbar.content_rows(), 6);
+        assert_eq!(toolbar.rows(), 8);
 
         for mode in [MainMode::Shapes, MainMode::Utilities] {
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
@@ -1456,10 +1393,10 @@ mod tests {
         }
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
 
-        assert!(row(&toolbar, 2).contains("Start:   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
-        assert!(row(&toolbar, 3).contains("2.1. 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 3).contains("4. 1 2 3"));
-        assert!(row(&toolbar, 3).contains("5. 1      2"));
+        assert!(row(&toolbar, 2).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 3).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
+        assert!(row(&toolbar, 3).contains("4. ─ ━ ═"));
+        assert!(row(&toolbar, 3).contains("5. Smooth Sharp"));
     }
 
     #[test]
@@ -1517,7 +1454,7 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         press(&mut toolbar, "2");
-        for row_index in [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 3, MENU_FIRST_ROW + 5] {
+        for row_index in [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 2, MENU_FIRST_ROW + 3] {
             let highlighted: String = toolbar
                 .toolbar_spans(row_index)
                 .iter()
@@ -1540,7 +1477,7 @@ mod tests {
             option: 26,
         };
         let box_width = 320;
-        let row_index = MENU_FIRST_ROW + 4;
+        let row_index = MENU_FIRST_ROW + 3;
         let visible = boxed_toolbar_spans(&toolbar.toolbar_spans(row_index), box_width);
         let column = span_starts(&visible)
             .into_iter()
@@ -1551,7 +1488,7 @@ mod tests {
             Some(expected)
         );
 
-        let start_columns: Vec<_> = [MENU_FIRST_ROW, MENU_FIRST_ROW + 2, MENU_FIRST_ROW + 4]
+        let start_columns: Vec<_> = [MENU_FIRST_ROW + 1, MENU_FIRST_ROW + 2, MENU_FIRST_ROW + 3]
             .into_iter()
             .map(|row_index| {
                 let spans = toolbar.toolbar_spans(row_index);
@@ -1608,16 +1545,60 @@ mod tests {
         for key in ["1", "1"] {
             press(&mut toolbar, key);
         }
-        assert!(row(&toolbar, 2).starts_with("Decorators: □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
-        assert!(row(&toolbar, 2).contains("Arrows: △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"));
-        assert!(row(&toolbar, 2).contains("Fills: ░ ▒ ▓ █"));
-        assert!(row(&toolbar, 2).contains("Blocks: ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
-        assert!(row(&toolbar, 4).contains("            ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
-        assert!(row(&toolbar, 4).contains("        ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"));
-        assert!(row(&toolbar, 4).contains("        ▜ ▄ ▙ ▟ █"));
-        assert!(row(&toolbar, 5).contains("2.2. 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 6).contains("        ↕ ↔"));
-        assert!(row(&toolbar, 7).contains("3.3. 1 2"));
+        assert!(row(&toolbar, 2).starts_with("Decorators: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 2).contains("Arrows: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 2).contains("Fills: 1 2 3 4"));
+        assert!(row(&toolbar, 2).contains("Blocks: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 3).contains("2.1. □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
+        assert!(row(&toolbar, 3).contains("3.1. △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"));
+        assert!(row(&toolbar, 3).contains("4. ░ ▒ ▓ █"));
+        assert!(row(&toolbar, 3).contains("5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
+        assert!(row(&toolbar, 4).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
+        assert!(row(&toolbar, 4).contains("3.2. ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"));
+        assert!(row(&toolbar, 4).contains("5.2. ▜ ▄ ▙ ▟ █"));
+        assert!(row(&toolbar, 5).contains("3.3. ↕ ↔"));
+    }
+
+    #[test]
+    fn stamp_rows_match_the_shared_header_and_dotted_page_examples() {
+        let toolbar = ToolbarState::default();
+
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW, 1).trim_end(),
+            "Arrows: 1 2 3 4 5 6 7 8 9 0"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 1, 1).trim_end(),
+            "   3.1. △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 1).trim_end(),
+            "   3.2. ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 3, 1).trim_end(),
+            "   3.3. ↕ ↔"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW, 2).trim_end(),
+            "Fills: 1 2 3 4"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 1, 2).trim_end(),
+            "    4. ░ ▒ ▓ █"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW, 3).trim_end(),
+            "Blocks: 1 2 3 4 5 6 7 8 9 0"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 1, 3).trim_end(),
+            "   5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 3).trim_end(),
+            "   5.2. ▜ ▄ ▙ ▟ █"
+        );
     }
 
     #[test]
@@ -1627,15 +1608,16 @@ mod tests {
         for mode in [MainMode::Line, MainMode::Stamp, MainMode::Shapes] {
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
             let layout = toolbar.layout().expect("hierarchical editor mode");
+            let header = toolbar.toolbar_spans(MENU_FIRST_ROW);
             let expected: Vec<_> = layout
                 .labels
                 .iter()
                 .enumerate()
                 .map(|(category, label)| {
-                    let spans = toolbar.toolbar_spans(MENU_FIRST_ROW);
+                    let first_page = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
                     (
-                        prefix_start(&spans, &format!("{label}:")),
-                        option_start(&spans, category, 0),
+                        prefix_start(&header, &format!("{label}:")),
+                        option_start(&first_page, category, 0),
                     )
                 })
                 .collect();
@@ -1643,22 +1625,18 @@ mod tests {
             for (category, (options, expected)) in
                 layout.options.iter().zip(expected.iter()).enumerate()
             {
+                assert_eq!(spans_text(&header).chars().nth(expected.1), Some('1'));
                 for page in 0..options.len().div_ceil(OPTIONS_PER_PAGE) {
-                    let label_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2);
-                    let shortcut_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+                    let page_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1);
                     let path = submenu_path(category, page, options.len());
                     let prefix_width =
                         submenu_prefix_width(layout.labels[category], category, options.len());
                     assert_eq!(
-                        path_cell_start(&shortcut_spans, &path, prefix_width),
+                        path_cell_start(&page_spans, &path, prefix_width),
                         expected.0
                     );
                     assert_eq!(
-                        option_start(&label_spans, category, page * OPTIONS_PER_PAGE),
-                        expected.1
-                    );
-                    assert_eq!(
-                        option_start(&shortcut_spans, category, page * OPTIONS_PER_PAGE),
+                        option_start(&page_spans, category, page * OPTIONS_PER_PAGE),
                         expected.1
                     );
                 }
@@ -1672,8 +1650,8 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
 
         let page_one = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
-        let page_two = toolbar.toolbar_spans(MENU_FIRST_ROW + 3);
-        let page_three = toolbar.toolbar_spans(MENU_FIRST_ROW + 5);
+        let page_two = toolbar.toolbar_spans(MENU_FIRST_ROW + 2);
+        let page_three = toolbar.toolbar_spans(MENU_FIRST_ROW + 3);
         assert_eq!(
             path_cell_start(
                 &page_one,
@@ -1835,7 +1813,7 @@ mod tests {
             press(&mut toolbar, key);
             for page in 0..page_count {
                 assert_eq!(
-                    highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1)),
+                    highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1)),
                     vec![prefix]
                 );
             }
@@ -1854,7 +1832,7 @@ mod tests {
             highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
             vec!["2.1."]
         );
-        assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 3)).is_empty());
+        assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 2)).is_empty());
     }
 
     #[test]
@@ -1902,8 +1880,7 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         for page in 0..3 {
             assert!(
-                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1))
-                    .is_empty()
+                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1)).is_empty()
             );
         }
 
@@ -1913,8 +1890,7 @@ mod tests {
         assert_eq!(toolbar.pending_shortcut(), None);
         for page in 0..3 {
             assert!(
-                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1))
-                    .is_empty()
+                highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1)).is_empty()
             );
         }
     }
@@ -1925,7 +1901,7 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         let baseline: Vec<_> = (0..3)
             .map(|page| {
-                let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+                let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1);
                 (
                     prefix_start(&spans, &format!("3.{}.", page + 1)),
                     option_start(&spans, 1, page * OPTIONS_PER_PAGE),
@@ -1935,7 +1911,7 @@ mod tests {
 
         press(&mut toolbar, "3");
         for (page, expected) in baseline.into_iter().enumerate() {
-            let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+            let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1);
             let common_prefix_start = span_starts(&spans)
                 .into_iter()
                 .find_map(|(start, span)| {
@@ -1979,16 +1955,20 @@ mod tests {
         assert_eq!(action, ToolbarAction::SelectMain(MainMode::Line));
         assert!(toolbar.apply_action(action));
 
+        let expected_decorator = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 5,
+        };
+        let decorator_column = span_starts(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1))
+            .into_iter()
+            .find_map(|(start, span)| {
+                (span.action == Some(expected_decorator)).then_some(start + 2)
+            })
+            .expect("decorator is visible");
         let decorator = toolbar
-            .action_at(2, 19, 80)
+            .action_at(MENU_FIRST_ROW + 1, decorator_column, 80)
             .expect("decorator is clickable");
-        assert_eq!(
-            decorator,
-            ToolbarAction::SelectSubmenu {
-                submenu: 0,
-                option: 5
-            }
-        );
+        assert_eq!(decorator, expected_decorator);
         assert!(toolbar.apply_action(decorator));
         assert_eq!(toolbar.stamp(), "□");
 
@@ -2152,7 +2132,7 @@ mod tests {
                 },
             ),
             (
-                MENU_FIRST_ROW + 4,
+                MENU_FIRST_ROW + 3,
                 ToolbarAction::SelectSubmenu {
                     submenu: 1,
                     option: 20,
@@ -2690,7 +2670,7 @@ mod tests {
         assert_eq!(toolbar.stamp(), "↔");
         assert_eq!(
             toolbar
-                .toolbar_spans(6)
+                .toolbar_spans(MENU_FIRST_ROW + 3)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
