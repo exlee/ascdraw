@@ -1348,7 +1348,7 @@ mod tests {
     fn parses_rgba_colors_by_ignoring_alpha() {
         let resolved = resolve_root_face(
             &Face {
-                fg: "rgba:ffffff80".into(),
+                fg: "#ffffff80".into(),
                 bg: "default".into(),
                 underline: "default".into(),
                 attributes: Vec::new(),
@@ -1398,8 +1398,8 @@ mod tests {
     #[test]
     fn cursor_cell_uses_visible_placeholder_at_end_of_line() {
         let cursor_face = Face {
-            fg: "black".into(),
-            bg: "white".into(),
+            fg: "#000000".into(),
+            bg: "#ffffff".into(),
             underline: "default".into(),
             attributes: Vec::new(),
         };
@@ -1409,7 +1409,7 @@ mod tests {
         }];
 
         let cursor = cursor_cell(Some(&line), 0).expect("cursor cell should exist");
-        assert_eq!(cursor.face.bg, "white");
+        assert_eq!(cursor.face.bg, "#ffffff");
         assert_eq!(cursor.text, Some(" ".to_string()));
     }
 
@@ -1422,8 +1422,8 @@ mod tests {
             },
             Atom {
                 face: Face {
-                    fg: "black".into(),
-                    bg: "white".into(),
+                    fg: "#000000".into(),
+                    bg: "#ffffff".into(),
                     underline: "default".into(),
                     attributes: Vec::new(),
                 },
@@ -1433,7 +1433,7 @@ mod tests {
 
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
         assert_eq!(cursor.text, Some("c".to_string()));
-        assert_eq!(cursor.face.bg, "white");
+        assert_eq!(cursor.face.bg, "#ffffff");
     }
 
     #[test]
@@ -1604,7 +1604,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             toolbar_span_outline_color(&state, &selected),
-            Some(Rgba::rgb(0xff, 0x45, 0x00))
+            Some(Rgba::rgb(0xff, 0x00, 0x00))
         );
 
         assert!(
@@ -1620,7 +1620,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             toolbar_span_outline_color(&state, &highlighted),
-            Some(Rgba::rgb(0xff, 0xd7, 0x00))
+            Some(Rgba::rgb(0x80, 0x00, 0x80))
         );
     }
 
@@ -1746,7 +1746,7 @@ mod tests {
             option: 10,
         }));
 
-        assert_toolbar_bottom_edge_visible(&state, 4, Rgba::rgb(0xff, 0x45, 0x00));
+        assert_toolbar_bottom_edge_visible(&state, 4, Rgba::rgb(0xff, 0x00, 0x00));
     }
 
     #[test]
@@ -1759,7 +1759,7 @@ mod tests {
                 .handle_shortcut(&Key::Character("2".into()), ModifiersState::empty())
         );
 
-        assert_toolbar_bottom_edge_visible(&state, 3, Rgba::rgb(0xff, 0xd7, 0x00));
+        assert_toolbar_bottom_edge_visible(&state, 3, Rgba::rgb(0x80, 0x00, 0x80));
     }
 
     fn assert_toolbar_bottom_edge_visible(

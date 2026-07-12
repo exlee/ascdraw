@@ -332,18 +332,18 @@ mod tests {
     #[test]
     fn bundled_theme_has_all_semantic_faces() {
         let config = AppConfig::default();
-        assert_eq!(config.theme.default.fg, "black");
-        assert_eq!(config.theme.default.bg, "white");
-        assert_eq!(config.theme.selection.fg, "orangered");
+        assert_eq!(config.theme.default.fg, "#000000");
+        assert_eq!(config.theme.default.bg, "#ffffff");
+        assert_eq!(config.theme.selection.fg, "#ff0000");
         assert_eq!(config.theme.selection.bg, "default");
-        assert_eq!(config.theme.selection_highlight.fg, "gold");
+        assert_eq!(config.theme.selection_highlight.fg, "#800080");
         assert_eq!(config.theme.selection_highlight.bg, "default");
-        assert_eq!(config.theme.cursor_drawing.fg, "darkblue");
+        assert_eq!(config.theme.cursor_drawing.fg, "#00008b");
         assert_eq!(config.theme.cursor_drawing.bg, "default");
         assert_eq!(config.theme.cursor_block.fg, "default");
         assert_eq!(config.theme.cursor_block.bg, "default");
         assert_eq!(config.theme.cursor_block.attributes, ["reverse"]);
-        assert_eq!(config.theme.tooltip.fg, "grey");
+        assert_eq!(config.theme.tooltip.fg, "#808080");
         assert_eq!(config.theme.tooltip.bg, "default");
     }
 
@@ -369,6 +369,27 @@ mod tests {
         ] {
             assert!(value.get(name).is_some(), "missing literal face {name}");
         }
+
+        for face in [
+            &theme.default,
+            &theme.selection,
+            &theme.selection_highlight,
+            &theme.cursor_drawing,
+            &theme.cursor_block,
+            &theme.tooltip,
+        ] {
+            for color in [&face.fg, &face.bg, &face.underline] {
+                assert!(
+                    color == "default"
+                        || (color.len() == 7
+                            && color.starts_with('#')
+                            && color[1..].chars().all(|character| {
+                                character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
+                            })),
+                    "bundled explicit color is not canonical hexadecimal: {color}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -389,27 +410,27 @@ mod tests {
         merge_toml_value(
             &mut value,
             toml::from_str(
-                "font-size = 18.0\n[theme.default]\nfg = 'blue'\n[theme.tooltip]\nfg = 'cyan'\n",
+                "font-size = 18.0\n[theme.default]\nfg = '#0000ff'\n[theme.tooltip]\nfg = '#00ffff'\n",
             )
             .unwrap(),
         );
         let config: AppConfig = value.try_into().unwrap();
         assert_eq!(config.font_size, 18.0);
-        assert_eq!(config.theme.default.fg, "blue");
-        assert_eq!(config.theme.default.bg, "white");
-        assert_eq!(config.theme.selection.fg, "orangered");
-        assert_eq!(config.theme.tooltip.fg, "cyan");
+        assert_eq!(config.theme.default.fg, "#0000ff");
+        assert_eq!(config.theme.default.bg, "#ffffff");
+        assert_eq!(config.theme.selection.fg, "#ff0000");
+        assert_eq!(config.theme.tooltip.fg, "#00ffff");
         assert_eq!(config.theme.tooltip.bg, "default");
     }
 
     #[test]
     fn legacy_cursor_face_overrides_cursor_block() {
-        let mut value: Value = toml::from_str("[theme.cursor]\nfg = 'red'\n").unwrap();
+        let mut value: Value = toml::from_str("[theme.cursor]\nfg = '#ff0000'\n").unwrap();
         normalize_legacy_theme(&mut value);
         let mut config = bundled_default_value();
         merge_toml_value(&mut config, value);
         let config: AppConfig = config.try_into().unwrap();
-        assert_eq!(config.theme.cursor_block.fg, "red");
+        assert_eq!(config.theme.cursor_block.fg, "#ff0000");
         assert_eq!(config.theme.cursor_block.attributes, ["reverse"]);
     }
 }

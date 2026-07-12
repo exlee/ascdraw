@@ -67,7 +67,13 @@ Default application shortcuts:
 
 All shortcuts can be changed in the `[keys]` section of the configuration file.
 
-Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `selection`, `selection-highlight` (a pending menu prefix), `cursor-drawing`, `cursor-block`, and `tooltip`. Unspecified face colors inherit from `default`.
+Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `selection`, `selection-highlight` (a pending menu prefix), `cursor-drawing`, `cursor-block`, and `tooltip`. Explicit colors are hexadecimal `#RRGGBB` or `#RRGGBBAA` strings; named colors are not supported. Unspecified colors use `"default"` and inherit from the default face.
+
+```toml
+[theme.selection]
+fg = "#ff0000"
+bg = "default"
+```
 
 ## Current scope
 

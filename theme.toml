@@ -1,18 +1,18 @@
 [default]
-fg = "black"
-bg = "white"
+fg = "#000000"
+bg = "#ffffff"
 
 [selection]
-fg = "red"
+fg = "#ff0000"
 
 [selection-highlight]
-fg = "purple"
+fg = "#800080"
 
 [cursor-drawing]
-fg = "darkblue"
+fg = "#00008b"
 
 [cursor-block]
 attributes = ["reverse"]
 
 [tooltip]
-fg = "grey"
+fg = "#808080"

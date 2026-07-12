@@ -254,48 +254,24 @@ fn alpha_blend(base: Rgba, color: Rgba) -> Rgba {
     }
 }
 
-fn named_color(color: &str) -> Option<Rgba> {
-    Some(match color {
-        "black" => Rgba::rgb(0x00, 0x00, 0x00),
-        "red" => Rgba::rgb(0xcd, 0x00, 0x00),
-        "green" => Rgba::rgb(0x00, 0xcd, 0x00),
-        "yellow" => Rgba::rgb(0xcd, 0xcd, 0x00),
-        "blue" => Rgba::rgb(0x00, 0x00, 0xee),
-        "magenta" => Rgba::rgb(0xcd, 0x00, 0xcd),
-        "cyan" => Rgba::rgb(0x00, 0xcd, 0xcd),
-        "white" => Rgba::rgb(0xff, 0xff, 0xff),
-        "orangered" => Rgba::rgb(0xff, 0x45, 0x00),
-        "gold" => Rgba::rgb(0xff, 0xd7, 0x00),
-        "darkblue" => Rgba::rgb(0x00, 0x00, 0x8b),
-        "grey" | "gray" => Rgba::rgb(0x80, 0x80, 0x80),
-        "bright-black" => Rgba::rgb(0x7f, 0x7f, 0x7f),
-        "bright-red" => Rgba::rgb(0xff, 0x00, 0x00),
-        "bright-green" => Rgba::rgb(0x00, 0xff, 0x00),
-        "bright-yellow" => Rgba::rgb(0xff, 0xff, 0x00),
-        "bright-blue" => Rgba::rgb(0x5c, 0x5c, 0xff),
-        "bright-magenta" => Rgba::rgb(0xff, 0x00, 0xff),
-        "bright-cyan" => Rgba::rgb(0x00, 0xff, 0xff),
-        "bright-white" => Rgba::rgb(0xff, 0xff, 0xff),
-        _ => return None,
-    })
-}
-
 fn parse_color(color: &str) -> FaceColor {
     match color {
         "" | "default" => FaceColor::Default,
-        value => named_color(value)
-            .or_else(|| parse_prefixed_color(value))
+        value => parse_hexadecimal_color(value)
             .map(FaceColor::Rgba)
             .unwrap_or(FaceColor::Default),
     }
 }
 
-fn parse_prefixed_color(value: &str) -> Option<Rgba> {
+fn parse_hexadecimal_color(value: &str) -> Option<Rgba> {
     if let Some(rgb) = value.strip_prefix("rgb:").and_then(parse_hex_color) {
         return Some(rgb);
     }
     if let Some(rgb) = value.strip_prefix("rgba:").and_then(parse_rgba_color) {
         return Some(rgb);
+    }
+    if value.starts_with('#') && value.len() == 9 {
+        return parse_rgba_color(value);
     }
     parse_hex_color(value)
 }
@@ -344,7 +320,7 @@ mod tests {
     #[test]
     fn derived_face_inherits_default_colors_from_base() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &[]),
+            &face("#ffffff", "#0000ee", "default", &[]),
             &face("default", "default", "default", &[]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
@@ -357,8 +333,8 @@ mod tests {
     #[test]
     fn derived_face_overrides_explicit_colors() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &[]),
-            &face("black", "yellow", "default", &[]),
+            &face("#ffffff", "#0000ee", "default", &[]),
+            &face("#000000", "#cdcd00", "default", &[]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
         );
@@ -370,8 +346,8 @@ mod tests {
     #[test]
     fn final_fg_blocks_later_foreground_override() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &["final_fg"]),
-            &face("black", "yellow", "default", &[]),
+            &face("#ffffff", "#0000ee", "default", &["final_fg"]),
+            &face("#000000", "#cdcd00", "default", &[]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
         );
@@ -383,8 +359,8 @@ mod tests {
     #[test]
     fn final_attr_blocks_later_attribute_override() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &["bold", "final_attr"]),
-            &face("black", "yellow", "default", &["italic"]),
+            &face("#ffffff", "#0000ee", "default", &["bold", "final_attr"]),
+            &face("#000000", "#cdcd00", "default", &["italic"]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
         );
@@ -408,7 +384,7 @@ mod tests {
     #[test]
     fn reverse_and_dim_apply_after_color_resolution() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &[]),
+            &face("#ffffff", "#0000ee", "default", &[]),
             &face("default", "default", "default", &["reverse", "dim"]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
@@ -421,8 +397,8 @@ mod tests {
     #[test]
     fn underline_color_and_style_resolve_independently() {
         let resolved = resolve_derived_face(
-            &face("white", "blue", "default", &[]),
-            &face("default", "default", "red", &["double_underline"]),
+            &face("#ffffff", "#0000ee", "default", &[]),
+            &face("default", "default", "#cd0000", &["double_underline"]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
         );
@@ -432,35 +408,40 @@ mod tests {
     }
 
     #[test]
-    fn bright_named_colors_do_not_fall_back_to_default() {
+    fn named_colors_fall_back_to_default() {
         let resolved = resolve_root_face(
-            &face("bright-black", "bright-white", "default", &[]),
+            &face("red", "bright-white", "default", &[]),
             Rgba::rgb(1, 2, 3),
             Rgba::rgb(4, 5, 6),
         );
 
-        assert_eq!(resolved.fg, Rgba::rgb(0x7f, 0x7f, 0x7f));
-        assert_eq!(resolved.bg, Rgba::rgb(0xff, 0xff, 0xff));
+        assert_eq!(resolved.fg, Rgba::rgb(1, 2, 3));
+        assert_eq!(resolved.bg, Rgba::rgb(4, 5, 6));
     }
 
     #[test]
-    fn bundled_theme_named_colors_resolve_exactly() {
-        for (name, expected) in [
-            ("orangered", Rgba::rgb(0xff, 0x45, 0x00)),
-            ("gold", Rgba::rgb(0xff, 0xd7, 0x00)),
-            ("darkblue", Rgba::rgb(0x00, 0x00, 0x8b)),
-            ("grey", Rgba::rgb(0x80, 0x80, 0x80)),
-        ] {
-            assert_eq!(
-                resolve_root_face(
-                    &face(name, "default", "default", &[]),
-                    Rgba::rgb(1, 2, 3),
-                    Rgba::rgb(4, 5, 6),
-                )
-                .fg,
-                expected
-            );
-        }
+    fn canonical_rgb_and_rgba_hex_resolve_case_insensitively() {
+        let rgb = resolve_root_face(
+            &face("#aBcD01", "default", "default", &[]),
+            Rgba::rgb(1, 2, 3),
+            Rgba::rgb(4, 5, 6),
+        );
+        let rgba = resolve_root_face(
+            &face("#AbCd0180", "default", "default", &[]),
+            Rgba::rgb(1, 2, 3),
+            Rgba::rgb(4, 5, 6),
+        );
+
+        assert_eq!(rgb.fg, Rgba::rgb(0xab, 0xcd, 0x01));
+        assert_eq!(
+            rgba.fg,
+            Rgba {
+                r: 0xab,
+                g: 0xcd,
+                b: 0x01,
+                a: 0x80
+            }
+        );
     }
 
     #[test]
@@ -473,5 +454,24 @@ mod tests {
 
         assert_eq!(resolved.fg, Rgba::rgb(1, 2, 3));
         assert_eq!(resolved.bg, Rgba::rgb(4, 5, 6));
+    }
+
+    #[test]
+    fn bundled_semantic_faces_resolve_to_requested_colors() {
+        let theme = crate::app::ThemeConfig::default();
+        let fallback_fg = Rgba::rgb(0, 0, 0);
+        let fallback_bg = Rgba::rgb(0xff, 0xff, 0xff);
+
+        for (face, expected) in [
+            (&theme.selection, Rgba::rgb(0xff, 0x00, 0x00)),
+            (&theme.selection_highlight, Rgba::rgb(0x80, 0x00, 0x80)),
+            (&theme.cursor_drawing, Rgba::rgb(0x00, 0x00, 0x8b)),
+            (&theme.tooltip, Rgba::rgb(0x80, 0x80, 0x80)),
+        ] {
+            assert_eq!(
+                resolve_derived_face(&theme.default, face, fallback_fg, fallback_bg).fg,
+                expected
+            );
+        }
     }
 }

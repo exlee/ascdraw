@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn atom_extraction_normalizes_origin_and_preserves_faces_and_dimensions() {
         let special = Face {
-            fg: "red".to_string(),
+            fg: "#ff0000".to_string(),
             ..Face::default()
         };
         let lines = vec![

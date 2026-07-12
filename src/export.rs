@@ -326,10 +326,10 @@ mod tests {
     #[test]
     fn selection_json_round_trip_preserves_dimensions_faces_and_origin() {
         let mut state = state_with_selection();
-        state.grid.lines[1][2].face.fg = "red".to_string();
+        state.grid.lines[1][2].face.fg = "#ff0000".to_string();
         let document = selection_document(&state);
         assert_eq!((document.width, document.height), (2, 2));
-        assert_eq!(document.lines[0][0].face.fg, "red");
+        assert_eq!(document.lines[0][0].face.fg, "#ff0000");
         let json = serde_json::to_string(&document).unwrap();
         let loaded = lines_from_json(&json).unwrap();
         assert_eq!(loaded, document.lines);
@@ -372,7 +372,7 @@ mod tests {
     fn json_load_accepts_saved_selection_and_resets_to_normalized_origin() {
         let path = temp_path("json");
         let mut source = state_with_selection();
-        source.grid.lines[1][2].face.fg = "blue".to_string();
+        source.grid.lines[1][2].face.fg = "#0000ff".to_string();
         save_selection_json(&path, &source).unwrap();
 
         let mut target = EditorState::new(&ThemeConfig::default(), "target");
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(target.grid.cursor_pos, Coord::default());
         assert!(target.selection.is_collapsed());
         assert_eq!(target.grid.lines[0][0].contents, "a");
-        assert_eq!(target.grid.lines[0][0].face.fg, "blue");
+        assert_eq!(target.grid.lines[0][0].face.fg, "#0000ff");
         assert_eq!(target.grid.lines.len(), 2);
         let _ = fs::remove_file(path);
     }
