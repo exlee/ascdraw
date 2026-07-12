@@ -10,7 +10,8 @@ The editor opens in **Line** mode.
 | --- | --- |
 | Move the cursor | Arrow keys or `h` `j` `k` `l` |
 | Draw a line | Shift + direction |
-| Resize the canvas selection | Alt + direction |
+| Resize the canvas selection | Ctrl + direction |
+| Erase while moving | Alt + direction |
 | Collapse the selection to 1x1 | Escape |
 | Clear the selected rectangle | Backspace, or Space in Line mode |
 | Replace the selected rectangle | `r`, then a character |
@@ -41,7 +42,7 @@ Text entry is independent of the selected toolbar tool. Press Return to enter it
 
 ### Selection, Stamp, Shape, and Utils
 
-Alt + `h` `j` `k` `l` or Alt + an arrow key extends the canvas selection rectangle. Escape collapses it to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
+Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. Alt + a direction moves while erasing the traversed canvas content. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
 
 Ctrl/Cmd-C copies the exact selected rectangle and Ctrl/Cmd-V pastes clipboard text as a rectangular overwrite at the selection's top-left corner.
 Ctrl/Cmd-Z undoes and Ctrl/Cmd-R redoes document edits independently in each window.

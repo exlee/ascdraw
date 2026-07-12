@@ -398,6 +398,12 @@ fn handle_editor_key(
     repeat: bool,
     modifiers: ModifiersState,
 ) -> Option<bool> {
+    if let Some(command @ (EditCommand::ExtendSelection(_) | EditCommand::Erase(_))) =
+        edit_command(key, repeat, modifiers, state.cursor_mode)
+    {
+        state.toolbar.cancel_shortcut();
+        return Some(apply_edit_command(state, command));
+    }
     if state.handle_toolbar_shortcut(key, modifiers) {
         return Some(false);
     }
@@ -430,6 +436,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
         }
         EditCommand::ApplyUtility(direction) => state.apply_utility(direction),
         EditCommand::ExtendSelection(direction) => state.extend_selection(direction),
+        EditCommand::Erase(direction) => state.erase(direction),
         EditCommand::Clear => {
             state.clear_selection();
             true
@@ -555,6 +562,44 @@ mod tests {
             EditCommand::Move(model::Direction::Up)
         ));
         assert_eq!(state.grid.lines.len(), 2);
+    }
+
+    #[test]
+    fn erase_command_reports_only_real_canvas_erasure() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        assert!(!apply_edit_command(
+            &mut state,
+            EditCommand::Erase(model::Direction::Right)
+        ));
+        state.move_to(model::Coord::default());
+        state.insert("x");
+        state.move_to(model::Coord::default());
+        assert!(apply_edit_command(
+            &mut state,
+            EditCommand::Erase(model::Direction::Right)
+        ));
+    }
+
+    #[test]
+    fn modified_directions_precede_and_cancel_pending_toolbar_prefixes() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty())
+        );
+        assert!(state.toolbar.pending_shortcut().is_some());
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Character("l".into()),
+                None,
+                false,
+                ModifiersState::CONTROL,
+            ),
+            Some(false)
+        );
+        assert_eq!(state.selection.active(), Coord { line: 0, column: 1 });
+        assert!(state.toolbar.pending_shortcut().is_none());
     }
 
     #[test]

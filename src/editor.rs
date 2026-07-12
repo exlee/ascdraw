@@ -422,6 +422,55 @@ impl EditorState {
         prepended
     }
 
+    /// Moves one cell while erasing the traversed edge. Connected line cells
+    /// lose only that edge; every other non-blank atom is replaced by
+    /// display-width-preserving blank cells.
+    pub fn erase(&mut self, direction: Direction) -> bool {
+        self.prepare_adjacent(direction);
+        self.end_stroke();
+        self.shape_preview = None;
+        let from = self.grid.cursor_pos;
+        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
+        let erased_from = self.erase_connection_or_atom(from, direction);
+        self.move_to_without_ending_stroke(to);
+        let erased_to = self.erase_connection_or_atom(to, direction.opposite());
+        self.collapse_selection();
+        erased_from || erased_to
+    }
+
+    fn erase_connection_or_atom(&mut self, coord: Coord, direction: Direction) -> bool {
+        let is_line = self.line_markers.iter().any(|marker| marker.coord == coord)
+            || self.cell_contents(coord).is_some_and(is_line_glyph);
+        if is_line {
+            let before_contents = self.cell_contents(coord).map(str::to_owned);
+            let had_marker = self.line_markers.iter().any(|marker| marker.coord == coord);
+            self.remove_connection(coord, direction);
+            return had_marker || self.cell_contents(coord).map(str::to_owned) != before_contents;
+        }
+        self.clear_atom_at(coord)
+    }
+
+    fn clear_atom_at(&mut self, coord: Coord) -> bool {
+        let Some(line) = self.grid.lines.get_mut(coord.line) else {
+            return false;
+        };
+        let (index, start_column) = index_and_column_for_coord(line, coord.column);
+        let Some(atom) = line.get(index) else {
+            return false;
+        };
+        if atom.contents.chars().all(char::is_whitespace) {
+            return false;
+        }
+        let width = atom_width(atom);
+        self.line_markers.retain(|marker| {
+            marker.coord.line != coord.line
+                || marker.coord.column < start_column
+                || marker.coord.column >= start_column.saturating_add(width)
+        });
+        line.splice(index..=index, (0..width).map(|_| blank_atom()));
+        true
+    }
+
     fn move_selection_to_without_ending_stroke(&mut self, coord: Coord) {
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
@@ -1201,6 +1250,57 @@ mod tests {
         state.clear_selection();
 
         assert_eq!(state.edit_snapshot(), before);
+    }
+
+    #[test]
+    fn erasing_moves_across_and_clears_general_non_line_content() {
+        let mut state = state();
+        state.insert("x●◆");
+        state.move_to(Coord::default());
+
+        assert!(state.erase(Direction::Right));
+        assert_eq!(contents(&state.grid.lines[0]), "  ◆");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+
+        assert!(state.erase(Direction::Right));
+        assert_eq!(contents(&state.grid.lines[0]), "   ");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
+    }
+
+    #[test]
+    fn erasing_a_traversed_line_edge_preserves_unrelated_connections() {
+        let mut state = state();
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+
+        assert!(state.erase(Direction::Left));
+
+        assert_eq!(contents(&state.grid.lines[0]), "╶╴ ");
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+    }
+
+    #[test]
+    fn erasing_either_display_cell_blanks_a_whole_wide_grapheme() {
+        let mut state = state();
+        state.insert("A界B");
+        state.move_to(Coord { line: 0, column: 3 });
+
+        assert!(state.erase(Direction::Left));
+
+        assert_eq!(contents(&state.grid.lines[0]), "A   ");
+        assert_eq!(display_width(&state.grid.lines[0]), 4);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+    }
+
+    #[test]
+    fn blank_origin_erasing_prepends_safely_but_reports_no_document_edit() {
+        let mut state = state();
+
+        assert!(!state.erase(Direction::Left));
+
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert_eq!(state.take_pending_prepend(), (1, 0));
+        assert!(state.selection.is_collapsed());
     }
 
     #[test]

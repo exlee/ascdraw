@@ -14,6 +14,7 @@ pub enum EditCommand {
     DrawStamp(Direction),
     ApplyUtility(Direction),
     ExtendSelection(Direction),
+    Erase(Direction),
     Clear,
     ToggleTextEntry,
     ToggleReplaceMode,
@@ -105,12 +106,33 @@ fn edit_command_for_key(
         });
     }
 
-    if modifiers.control_key() || modifiers.super_key() {
+    if matches!(key, Key::Named(NamedKey::Backspace)) {
+        return Some(EditCommand::Clear);
+    }
+
+    if !mode.accepts_text()
+        && modifiers.control_key()
+        && !modifiers.alt_key()
+        && !modifiers.shift_key()
+        && !modifiers.super_key()
+    {
+        return direction_for_key(key).map(EditCommand::ExtendSelection);
+    }
+
+    if !mode.accepts_text()
+        && modifiers.alt_key()
+        && !modifiers.control_key()
+        && !modifiers.shift_key()
+        && !modifiers.super_key()
+    {
+        return direction_for_key(key).map(EditCommand::Erase);
+    }
+
+    if modifiers.control_key() || modifiers.super_key() || modifiers.alt_key() {
         return None;
     }
 
     if !modifiers.shift_key()
-        && !modifiers.alt_key()
         && matches!(key, Key::Character(text) if text == "r")
         && !matches!(
             mode,
@@ -118,14 +140,6 @@ fn edit_command_for_key(
         )
     {
         return Some(EditCommand::BeginSingleReplace);
-    }
-
-    if matches!(key, Key::Named(NamedKey::Backspace)) {
-        return Some(EditCommand::Clear);
-    }
-
-    if modifiers.alt_key() && !mode.accepts_text() {
-        return direction_for_key(key).map(EditCommand::ExtendSelection);
     }
 
     if mode == CursorMode::MoveDraw {
@@ -515,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_alt_directions_to_selection_extension_in_canvas_modes() {
+    fn maps_control_directions_to_selection_and_alt_directions_to_erasing_in_canvas_modes() {
         for mode in [
             CursorMode::MoveDraw,
             CursorMode::Stamp,
@@ -524,18 +538,50 @@ mod tests {
         ] {
             for (key, direction) in [
                 (Key::Character("h".into()), Direction::Left),
+                (Key::Character("j".into()), Direction::Down),
+                (Key::Character("k".into()), Direction::Up),
+                (Key::Character("l".into()), Direction::Right),
+                (Key::Named(NamedKey::ArrowLeft), Direction::Left),
                 (Key::Named(NamedKey::ArrowDown), Direction::Down),
+                (Key::Named(NamedKey::ArrowUp), Direction::Up),
+                (Key::Named(NamedKey::ArrowRight), Direction::Right),
             ] {
                 assert_eq!(
-                    edit_command_for_key(&key, ModifiersState::ALT, mode),
+                    edit_command_for_key(&key, ModifiersState::CONTROL, mode),
                     Some(EditCommand::ExtendSelection(direction))
+                );
+                assert_eq!(
+                    edit_command_for_key(&key, ModifiersState::ALT, mode),
+                    Some(EditCommand::Erase(direction))
                 );
             }
         }
         for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
             assert_ne!(
-                edit_command_for_key(&Key::Character("h".into()), ModifiersState::ALT, mode,),
+                edit_command_for_key(&Key::Character("h".into()), ModifiersState::CONTROL, mode,),
                 Some(EditCommand::ExtendSelection(Direction::Left))
+            );
+            assert_ne!(
+                edit_command_for_key(&Key::Character("h".into()), ModifiersState::ALT, mode,),
+                Some(EditCommand::Erase(Direction::Left))
+            );
+        }
+    }
+
+    #[test]
+    fn direction_modifiers_are_single_modifier_commands_only() {
+        for modifiers in [
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::CONTROL | ModifiersState::ALT,
+            ModifiersState::ALT | ModifiersState::SHIFT,
+        ] {
+            assert_eq!(
+                edit_command_for_key(
+                    &Key::Named(NamedKey::ArrowRight),
+                    modifiers,
+                    CursorMode::MoveDraw,
+                ),
+                None
             );
         }
     }
