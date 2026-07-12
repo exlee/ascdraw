@@ -312,6 +312,7 @@ fn render_toolbar(
             highlighted: false,
             tooltip: true,
             action: None,
+            right_aligned: false,
         }],
         max_columns,
     );

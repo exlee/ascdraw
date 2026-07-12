@@ -29,7 +29,7 @@ pub struct EditorWindow {
     pub surface: Surface<Rc<Window>, Rc<Window>>,
     pub modifiers: ModifiersState,
     pub mouse_cell: Option<Coord>,
-    pub mouse_toolbar_position: Option<(usize, usize)>,
+    pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     pub state: EditorState,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,

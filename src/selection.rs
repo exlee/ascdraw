@@ -87,6 +87,48 @@ pub fn selected_text(lines: &[Vec<Atom>], bounds: SelectionBounds) -> String {
     rows.join("\n")
 }
 
+pub fn selected_atoms(lines: &[Vec<Atom>], bounds: SelectionBounds) -> Vec<Vec<Atom>> {
+    (bounds.top..=bounds.bottom)
+        .map(|line_index| {
+            let line = lines.get(line_index).map(Vec::as_slice).unwrap_or_default();
+            selected_line_atoms(line, bounds.left, bounds.right)
+        })
+        .collect()
+}
+
+fn selected_line_atoms(line: &[Atom], left: usize, right: usize) -> Vec<Atom> {
+    let mut result = Vec::new();
+    let mut result_width = 0;
+    let mut column: usize = 0;
+    for atom in line {
+        let width = atom_width(atom);
+        let end = column.saturating_add(width);
+        if end <= left {
+            column = end;
+            continue;
+        }
+        if column > right {
+            break;
+        }
+        let overlap_start = column.max(left);
+        let overlap_end = end.min(right.saturating_add(1));
+        let expected_start = left.saturating_add(result_width);
+        result.extend((expected_start..overlap_start).map(|_| blank_atom()));
+        result_width = result_width.saturating_add(overlap_start.saturating_sub(expected_start));
+        let overlap_width = overlap_end.saturating_sub(overlap_start);
+        if column >= left && end <= right.saturating_add(1) {
+            result.push(atom.clone());
+        } else {
+            result.extend((0..overlap_width).map(|_| blank_atom()));
+        }
+        result_width = result_width.saturating_add(overlap_width);
+        column = end;
+    }
+    let width = right.saturating_sub(left).saturating_add(1);
+    result.extend((result_width..width).map(|_| blank_atom()));
+    result
+}
+
 pub fn replace_range(
     lines: &mut Vec<Vec<Atom>>,
     bounds: SelectionBounds,
@@ -250,6 +292,51 @@ mod tests {
             },
         );
         assert_eq!(text, "ab \n   \n   ");
+    }
+
+    #[test]
+    fn atom_extraction_normalizes_origin_and_preserves_faces_and_dimensions() {
+        let special = Face {
+            fg: "red".to_string(),
+            ..Face::default()
+        };
+        let lines = vec![
+            vec![
+                Atom {
+                    face: Face::default(),
+                    contents: "x".to_string(),
+                },
+                Atom {
+                    face: special.clone(),
+                    contents: "a".to_string(),
+                },
+            ],
+            Vec::new(),
+        ];
+        let selected = selected_atoms(
+            &lines,
+            SelectionBounds {
+                left: 1,
+                right: 2,
+                top: 0,
+                bottom: 1,
+            },
+        );
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|line| display_width(line) == 2));
+        assert_eq!(selected[0][0].face, special);
+        assert_eq!(
+            selected_text(
+                &selected,
+                SelectionBounds {
+                    left: 0,
+                    right: 1,
+                    top: 0,
+                    bottom: 1
+                }
+            ),
+            "a \n  "
+        );
     }
 
     #[test]

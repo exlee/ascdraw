@@ -90,11 +90,12 @@ impl EditorState {
             self.toolbar.cancel_shortcut();
             return false;
         }
+        let export_was_open = self.toolbar.export_menu_open();
         let old_mode = self.toolbar.main_mode();
         if !self.toolbar.handle_shortcut(key, modifiers) {
             return false;
         }
-        if matches!(key, Key::Named(NamedKey::Escape)) {
+        if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open {
             self.cancel_canvas_transients();
         }
         if self.toolbar.main_mode() != old_mode {
@@ -108,6 +109,12 @@ impl EditorState {
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
         if !self.toolbar.apply_action(action) {
             return false;
+        }
+        if matches!(
+            action,
+            ToolbarAction::ToggleExportMenu | ToolbarAction::RunExport(_)
+        ) {
+            return true;
         }
         self.end_stroke();
         self.shape_preview = None;
@@ -608,6 +615,24 @@ impl EditorState {
     #[allow(dead_code)] // Public extraction hook for the queued export implementation.
     pub fn selected_text(&self) -> String {
         selected_text(&self.grid.lines, self.selection.bounds())
+    }
+
+    pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
+        self.grid.lines = if lines.is_empty() {
+            vec![Vec::new()]
+        } else {
+            lines
+        };
+        self.grid.cursor_pos = Coord::default();
+        self.cursor_index = 0;
+        self.active_stroke = None;
+        self.line_markers.clear();
+        self.shape_preview = None;
+        self.single_replace_pending = false;
+        self.pending_prepend = (0, 0);
+        self.toolbar.cancel_shortcut();
+        self.selection.collapse(Coord::default());
+        self.sync_cursor_mode_with_toolbar();
     }
 
     pub fn confirm_shape(&mut self) {

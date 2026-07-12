@@ -14,6 +14,7 @@ The editor opens in **Line** mode.
 | Enter or leave text entry | Return |
 | Choose a tool directly | `1`, then its displayed number |
 | Choose an option directly | Its displayed three-digit path |
+| Open Save/Load/Export | `0` |
 
 Lines connect automatically into corners, tees, and crossings. Starting a stroke on an existing line extends that connection; starting on an endpoint marker moves the marker to the new endpoint.
 
@@ -65,6 +66,8 @@ Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `
 
 ## Current scope
 
-ascdraw currently provides an editable grapheme-aware cell grid, connected Unicode line drawing, text entry, font fallback, configurable themes and cursor shapes, live font scaling, multiple native windows, and macOS menu integration.
+The top-right **0. Save/Load/Export** menu copies the selected rectangle as TXT, saves the selection as TXT or JSON, and loads TXT or JSON through native file dialogs. Clipboard and saved exports include only the selected rectangle; JSON preserves its dimensions, cell contents, and faces. PNG entries are visible but intentionally deferred.
 
-Document save/load and the Stamp, Shape, and Utils editing operations are still to come.
+TODO: PNG clipboard/save should use the Egui Screenshot feature and capture only selected canvas content, never menus.
+
+ascdraw currently provides an editable grapheme-aware cell grid, connected Unicode line drawing, text entry, font fallback, configurable themes and cursor shapes, live font scaling, multiple native windows, and macOS menu integration. Further Stamp, Shape, and Utils operations are still to come.

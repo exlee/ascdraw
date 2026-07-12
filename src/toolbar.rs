@@ -2,6 +2,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::drawing::{CornerStyle, LineEnding, LineStyle};
+use crate::export::ExportAction;
 
 pub const TOOLBAR_ROW_GAP: usize = 0;
 pub const TOOLTIP_GAP_ROWS: usize = 1;
@@ -52,26 +53,28 @@ pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSp
     let left_padding = usize::from(interior_width > 0);
     let right_padding = usize::from(interior_width > 1);
     let content_width = interior_width - left_padding - right_padding;
-    let mut remaining = content_width;
     let mut boxed = vec![plain_span("│".to_string())];
     if left_padding > 0 {
         boxed.push(plain_span(" ".to_string()));
     }
-    for span in spans {
-        if remaining == 0 {
-            break;
+    let split = spans.iter().position(|span| span.right_aligned);
+    let (left, right) = split.map_or((spans, &[][..]), |index| spans.split_at(index));
+    let right_width: usize = right
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
+        .sum();
+    let show_right = !right.is_empty() && right_width < content_width;
+    let left_width = content_width.saturating_sub(if show_right { right_width + 1 } else { 0 });
+    let used_left = push_clipped_spans(&mut boxed, left, left_width);
+    let mut remaining = content_width.saturating_sub(used_left);
+    if show_right {
+        let padding = remaining.saturating_sub(right_width);
+        if padding > 0 {
+            boxed.push(plain_span(" ".repeat(padding)));
+            remaining -= padding;
         }
-        let (contents, used) = clipped_to_width(&span.contents, remaining);
-        if used > 0 {
-            boxed.push(ToolbarSpan {
-                contents,
-                selected: span.selected,
-                highlighted: span.highlighted,
-                tooltip: span.tooltip,
-                action: span.action,
-            });
-            remaining -= used;
-        }
+        let used_right = push_clipped_spans(&mut boxed, right, remaining);
+        remaining = remaining.saturating_sub(used_right);
     }
     if remaining > 0 {
         boxed.push(plain_span(" ".repeat(remaining)));
@@ -81,6 +84,28 @@ pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSp
     }
     boxed.push(plain_span("│".to_string()));
     boxed
+}
+
+fn push_clipped_spans(
+    target: &mut Vec<ToolbarSpan>,
+    spans: &[ToolbarSpan],
+    max_width: usize,
+) -> usize {
+    let mut remaining = max_width;
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let (contents, used) = clipped_to_width(&span.contents, remaining);
+        if used > 0 {
+            target.push(ToolbarSpan {
+                contents,
+                ..span.clone()
+            });
+            remaining -= used;
+        }
+    }
+    max_width - remaining
 }
 
 fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
@@ -160,6 +185,8 @@ pub enum PendingShortcut {
     Mode,
     Category(usize),
     Option { category: usize, page: usize },
+    ExportCategory,
+    ExportOption(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +203,8 @@ pub struct ToolbarState {
     stamp_active_category: usize,
     shape_selected: [usize; SHAPE_LABELS.len()],
     shortcut_prefix: Option<PendingShortcut>,
+    export_open: bool,
+    pending_export_action: Option<ExportAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,13 +214,33 @@ pub struct ToolbarSpan {
     pub highlighted: bool,
     pub tooltip: bool,
     pub action: Option<ToolbarAction>,
+    pub right_aligned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarAction {
     SelectMain(MainMode),
     SelectSubmenu { submenu: usize, option: usize },
+    ToggleExportMenu,
+    RunExport(ExportAction),
 }
+
+const EXPORT_LABELS: [&str; 3] = ["Clipboard", "Save", "Load"];
+const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 3] = [
+    &[
+        ("TXT", ExportAction::ClipboardTxt),
+        ("PNG", ExportAction::ClipboardPng),
+    ],
+    &[
+        ("TXT", ExportAction::SaveTxt),
+        ("JSON", ExportAction::SaveJson),
+        ("PNG", ExportAction::SavePng),
+    ],
+    &[
+        ("TXT", ExportAction::LoadTxt),
+        ("JSON", ExportAction::LoadJson),
+    ],
+];
 
 struct MenuLayout<'a> {
     labels: &'a [&'a str],
@@ -202,8 +251,11 @@ struct MenuLayout<'a> {
 
 impl ToolbarState {
     pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        if matches!(key, Key::Named(NamedKey::Escape)) && self.shortcut_prefix.is_some() {
+        if matches!(key, Key::Named(NamedKey::Escape))
+            && (self.shortcut_prefix.is_some() || self.export_open)
+        {
             self.shortcut_prefix = None;
+            self.export_open = false;
             return true;
         }
 
@@ -219,14 +271,25 @@ impl ToolbarState {
 
         match self.shortcut_prefix.take() {
             None => {
-                self.shortcut_prefix = if digit == 1 {
-                    Some(PendingShortcut::Mode)
+                if digit == 0 {
+                    self.export_open = !self.export_open;
+                    self.shortcut_prefix =
+                        self.export_open.then_some(PendingShortcut::ExportCategory);
+                } else if self.export_open {
+                    self.shortcut_prefix = digit
+                        .checked_sub(1)
+                        .filter(|category| *category < EXPORT_LABELS.len())
+                        .map(PendingShortcut::ExportOption);
                 } else {
-                    digit
-                        .checked_sub(2)
-                        .filter(|category| *category < self.layout().labels.len())
-                        .map(PendingShortcut::Category)
-                };
+                    self.shortcut_prefix = if digit == 1 {
+                        Some(PendingShortcut::Mode)
+                    } else {
+                        digit
+                            .checked_sub(2)
+                            .filter(|category| *category < self.layout().labels.len())
+                            .map(PendingShortcut::Category)
+                    };
+                }
             }
             Some(PendingShortcut::Mode) => {
                 if let Some(mode) = digit
@@ -263,12 +326,48 @@ impl ToolbarState {
                     option,
                 });
             }
+            Some(PendingShortcut::ExportCategory) => {
+                if digit == 0 {
+                    self.export_open = false;
+                } else {
+                    self.shortcut_prefix = digit
+                        .checked_sub(1)
+                        .filter(|category| *category < EXPORT_LABELS.len())
+                        .map(PendingShortcut::ExportOption);
+                }
+            }
+            Some(PendingShortcut::ExportOption(category)) => {
+                if let Some((_, action)) = EXPORT_OPTIONS
+                    .get(category)
+                    .and_then(|options| options.get(shortcut_position(digit)))
+                {
+                    self.queue_export(*action);
+                }
+            }
         }
         true
     }
 
     pub fn cancel_shortcut(&mut self) {
         self.shortcut_prefix = None;
+    }
+
+    pub fn close_export_menu(&mut self) {
+        self.export_open = false;
+        self.shortcut_prefix = None;
+    }
+
+    pub fn export_menu_open(&self) -> bool {
+        self.export_open
+    }
+
+    pub fn take_export_action(&mut self) -> Option<ExportAction> {
+        self.pending_export_action.take()
+    }
+
+    fn queue_export(&mut self, action: ExportAction) {
+        self.pending_export_action = Some(action);
+        self.close_export_menu();
     }
 
     fn cancel_pending_shortcut(&mut self) -> bool {
@@ -284,6 +383,9 @@ impl ToolbarState {
     }
 
     pub fn menu_row_count(&self) -> usize {
+        if self.export_open {
+            return 2;
+        }
         self.layout()
             .options
             .iter()
@@ -308,7 +410,11 @@ impl ToolbarState {
         match row {
             MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
-                self.menu_spans(row)
+                if self.export_open {
+                    self.export_menu_spans(row)
+                } else {
+                    self.menu_spans(row)
+                }
             }
             _ => Vec::new(),
         }
@@ -340,7 +446,60 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
+                right_aligned: false,
             });
+        }
+        if row == MAIN_LABEL_ROW {
+            spans.push(ToolbarSpan {
+                contents: "0. Save/Load/Export".to_string(),
+                selected: self.export_open,
+                highlighted: self.pending_shortcut() == Some(PendingShortcut::ExportCategory),
+                tooltip: false,
+                action: Some(ToolbarAction::ToggleExportMenu),
+                right_aligned: true,
+            });
+        }
+        spans
+    }
+
+    fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let label_row = row == MENU_FIRST_ROW;
+        let mut spans = Vec::new();
+        for (category, label) in EXPORT_LABELS.iter().enumerate() {
+            if category > 0 {
+                spans.push(plain_span(GAP.to_string()));
+            }
+            let prefix_width = UnicodeWidthStr::width(*label) + 2;
+            let mut prefix = plain_span(if label_row {
+                format!("{label}: ")
+            } else {
+                format!(
+                    "{:>width$} ",
+                    format!("0.{}.", category + 1),
+                    width = prefix_width - 1
+                )
+            });
+            prefix.highlighted = !label_row
+                && (self.pending_shortcut() == Some(PendingShortcut::ExportCategory)
+                    || self.pending_shortcut() == Some(PendingShortcut::ExportOption(category)));
+            spans.push(prefix);
+            for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
+                if position > 0 {
+                    spans.push(plain_span(" ".to_string()));
+                }
+                spans.push(ToolbarSpan {
+                    contents: if label_row {
+                        (*option).to_string()
+                    } else {
+                        aligned_shortcut(position + 1, option)
+                    },
+                    selected: false,
+                    highlighted: false,
+                    tooltip: false,
+                    action: Some(ToolbarAction::RunExport(*action)),
+                    right_aligned: false,
+                });
+            }
         }
         spans
     }
@@ -414,6 +573,7 @@ impl ToolbarState {
                     highlighted: false,
                     tooltip: false,
                     action: Some(action),
+                    right_aligned: false,
                 });
             }
         }
@@ -421,6 +581,9 @@ impl ToolbarState {
     }
 
     pub fn tooltip(&self) -> &'static str {
+        if self.export_open {
+            return "PNG is deferred; clipboard/save PNG will use an Egui canvas-only screenshot";
+        }
         match self.main_mode {
             MainMode::Line => {
                 "Shift-<hjkl> or Shift-arrow to draw, Alt-<hjkl>, Alt-<arrow> to erase"
@@ -480,9 +643,9 @@ impl ToolbarState {
             .map(|index| SHAPE_OPTIONS[2][index + 1])
     }
 
-    pub fn action_at(&self, row: usize, column: usize) -> Option<ToolbarAction> {
+    pub fn action_at(&self, row: usize, column: usize, box_width: usize) -> Option<ToolbarAction> {
         let mut start = 0;
-        for span in self.toolbar_spans(row) {
+        for span in boxed_toolbar_spans(&self.toolbar_spans(row), box_width) {
             let end = start + UnicodeWidthStr::width(span.contents.as_str());
             if (start..end).contains(&column) {
                 return span.action;
@@ -496,10 +659,12 @@ impl ToolbarState {
         self.cancel_shortcut();
         match action {
             ToolbarAction::SelectMain(mode) => {
+                self.close_export_menu();
                 self.main_mode = mode;
                 true
             }
             ToolbarAction::SelectSubmenu { submenu, option } => {
+                self.close_export_menu();
                 let option_count = match self.main_mode {
                     MainMode::Line => LINE_OPTIONS.get(submenu),
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
@@ -523,6 +688,15 @@ impl ToolbarState {
                     return false;
                 };
                 *selected = option;
+                true
+            }
+            ToolbarAction::ToggleExportMenu => {
+                self.export_open = !self.export_open;
+                self.shortcut_prefix = None;
+                true
+            }
+            ToolbarAction::RunExport(action) => {
+                self.queue_export(action);
                 true
             }
         }
@@ -565,6 +739,7 @@ fn plain_span(contents: String) -> ToolbarSpan {
         highlighted: false,
         tooltip: false,
         action: None,
+        right_aligned: false,
     }
 }
 
@@ -636,6 +811,7 @@ mod tests {
         toolbar
             .toolbar_spans(row)
             .iter()
+            .take_while(|span| !span.right_aligned)
             .map(|span| span.contents.as_str())
             .collect()
     }
@@ -848,11 +1024,13 @@ mod tests {
     #[test]
     fn mouse_hit_testing_directly_selects_modes_and_options() {
         let mut toolbar = ToolbarState::default();
-        let action = toolbar.action_at(0, 12).expect("Stamp is clickable");
+        let action = toolbar.action_at(0, 14, 80).expect("Stamp is clickable");
         assert_eq!(action, ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(toolbar.apply_action(action));
 
-        let decorator = toolbar.action_at(2, 16).expect("decorator is clickable");
+        let decorator = toolbar
+            .action_at(2, 18, 80)
+            .expect("decorator is clickable");
         assert_eq!(
             decorator,
             ToolbarAction::SelectSubmenu {
@@ -881,10 +1059,74 @@ mod tests {
             })
             .expect("flattened Width shortcut is clickable");
         let width = toolbar
-            .action_at(3, column)
+            .action_at(3, column + 2, 80)
             .expect("flattened Width shortcut hit tests");
         assert!(toolbar.apply_action(width));
         assert_eq!(toolbar.line_style(), LineStyle::Double);
+    }
+
+    #[test]
+    fn export_entry_is_right_aligned_and_narrow_box_stays_valid_unicode_width() {
+        let toolbar = ToolbarState::default();
+        let wide = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 60));
+        assert!(wide.ends_with("0. Save/Load/Export │"));
+        assert!(wide.starts_with("│ Mode: Line"));
+        for width in 0..32 {
+            let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
+            assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+        }
+    }
+
+    #[test]
+    fn keyboard_export_paths_queue_actions_and_escape_closes_without_changing_mode() {
+        let mut toolbar = ToolbarState::default();
+        let mode = toolbar.main_mode();
+        for key in ["0", "1", "1"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(
+            toolbar.take_export_action(),
+            Some(ExportAction::ClipboardTxt)
+        );
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.main_mode(), mode);
+
+        press(&mut toolbar, "0");
+        assert!(toolbar.export_menu_open());
+        assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.main_mode(), mode);
+    }
+
+    #[test]
+    fn mouse_export_entry_and_action_match_keyboard_paths() {
+        let mut toolbar = ToolbarState::default();
+        let width = 60;
+        let entry_column = width - 2 - UnicodeWidthStr::width("0. Save/Load/Export");
+        let toggle = toolbar
+            .action_at(0, entry_column, width)
+            .expect("export entry clickable");
+        assert_eq!(toggle, ToolbarAction::ToggleExportMenu);
+        assert!(toolbar.apply_action(toggle));
+
+        let clipboard_txt = boxed_toolbar_spans(&toolbar.toolbar_spans(2), width)
+            .iter()
+            .scan(0, |column, span| {
+                let start = *column;
+                *column += UnicodeWidthStr::width(span.contents.as_str());
+                Some((start, span.action))
+            })
+            .find_map(|(column, action)| {
+                (action == Some(ToolbarAction::RunExport(ExportAction::ClipboardTxt)))
+                    .then_some(column)
+            })
+            .expect("Clipboard TXT is visible");
+        let action = toolbar.action_at(2, clipboard_txt, width).unwrap();
+        assert!(toolbar.apply_action(action));
+        assert_eq!(
+            toolbar.take_export_action(),
+            Some(ExportAction::ClipboardTxt)
+        );
     }
 
     #[test]

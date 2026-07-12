@@ -210,7 +210,7 @@ pub fn pointer_position_to_toolbar_position(
     scale_factor: f64,
     config: &AppConfig,
     toolbar: &ToolbarState,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, usize)> {
     let metrics = renderer.title_metrics(scale_factor);
     toolbar_position(
         x,
@@ -231,7 +231,7 @@ fn toolbar_position(
     cell_height: usize,
     top_padding: usize,
     toolbar_rows: usize,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, usize)> {
     let toolbar_x = x - PADDING as f64;
     let toolbar_y = y - top_padding as f64;
     if toolbar_x < 0.0 || toolbar_y < 0.0 {
@@ -247,7 +247,7 @@ fn toolbar_position(
     if column < 2 || column >= box_width.saturating_sub(2) {
         return None;
     }
-    Some((row - 1, column - 2))
+    Some((row - 1, column, box_width))
 }
 
 #[cfg(test)]
@@ -285,10 +285,10 @@ mod tests {
                 top,
                 toolbar_rows,
             ),
-            Some((0, 6))
+            Some((0, 8, 20))
         );
         assert_eq!(
-            crate::toolbar::ToolbarState::default().action_at(0, 6),
+            crate::toolbar::ToolbarState::default().action_at(0, 8, 20),
             Some(crate::toolbar::ToolbarAction::SelectMain(
                 crate::toolbar::MainMode::Line
             ))
@@ -375,7 +375,7 @@ mod tests {
                 top,
                 toolbar.rows(),
             ),
-            Some((toolbar.tooltip_row(), 2))
+            Some((toolbar.tooltip_row(), 4, 40))
         );
     }
 

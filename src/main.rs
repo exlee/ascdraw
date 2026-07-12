@@ -14,6 +14,7 @@ mod diagnostics;
 mod document;
 mod drawing;
 mod editor;
+mod export;
 mod face_resolution;
 mod input;
 mod layout;
@@ -33,6 +34,7 @@ use app::{
 };
 use diagnostics::log_error;
 use editor::EditorState;
+use export::{ExportOutcome, NativeExportPlatform};
 use input::{
     EditCommand, edit_command, pointer_position_to_coord, pointer_position_to_toolbar_position,
 };
@@ -220,6 +222,7 @@ fn try_main() -> Result<ExitCode> {
                                     }
                                     editor.request_redraw();
                                 }
+                                perform_pending_export(editor);
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
@@ -248,11 +251,14 @@ fn try_main() -> Result<ExitCode> {
                             ..
                         } => {
                             let toolbar_action =
-                                editor.mouse_toolbar_position.and_then(|(row, column)| {
-                                    editor.state.toolbar.action_at(row, column)
-                                });
+                                editor
+                                    .mouse_toolbar_position
+                                    .and_then(|(row, column, width)| {
+                                        editor.state.toolbar.action_at(row, column, width)
+                                    });
                             if let Some(action) = toolbar_action {
                                 editor.state.apply_toolbar_action(action);
+                                perform_pending_export(editor);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
                                 let previous_state = editor.state.clone();
@@ -289,6 +295,25 @@ fn try_main() -> Result<ExitCode> {
     })?;
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn perform_pending_export(editor: &mut EditorWindow) {
+    let Some(action) = editor.state.toolbar.take_export_action() else {
+        return;
+    };
+    if action.is_png() {
+        log_error("PNG export is deferred; it will use an Egui canvas-only screenshot");
+        return;
+    }
+    let mut platform = NativeExportPlatform;
+    match export::perform(action, &mut editor.state, &mut platform) {
+        Ok(ExportOutcome::DocumentLoaded) => {
+            editor.viewport = layout::ViewportOffset::default();
+            editor.mark_document_dirty();
+        }
+        Ok(ExportOutcome::Unchanged) => {}
+        Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
+    }
 }
 
 fn app_command_from_user_action(action: UserAction) -> AppCommand {
@@ -527,6 +552,39 @@ mod tests {
         assert_eq!(line_contents(&single_replace.grid.lines[0]), "2");
         assert_eq!(single_replace.grid.cursor_pos, Coord::default());
         assert_eq!(single_replace.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn escape_closes_export_menu_without_collapsing_canvas_selection() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        state.extend_selection(Direction::Right);
+        let bounds = state.selection_bounds();
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Character("0".into()),
+                Some("0"),
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert!(state.toolbar.export_menu_open());
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Escape),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert!(!state.toolbar.export_menu_open());
+        assert_eq!(state.selection_bounds(), bounds);
+        assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
     }
 
     fn line_contents(line: &[crate::model::Atom]) -> String {
