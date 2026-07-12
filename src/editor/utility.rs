@@ -7,7 +7,7 @@ impl EditorState {
         match self.toolbar.utility_kind() {
             UtilityKind::Select => false,
             UtilityKind::Push => self.push_blank(direction),
-            UtilityKind::Pull => self.pull_blank(direction),
+            UtilityKind::Pull => self.pull_all(direction),
         }
     }
 
@@ -40,16 +40,12 @@ impl EditorState {
         }
     }
 
-    fn pull_blank(&mut self, direction: Direction) -> bool {
+    fn pull_all(&mut self, direction: Direction) -> bool {
         match direction {
             Direction::Left => self.pull_column_left(),
             Direction::Right => self.pull_column_right(),
-            Direction::Up => self.pull_columns_up(),
-            Direction::Down if self.grid.cursor_pos.line == 0 => {
-                self.prepend_line();
-                true
-            }
-            Direction::Down => self.pull_columns_down(),
+            Direction::Up => self.pull_row_up(),
+            Direction::Down => self.pull_row_down(),
         }
     }
 
@@ -91,130 +87,169 @@ impl EditorState {
 
     fn pull_column_left(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let mut eligible = vec![false; self.grid.lines.len()];
-        for (line_index, line) in self.grid.lines.iter_mut().enumerate() {
-            if let Some(index) = explicit_blank_index(line, column) {
-                line.remove(index);
-                eligible[line_index] = true;
-            }
-        }
-        if !eligible.iter().any(|eligible| *eligible) {
+        let slots = self
+            .grid
+            .lines
+            .iter()
+            .map(|line| cell_slot(line, column))
+            .collect::<Vec<_>>();
+        if slots.contains(&CellSlot::Interior) {
             return false;
         }
-        self.map_coordinate_state(|mut coord| {
-            if eligible.get(coord.line).copied().unwrap_or(false) && coord.column > column {
-                coord.column -= 1;
+        let removed = slots
+            .iter()
+            .map(|slot| matches!(slot, CellSlot::Exact(_)))
+            .collect::<Vec<_>>();
+        if !removed.iter().any(|removed| *removed) {
+            return false;
+        }
+
+        for (line, slot) in self.grid.lines.iter_mut().zip(slots) {
+            if let CellSlot::Exact(index) = slot {
+                line.remove(index);
             }
-            coord
-        });
+        }
+        self.remap_after_pull(
+            |coord| removed.get(coord.line).copied().unwrap_or(false) && coord.column == column,
+            |mut coord| {
+                if removed.get(coord.line).copied().unwrap_or(false) && coord.column > column {
+                    coord.column -= 1;
+                }
+                coord
+            },
+        );
         true
     }
 
     fn pull_column_right(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let mut eligible = vec![false; self.grid.lines.len()];
-        for (line_index, line) in self.grid.lines.iter_mut().enumerate() {
-            if let Some(index) = explicit_blank_index(line, column) {
+        let slots = self
+            .grid
+            .lines
+            .iter()
+            .map(|line| cell_slot(line, column))
+            .collect::<Vec<_>>();
+        if slots.contains(&CellSlot::Interior) {
+            return false;
+        }
+        let affected = self
+            .grid
+            .lines
+            .iter()
+            .map(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if !affected.iter().any(|affected| *affected) {
+            return false;
+        }
+
+        let old_lines = self.grid.lines.clone();
+        for ((line, slot), affected) in self.grid.lines.iter_mut().zip(slots).zip(&affected) {
+            if !affected {
+                continue;
+            }
+            if let CellSlot::Exact(index) = slot {
                 line.remove(index);
-                line.insert(0, blank_atom());
-                eligible[line_index] = true;
             }
+            line.insert(0, blank_atom());
         }
-        if !eligible.iter().any(|eligible| *eligible) {
+        if self.grid.lines == old_lines {
             return false;
         }
-        self.map_coordinate_state(|mut coord| {
-            if eligible.get(coord.line).copied().unwrap_or(false) && coord.column < column {
-                coord.column = coord.column.saturating_add(1);
-            }
-            coord
-        });
+        self.remap_after_pull(
+            |coord| affected.get(coord.line).copied().unwrap_or(false) && coord.column == column,
+            |mut coord| {
+                if affected.get(coord.line).copied().unwrap_or(false) && coord.column < column {
+                    coord.column = coord.column.saturating_add(1);
+                }
+                coord
+            },
+        );
         true
     }
 
-    fn pull_columns_up(&mut self) -> bool {
+    fn pull_row_up(&mut self) -> bool {
         let target = self.grid.cursor_pos.line.saturating_add(1);
-        if target + 1 >= self.grid.lines.len() {
+        if target >= self.grid.lines.len() {
             return false;
         }
-        let affected = self.eligible_vertical_columns(target, target + 1..self.grid.lines.len());
-        if affected.is_empty() {
-            return false;
-        }
-        let last = self.grid.lines.len() - 1;
-        for column in &affected {
-            for line in target..last {
-                let atom = cell_atom(&self.grid.lines[line + 1], *column).cloned();
-                set_cell_value(&mut self.grid.lines[line], *column, atom);
-            }
-            set_cell_value(&mut self.grid.lines[last], *column, None);
-        }
-        self.map_coordinate_state(|mut coord| {
-            if affected.contains(&coord.column) && coord.line > target {
-                coord.line -= 1;
-            }
-            coord
-        });
+        self.grid.lines.remove(target);
+        self.remap_after_pull(
+            |coord| coord.line == target,
+            |mut coord| {
+                if coord.line > target {
+                    coord.line -= 1;
+                }
+                coord
+            },
+        );
         true
     }
 
-    fn pull_columns_down(&mut self) -> bool {
-        let target = self.grid.cursor_pos.line - 1;
-        if target == 0 {
+    fn pull_row_down(&mut self) -> bool {
+        let cursor_line = self.grid.cursor_pos.line;
+        if cursor_line == 0 {
+            if self.grid.lines.iter().all(Vec::is_empty)
+                && self.line_markers.is_empty()
+                && self.active_stroke.is_none()
+            {
+                return false;
+            }
+            self.prepend_line();
+            self.shape_preview = None;
+            return true;
+        }
+
+        let target = cursor_line - 1;
+        if target >= self.grid.lines.len() {
             return false;
         }
-        let affected = self.eligible_vertical_columns(target, 0..target);
-        if affected.is_empty() {
+        if self.grid.lines[..=target].iter().all(Vec::is_empty)
+            && !self
+                .line_markers
+                .iter()
+                .any(|marker| marker.coord.line <= target)
+        {
             return false;
         }
-        for column in &affected {
-            for line in (1..=target).rev() {
-                let atom = cell_atom(&self.grid.lines[line - 1], *column).cloned();
-                set_cell_value(&mut self.grid.lines[line], *column, atom);
-            }
-            set_cell_value(&mut self.grid.lines[0], *column, None);
-        }
-        self.map_coordinate_state(|mut coord| {
-            if affected.contains(&coord.column) && coord.line < target {
-                coord.line = coord.line.saturating_add(1);
-            }
-            coord
-        });
+        self.grid.lines.remove(target);
+        self.grid.lines.insert(0, Vec::new());
+        self.remap_after_pull(
+            |coord| coord.line == target,
+            |mut coord| {
+                if coord.line < target {
+                    coord.line = coord.line.saturating_add(1);
+                }
+                coord
+            },
+        );
         true
     }
 
-    fn eligible_vertical_columns(
-        &self,
-        target: usize,
-        source_lines: std::ops::Range<usize>,
-    ) -> Vec<usize> {
-        let Some(target_line) = self.grid.lines.get(target) else {
-            return Vec::new();
-        };
-        let candidates = blank_columns(target_line);
-        let validation_start = source_lines.start.min(target);
-        let validation_end = source_lines.end.saturating_sub(1).max(target);
-        candidates
-            .into_iter()
-            .filter(|column| {
-                source_lines.clone().any(|line| {
-                    self.grid
-                        .lines
-                        .get(line)
-                        .and_then(|line| cell_atom(line, *column))
-                        .is_some_and(|atom| !atom.contents.chars().all(char::is_whitespace))
-                })
-            })
-            .filter(|column| {
-                (validation_start..=validation_end).all(|line| {
-                    self.grid
-                        .lines
-                        .get(line)
-                        .map_or(CellSlot::Implicit, |line| cell_slot(line, *column))
-                        != CellSlot::Interior
-                })
-            })
-            .collect()
+    fn remap_after_pull(
+        &mut self,
+        deleted: impl Fn(Coord) -> bool,
+        mut map: impl FnMut(Coord) -> Coord,
+    ) {
+        self.grid.cursor_pos = map(self.grid.cursor_pos);
+        self.selection
+            .select(map(self.selection.anchor()), map(self.selection.active()));
+        self.active_stroke = self.active_stroke.take().and_then(|mut stroke| {
+            if deleted(stroke.end) {
+                None
+            } else {
+                stroke.end = map(stroke.end);
+                Some(stroke)
+            }
+        });
+        self.line_markers.retain(|marker| !deleted(marker.coord));
+        for marker in &mut self.line_markers {
+            marker.coord = map(marker.coord);
+        }
+        self.shape_preview = None;
+        self.cursor_index = index_for_column(
+            &self.grid.lines[self.grid.cursor_pos.line],
+            self.grid.cursor_pos.column,
+        );
     }
 
     fn map_coordinate_state(&mut self, mut map: impl FnMut(Coord) -> Coord) {
@@ -278,49 +313,4 @@ fn cell_slot(line: &[Atom], target: usize) -> CellSlot {
         column = end;
     }
     CellSlot::Implicit
-}
-
-fn cell_atom(line: &[Atom], column: usize) -> Option<&Atom> {
-    match cell_slot(line, column) {
-        CellSlot::Exact(index) => line.get(index),
-        CellSlot::Interior | CellSlot::Implicit => None,
-    }
-}
-
-fn explicit_blank_index(line: &[Atom], column: usize) -> Option<usize> {
-    match cell_slot(line, column) {
-        CellSlot::Exact(index) if line[index].contents.chars().all(char::is_whitespace) => {
-            Some(index)
-        }
-        CellSlot::Exact(_) | CellSlot::Interior | CellSlot::Implicit => None,
-    }
-}
-
-fn blank_columns(line: &[Atom]) -> Vec<usize> {
-    let mut columns = Vec::new();
-    let mut column: usize = 0;
-    for atom in line {
-        let width = atom_width(atom);
-        if width == 1 && atom.contents.chars().all(char::is_whitespace) {
-            columns.push(column);
-        }
-        column = column.saturating_add(width);
-    }
-    columns
-}
-
-fn set_cell_value(line: &mut Vec<Atom>, column: usize, atom: Option<Atom>) {
-    match (cell_slot(line, column), atom) {
-        (CellSlot::Exact(index), Some(atom)) => line[index] = atom,
-        (CellSlot::Exact(index), None) => line[index] = blank_atom(),
-        (CellSlot::Implicit, Some(atom)) => {
-            let width = display_width(line);
-            line.extend((width..column).map(|_| blank_atom()));
-            line.push(atom);
-        }
-        (CellSlot::Implicit, None) => {}
-        (CellSlot::Interior, _) => {
-            unreachable!("wide grapheme columns are filtered before transforms")
-        }
-    }
 }

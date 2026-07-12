@@ -253,17 +253,19 @@ pub enum Tooltip {
 
 impl Tooltip {
     pub fn text(self) -> String {
-        const MISC_TIP: [&str; 3] = [
+        const MISC_TIP: [&str; 5] = [
             "Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
-            "Ctrl-hjkl/arrows resize selection",
-            "Alt-hjkl/arrows/erase",
+            "Select with Ctrl-<direction>",
+            "Erase with Alt-<direction>",
+            "Direction keys are ←→↓↑ and hjkl",
+            "Add Ctrl/Alt/Shift second for 5/10 steps"
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as usize;
 
-        let selector = (timestamp % 30) / 10;
+        let selector = (timestamp % 35) / 7;
         let misc = MISC_TIP[selector];
 
         let primary = match self {
@@ -276,7 +278,7 @@ impl Tooltip {
             Self::UtilitiesSelect => "",
             Self::UtilitiesPush => "Push: Shift-hjkl/arrows inserts a blank row or column",
             Self::UtilitiesPull => {
-                "Pull: Shift-hjkl/arrows removes eligible blanks and pulls content"
+                "Pull: Shift-direction pulls"
             }
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",

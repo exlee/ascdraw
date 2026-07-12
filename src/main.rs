@@ -784,6 +784,45 @@ mod tests {
     }
 
     #[test]
+    fn ordered_shift_pull_all_repeats_five_or_ten_times_as_one_document_change() {
+        for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
+            let source = "abcdefghijkl";
+            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            state.insert(source);
+            state.move_to(Coord::default());
+            assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+            assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+                submenu: 0,
+                option: 2,
+            }));
+            let before = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            let combined = ModifiersState::SHIFT | secondary;
+
+            assert_eq!(
+                dispatch_ordered(
+                    &mut state,
+                    Key::Character("h".into()),
+                    &[ModifiersState::SHIFT, combined],
+                ),
+                Some(true)
+            );
+            let expected = format!("a{}", &source[steps + 1..]);
+            assert_eq!(line_contents(&state.grid.lines[0]), expected);
+
+            let after = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            let mut history = history::EditHistory::default();
+            assert!(history.record_change(before.clone(), &after));
+            assert_eq!(history.undo(after), Some(before));
+        }
+    }
+
+    #[test]
     fn one_ordered_keypress_is_one_history_record_and_origin_prepends_aggregate() {
         let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
         let before = history::HistorySnapshot {

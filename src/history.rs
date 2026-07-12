@@ -159,6 +159,8 @@ mod tests {
             submenu: 0,
             option: 2,
         });
+        state.grid.cursor_pos.column = 99;
+        state.selection.collapse(state.grid.cursor_pos);
         assert!(!state.apply_utility(Direction::Left));
         let no_op = HistorySnapshot {
             edit: state.edit_snapshot(),

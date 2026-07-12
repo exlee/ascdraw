@@ -2211,46 +2211,220 @@ mod tests {
     }
 
     #[test]
-    fn pull_horizontal_directions_follow_the_literal_asymmetry_and_blank_guard() {
-        let mut left = utility_state(&["a bx", "abx", ""], UtilityKind::Pull, Coord::default());
+    fn pull_horizontal_directions_remove_all_content_with_literal_asymmetry() {
+        let mut left = utility_state(
+            &["abcd", "xy", ""],
+            UtilityKind::Pull,
+            Coord { line: 0, column: 1 },
+        );
         assert!(left.apply_utility(Direction::Left));
-        assert_eq!(line_contents(&left), vec!["abx", "abx", ""]);
+        assert_eq!(line_contents(&left), vec!["abd", "xy", ""]);
 
-        let mut right = utility_state(&["a bx", "abx", ""], UtilityKind::Pull, Coord::default());
+        let mut right = utility_state(
+            &["abcd", "xy", ""],
+            UtilityKind::Pull,
+            Coord { line: 0, column: 1 },
+        );
         assert!(right.apply_utility(Direction::Right));
-        assert_eq!(line_contents(&right), vec![" abx", "abx", ""]);
-        assert_eq!(right.grid.cursor_pos.column, 1);
-
-        let mut blocked = utility_state(&["a界x"], UtilityKind::Pull, Coord::default());
-        assert!(!blocked.apply_utility(Direction::Left));
-        assert_eq!(line_contents(&blocked), vec!["a界x"]);
+        assert_eq!(line_contents(&right), vec![" abd", " xy", ""]);
+        assert_eq!(right.grid.cursor_pos.column, 2);
     }
 
     #[test]
-    fn pull_vertical_directions_shift_only_columns_with_explicit_blanks() {
+    fn pull_left_compresses_every_row_in_the_supplied_overlapping_boxes() {
+        let input = [
+            "                     ╭────────╮",
+            "                     │        │",
+            "               ┌─────│─────┐  │",
+            "               │     │     │  │",
+            "               │     │     │  │",
+            "               └─────│─────┘  │",
+            "  ╭─────────────╮    │        │",
+            "  │             │    ╰────────╯",
+            "  │    X        │",
+            "  │             │",
+            "  │             │",
+            "  │             │",
+            "  │             │",
+            "  ╰─────────────╯",
+        ];
+        let expected = vec![
+            "                    ╭────────╮",
+            "                    │        │",
+            "              ┌─────│─────┐  │",
+            "              │     │     │  │",
+            "              │     │     │  │",
+            "              └─────│─────┘  │",
+            "  ╭────────────╮    │        │",
+            "  │            │    ╰────────╯",
+            "  │    X       │",
+            "  │            │",
+            "  │            │",
+            "  │            │",
+            "  │            │",
+            "  ╰────────────╯",
+        ];
+        let mut state = utility_state(&input, UtilityKind::Pull, Coord { line: 8, column: 7 });
+
+        assert!(state.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&state), expected);
+    }
+
+    #[test]
+    fn pull_horizontal_rejects_the_whole_operation_for_either_wide_atom_cell() {
+        for cursor_column in [0, 1] {
+            let mut state = utility_state(
+                &["abc", "a界z"],
+                UtilityKind::Pull,
+                Coord {
+                    line: 0,
+                    column: cursor_column,
+                },
+            );
+            let before = state.edit_snapshot();
+
+            assert!(!state.apply_utility(Direction::Left));
+            assert_eq!(state.edit_snapshot(), before);
+
+            assert!(!state.apply_utility(Direction::Right));
+            assert_eq!(state.edit_snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn pull_right_shifts_ragged_finite_prefixes_without_growing_empty_rows() {
+        let mut state = utility_state(
+            &["a", "abcd", "", "xy"],
+            UtilityKind::Pull,
+            Coord { line: 1, column: 2 },
+        );
+
+        assert!(state.apply_utility(Direction::Right));
+        assert_eq!(line_contents(&state), vec![" a", " abc", "", " xy"]);
+        assert_eq!(state.grid.cursor_pos.column, 3);
+    }
+
+    #[test]
+    fn pull_preserves_shifted_faces_and_removes_or_remaps_line_metadata() {
+        let mut state = utility_state(&["ABCD"], UtilityKind::Pull, Coord { line: 0, column: 0 });
+        for (index, atom) in state.grid.lines[0].iter_mut().enumerate() {
+            atom.face.fg = format!("#{index}{index}{index}{index}{index}{index}");
+        }
+        state
+            .selection
+            .select(Coord { line: 0, column: 0 }, Coord { line: 0, column: 3 });
+        state.active_stroke = Some(ActiveStroke {
+            end: Coord { line: 0, column: 1 },
+            end_base_glyph: "─".into(),
+            moving_ending: LineEnding::None,
+        });
+        state.line_markers.extend([
+            PlacedLineMarker {
+                coord: Coord { line: 0, column: 1 },
+                ending: LineEnding::None,
+                base_glyph: "B".into(),
+            },
+            PlacedLineMarker {
+                coord: Coord { line: 0, column: 3 },
+                ending: LineEnding::None,
+                base_glyph: "D".into(),
+            },
+        ]);
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord { line: 0, column: 0 },
+            end: Coord { line: 0, column: 3 },
+        });
+
+        assert!(state.apply_utility(Direction::Left));
+        assert_eq!(line_contents(&state), vec!["ACD"]);
+        assert_eq!(state.grid.lines[0][0].face.fg, "#000000");
+        assert_eq!(state.grid.lines[0][1].face.fg, "#222222");
+        assert_eq!(state.grid.lines[0][2].face.fg, "#333333");
+        assert_eq!(state.selection.active().column, 2);
+        assert!(state.active_stroke.is_none());
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].coord.column, 2);
+        assert!(state.shape_preview.is_none());
+    }
+
+    #[test]
+    fn pull_vertical_directions_remove_entire_rows_with_nonblank_content() {
         let mut up = utility_state(
-            &["AX", " Y", "BX", "CX"],
+            &["AX", "BY", "界Z", "CX"],
             UtilityKind::Pull,
             Coord::default(),
         );
         assert!(up.apply_utility(Direction::Up));
-        assert_eq!(line_contents(&up), vec!["AX", "BY", "CX", " X"]);
+        assert_eq!(line_contents(&up), vec!["AX", "界Z", "CX"]);
 
         let mut down = utility_state(
-            &["AX", "BX", " Y", "ZX"],
+            &["AX", "BY", "界Z", "CX"],
             UtilityKind::Pull,
             Coord { line: 3, column: 0 },
         );
         assert!(down.apply_utility(Direction::Down));
-        assert_eq!(line_contents(&down), vec![" X", "AX", "BY", "ZX"]);
+        assert_eq!(line_contents(&down), vec!["", "AX", "BY", "CX"]);
+        assert_eq!(down.grid.cursor_pos.line, 3);
+    }
 
-        let mut ragged = utility_state(
-            &["Q", "  ", "a", "bX", "c"],
+    #[test]
+    fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
+        let mut state = utility_state(
+            &["A", "B", "C", "D"],
             UtilityKind::Pull,
-            Coord::default(),
+            Coord { line: 1, column: 0 },
         );
-        assert!(ragged.apply_utility(Direction::Up));
-        assert_eq!(line_contents(&ragged), vec!["Q", "a ", "bX", "c ", " "]);
+        state
+            .selection
+            .select(Coord { line: 1, column: 0 }, Coord { line: 3, column: 0 });
+        state.active_stroke = Some(ActiveStroke {
+            end: Coord { line: 3, column: 0 },
+            end_base_glyph: "D".into(),
+            moving_ending: LineEnding::None,
+        });
+        state.line_markers.extend([
+            PlacedLineMarker {
+                coord: Coord { line: 2, column: 0 },
+                ending: LineEnding::None,
+                base_glyph: "C".into(),
+            },
+            PlacedLineMarker {
+                coord: Coord { line: 3, column: 0 },
+                ending: LineEnding::None,
+                base_glyph: "D".into(),
+            },
+        ]);
+
+        assert!(state.apply_utility(Direction::Up));
+        assert_eq!(line_contents(&state), vec!["A", "B", "D"]);
+        assert_eq!(state.selection.active().line, 2);
+        assert_eq!(state.active_stroke.as_ref().unwrap().end.line, 2);
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].coord.line, 2);
+    }
+
+    #[test]
+    fn pull_vertical_no_target_is_no_op_and_origin_down_prepends_safely() {
+        let mut no_target = utility_state(&["x"], UtilityKind::Pull, Coord::default());
+        let before = no_target.edit_snapshot();
+        assert!(!no_target.apply_utility(Direction::Up));
+        assert_eq!(no_target.edit_snapshot(), before);
+
+        let mut down = utility_state(&["界", "z"], UtilityKind::Pull, Coord::default());
+        assert!(down.apply_utility(Direction::Down));
+        assert_eq!(line_contents(&down), vec!["", "界", "z"]);
+        assert_eq!(down.grid.cursor_pos.line, 1);
+        assert_eq!(down.take_pending_prepend(), (0, 1));
+
+        let mut blank = utility_state(&[""], UtilityKind::Pull, Coord::default());
+        assert!(!blank.apply_utility(Direction::Down));
+        assert_eq!(line_contents(&blank), vec![""]);
+
+        let mut unchanged =
+            utility_state(&["", "x"], UtilityKind::Pull, Coord { line: 1, column: 0 });
+        let before = unchanged.edit_snapshot();
+        assert!(!unchanged.apply_utility(Direction::Down));
+        assert_eq!(unchanged.edit_snapshot(), before);
     }
 
     #[test]
