@@ -97,13 +97,13 @@ fn inner_screen_offsets(viewport_cells: usize) -> (i64, i64) {
     let outer_margin = SCROLL_MARGIN_CELLS
         .saturating_sub(1)
         .min(viewport_cells.saturating_sub(1) / 2);
-    (
-        outer_margin.saturating_add(1),
-        viewport_cells.saturating_sub(outer_margin),
-    )
+    let end = viewport_cells
+        .saturating_sub(outer_margin)
+        .min(viewport_cells.saturating_sub(1));
+    (outer_margin.saturating_add(1).min(end), end)
 }
 
-fn content_intersects_inner_screen(
+pub fn content_intersects_inner_screen(
     origin: (i64, i64),
     viewport: (usize, usize),
     content: &[Coord],
@@ -119,6 +119,84 @@ fn content_intersects_inner_screen(
             .saturating_sub(origin.1);
         (horizontal.0..=horizontal.1).contains(&x) && (vertical.0..=vertical.1).contains(&y)
     })
+}
+
+pub fn cursor_is_visible(origin: (i64, i64), cursor: Coord, viewport: (usize, usize)) -> bool {
+    let x = i64::try_from(cursor.column)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(origin.0);
+    let y = i64::try_from(cursor.line)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(origin.1);
+    (0..i64::try_from(viewport.0.max(1)).unwrap_or(i64::MAX)).contains(&x)
+        && (0..i64::try_from(viewport.1.max(1)).unwrap_or(i64::MAX)).contains(&y)
+}
+
+fn clamp_to_range(value: i64, range: (i64, i64)) -> Option<i64> {
+    (range.0 <= range.1).then(|| value.clamp(range.0, range.1))
+}
+
+/// Finds the nearest origin which keeps the cursor visible and one actual
+/// content cell inside the inner screen. Both axes must be satisfied by the
+/// same content cell.
+pub fn constrained_origin(
+    desired: (i64, i64),
+    cursor: Coord,
+    viewport: (usize, usize),
+    content: &[Coord],
+) -> Option<(i64, i64)> {
+    let cursor_x = i64::try_from(cursor.column).unwrap_or(i64::MAX);
+    let cursor_y = i64::try_from(cursor.line).unwrap_or(i64::MAX);
+    let cursor_ranges = (
+        (
+            cursor_x
+                .saturating_sub(i64::try_from(viewport.0.saturating_sub(1)).unwrap_or(i64::MAX)),
+            cursor_x,
+        ),
+        (
+            cursor_y
+                .saturating_sub(i64::try_from(viewport.1.saturating_sub(1)).unwrap_or(i64::MAX)),
+            cursor_y,
+        ),
+    );
+    if content.is_empty() {
+        return Some((
+            clamp_to_range(desired.0, cursor_ranges.0)?,
+            clamp_to_range(desired.1, cursor_ranges.1)?,
+        ));
+    }
+
+    let horizontal = inner_screen_offsets(viewport.0);
+    let vertical = inner_screen_offsets(viewport.1);
+    content
+        .iter()
+        .filter_map(|coord| {
+            let x = i64::try_from(coord.column).unwrap_or(i64::MAX);
+            let y = i64::try_from(coord.line).unwrap_or(i64::MAX);
+            let x_range = (
+                cursor_ranges.0.0.max(x.saturating_sub(horizontal.1)),
+                cursor_ranges.0.1.min(x.saturating_sub(horizontal.0)),
+            );
+            let y_range = (
+                cursor_ranges.1.0.max(y.saturating_sub(vertical.1)),
+                cursor_ranges.1.1.min(y.saturating_sub(vertical.0)),
+            );
+            let origin = (
+                clamp_to_range(desired.0, x_range)?,
+                clamp_to_range(desired.1, y_range)?,
+            );
+            let distance = desired
+                .0
+                .abs_diff(origin.0)
+                .saturating_add(desired.1.abs_diff(origin.1));
+            Some((distance, origin))
+        })
+        .min_by_key(|candidate| *candidate)
+        .map(|(_, origin)| origin)
+        .filter(|origin| {
+            cursor_is_visible(*origin, cursor, viewport)
+                && content_intersects_inner_screen(*origin, viewport, content)
+        })
 }
 
 pub fn cursor_origin(current: i64, cursor: usize, viewport_cells: usize) -> i64 {
@@ -143,49 +221,44 @@ pub fn navigation_origin(
         cursor_origin(current.0, cursor.column, viewport.0),
         cursor_origin(current.1, cursor.line, viewport.1),
     );
-    if content.is_empty() {
-        return Some(desired);
-    }
-    content_intersects_inner_screen(desired, viewport, content).then_some(desired)
+    constrained_origin(desired, cursor, viewport, content)
 }
 
-pub fn clamped_navigation_origin(
-    current: (i64, i64),
+/// Resize/layout fallback. If the old cursor cannot coexist with content in
+/// the reduced viewport, move it to the nearest actual content cell.
+pub fn normalized_cursor_and_origin(
+    desired: (i64, i64),
     cursor: Coord,
     viewport: (usize, usize),
     content: &[Coord],
-) -> (i64, i64) {
-    let desired = (
-        cursor_origin(current.0, cursor.column, viewport.0),
-        cursor_origin(current.1, cursor.line, viewport.1),
-    );
-    if content.is_empty() {
-        return desired;
+) -> (Coord, (i64, i64)) {
+    if let Some(origin) = constrained_origin(desired, cursor, viewport, content) {
+        return (cursor, origin);
     }
-    let horizontal = inner_screen_offsets(viewport.0);
-    let vertical = inner_screen_offsets(viewport.1);
     content
         .iter()
-        .map(|coord| {
-            let x = i64::try_from(coord.column).unwrap_or(i64::MAX);
-            let y = i64::try_from(coord.line).unwrap_or(i64::MAX);
-            let origin = (
-                desired.0.clamp(
-                    x.saturating_sub(horizontal.1),
-                    x.saturating_sub(horizontal.0),
-                ),
-                desired
-                    .1
-                    .clamp(y.saturating_sub(vertical.1), y.saturating_sub(vertical.0)),
-            );
-            let distance = desired
+        .filter_map(|candidate| {
+            let origin = constrained_origin(desired, *candidate, viewport, content)?;
+            let cursor_distance = cursor
+                .column
+                .abs_diff(candidate.column)
+                .saturating_add(cursor.line.abs_diff(candidate.line));
+            let origin_distance = desired
                 .0
                 .abs_diff(origin.0)
                 .saturating_add(desired.1.abs_diff(origin.1));
-            (distance, origin)
+            Some((cursor_distance, origin_distance, *candidate, origin))
         })
-        .min_by_key(|candidate| *candidate)
-        .map_or(desired, |(_, origin)| origin)
+        .min_by_key(|candidate| {
+            (
+                candidate.0,
+                candidate.1,
+                candidate.2.line,
+                candidate.2.column,
+                candidate.3,
+            )
+        })
+        .map_or((cursor, desired), |(_, _, cursor, origin)| (cursor, origin))
 }
 
 fn cell_delta(index: usize, old_size: usize, new_size: usize) -> i64 {
@@ -476,6 +549,150 @@ mod tests {
             ),
             Some((0, 0))
         );
+    }
+
+    #[test]
+    fn cursor_visibility_uses_all_four_inclusive_viewport_edges() {
+        let viewport = (10, 10);
+        for cursor in [
+            Coord { line: 0, column: 0 },
+            Coord { line: 0, column: 9 },
+            Coord { line: 9, column: 0 },
+            Coord { line: 9, column: 9 },
+        ] {
+            assert!(cursor_is_visible((0, 0), cursor, viewport));
+        }
+        assert!(!cursor_is_visible(
+            (0, 0),
+            Coord {
+                line: 5,
+                column: 10
+            },
+            viewport
+        ));
+        assert!(!cursor_is_visible(
+            (0, 0),
+            Coord {
+                line: 10,
+                column: 5
+            },
+            viewport
+        ));
+    }
+
+    #[test]
+    fn next_horizontal_and_vertical_blank_escape_steps_are_rejected() {
+        let content = [Coord { line: 5, column: 5 }];
+        let viewport = (10, 10);
+        let horizontal_edge = Coord {
+            line: 5,
+            column: 11,
+        };
+        let vertical_edge = Coord {
+            line: 11,
+            column: 5,
+        };
+        let horizontal_origin = navigation_origin((0, 0), horizontal_edge, viewport, &content)
+            .expect("last horizontal position remains legal");
+        let vertical_origin = navigation_origin((0, 0), vertical_edge, viewport, &content)
+            .expect("last vertical position remains legal");
+        assert!(cursor_is_visible(
+            horizontal_origin,
+            horizontal_edge,
+            viewport
+        ));
+        assert!(cursor_is_visible(vertical_origin, vertical_edge, viewport));
+        assert_eq!(
+            navigation_origin(
+                horizontal_origin,
+                Coord {
+                    line: 5,
+                    column: 12
+                },
+                viewport,
+                &content
+            ),
+            None
+        );
+        assert_eq!(
+            navigation_origin(
+                vertical_origin,
+                Coord {
+                    line: 12,
+                    column: 5
+                },
+                viewport,
+                &content
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn blank_canvas_keeps_even_a_far_cursor_visible() {
+        let cursor = Coord {
+            line: 80,
+            column: 90,
+        };
+        let origin = navigation_origin((0, 0), cursor, (10, 10), &[]).unwrap();
+        assert!(cursor_is_visible(origin, cursor, (10, 10)));
+    }
+
+    #[test]
+    fn prepend_compensation_remains_legal_and_visible() {
+        let content = [Coord { line: 6, column: 6 }];
+        let cursor = Coord { line: 0, column: 0 };
+        let origin = navigation_origin((-1, -1), cursor, (10, 10), &content).unwrap();
+        assert_eq!(origin, (-1, -1));
+        assert!(cursor_is_visible(origin, cursor, (10, 10)));
+        assert!(content_intersects_inner_screen(origin, (10, 10), &content));
+    }
+
+    #[test]
+    fn smaller_layout_clamps_an_impossible_cross_axis_cursor_to_content() {
+        let content = [
+            Coord { line: 1, column: 1 },
+            Coord {
+                line: 10,
+                column: 10,
+            },
+        ];
+        let old_cursor = Coord {
+            line: 1,
+            column: 10,
+        };
+        assert_eq!(
+            constrained_origin((0, 0), old_cursor, (10, 10), &content),
+            None
+        );
+        let (cursor, origin) = normalized_cursor_and_origin((0, 0), old_cursor, (10, 10), &content);
+        assert_eq!(cursor, content[0]);
+        assert!(cursor_is_visible(origin, cursor, (10, 10)));
+        assert!(content_intersects_inner_screen(origin, (10, 10), &content));
+    }
+
+    #[test]
+    fn larger_layout_preserves_a_cursor_that_a_smaller_layout_must_clamp() {
+        let content = [Coord { line: 5, column: 5 }];
+        let cursor = Coord {
+            line: 20,
+            column: 20,
+        };
+        let (small_cursor, _) = normalized_cursor_and_origin((0, 0), cursor, (10, 10), &content);
+        let (large_cursor, large_origin) =
+            normalized_cursor_and_origin((0, 0), cursor, (24, 24), &content);
+        assert_eq!(small_cursor, content[0]);
+        assert_eq!(large_cursor, cursor);
+        assert!(cursor_is_visible(large_origin, large_cursor, (24, 24)));
+    }
+
+    #[test]
+    fn one_cell_layout_still_has_a_valid_inner_screen() {
+        let point = Coord { line: 7, column: 9 };
+        let origin = constrained_origin((0, 0), point, (1, 1), &[point]).unwrap();
+        assert_eq!(origin, (9, 7));
+        assert!(cursor_is_visible(origin, point, (1, 1)));
+        assert!(content_intersects_inner_screen(origin, (1, 1), &[point]));
     }
 
     #[test]

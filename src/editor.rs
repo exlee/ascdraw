@@ -324,6 +324,19 @@ impl EditorState {
         self.grid.lines.len() != old_line_count || coord.column > old_width
     }
 
+    /// Used when a smaller viewport can no longer contain both the active
+    /// cursor and the drawing. The target is an existing content cell, so this
+    /// does not allocate blank rows or columns merely because the window was
+    /// resized.
+    pub fn clamp_cursor_to_content(&mut self, coord: Coord) {
+        self.end_stroke();
+        self.shape_preview = None;
+        self.grid.cursor_pos = coord;
+        self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
+        self.sync_cursor_column();
+        self.collapse_selection();
+    }
+
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
@@ -1463,6 +1476,23 @@ mod tests {
                 column: 12,
             }]
         );
+    }
+
+    #[test]
+    fn viewport_clamp_moves_cursor_and_collapses_selection_without_changing_lines() {
+        let mut state = state();
+        state.move_to(Coord { line: 5, column: 5 });
+        state.write_text("x");
+        state.move_to(Coord { line: 1, column: 1 });
+        state.extend_selection(Direction::Right);
+        let lines = state.grid.lines.clone();
+
+        state.clamp_cursor_to_content(Coord { line: 5, column: 5 });
+
+        assert_eq!(state.grid.cursor_pos, Coord { line: 5, column: 5 });
+        assert!(state.selection.is_collapsed());
+        assert_eq!(state.selection.active(), state.grid.cursor_pos);
+        assert_eq!(state.grid.lines, lines);
     }
 
     #[test]

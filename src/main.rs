@@ -146,6 +146,7 @@ fn try_main() -> Result<ExitCode> {
                                 log_error(format!("surface resize failed: {error:#}"));
                                 should_close = true;
                             }
+                            editor.ensure_cursor_in_viewport();
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
@@ -258,6 +259,7 @@ fn try_main() -> Result<ExitCode> {
                                     });
                             if let Some(action) = toolbar_action {
                                 editor.state.apply_toolbar_action(action);
+                                editor.ensure_cursor_in_viewport();
                                 perform_pending_export(editor);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
@@ -272,7 +274,10 @@ fn try_main() -> Result<ExitCode> {
                                 editor.request_redraw();
                             }
                         }
-                        WindowEvent::ScaleFactorChanged { .. } => editor.request_redraw(),
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            editor.ensure_cursor_in_viewport();
+                            editor.request_redraw();
+                        }
                         _ => {}
                     }
                 }
@@ -309,6 +314,7 @@ fn perform_pending_export(editor: &mut EditorWindow) {
     match export::perform(action, &mut editor.state, &mut platform) {
         Ok(ExportOutcome::DocumentLoaded) => {
             editor.viewport = layout::ViewportOffset::default();
+            editor.ensure_cursor_in_viewport();
             editor.mark_document_dirty();
         }
         Ok(ExportOutcome::Unchanged) => {}
