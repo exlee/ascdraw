@@ -185,7 +185,7 @@ const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["Rect", "Round"],
     &["─", "━", "═"],
-    &["·", "░", "▒", "▓", "█"],
+    &[" ", "░", "▒", "▓", "█"],
 ];
 const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull"].as_slice()];
 

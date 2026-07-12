@@ -6,7 +6,7 @@ bg = "#ffffff"
 fg = "#ff0000"
 
 [selection-highlight]
-fg = "#800080"
+fg = "#004DFF"
 
 [cursor-drawing]
 fg = "#00008b"
