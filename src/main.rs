@@ -182,7 +182,7 @@ fn try_main() -> Result<ExitCode> {
                                 pending_command = Some(app_command_from_user_action(action));
                             } else if editor
                                 .state
-                                .cycle_toolbar_shortcut(&event.logical_key, editor.modifiers)
+                                .handle_toolbar_shortcut(&event.logical_key, editor.modifiers)
                             {
                                 editor.request_redraw();
                             } else if let Some(command) =

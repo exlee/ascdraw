@@ -1,10 +1,18 @@
 use unicode_width::UnicodeWidthStr;
-use winit::keyboard::{Key, ModifiersState};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 
-pub const TOOLBAR_ROWS: usize = 4;
+pub const TOOLBAR_ROWS: usize = 7;
 pub const TOOLBAR_ROW_GAP: usize = 6;
+pub const TOOLTIP_ROW: usize = TOOLBAR_ROWS - 1;
+
+const MAIN_LABEL_ROW: usize = 0;
+const MAIN_SHORTCUT_ROW: usize = 1;
+const MENU_FIRST_ROW: usize = 2;
+const MENU_LAST_ROW: usize = TOOLTIP_ROW - 1;
+const OPTIONS_PER_PAGE: usize = 10;
+const GAP: &str = "    ";
 
 pub fn toolbar_height(cell_height: usize) -> usize {
     TOOLBAR_ROWS * cell_height + (TOOLBAR_ROWS - 1) * TOOLBAR_ROW_GAP
@@ -14,7 +22,6 @@ pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
     row * TOOLBAR_ROW_GAP
 }
 
-const GAP: &str = "    ";
 const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
 const LINE_OPTIONS: [&[&str]; 4] = [
     &["·", "◀", "◆", "●"],
@@ -22,29 +29,17 @@ const LINE_OPTIONS: [&[&str]; 4] = [
     &["─", "━", "═"],
     &["Smooth", "Sharp"],
 ];
-const STAMP_LABELS: [&str; 10] = [
-    "Decorators 1",
-    "Decorators 2",
-    "Decorators 3",
-    "Fills 1",
-    "Fills 2",
-    "Fills 3",
-    "Fills 4",
-    "Blocks 1",
-    "Blocks 2",
-    "Blocks 3",
-];
-const STAMP_OPTIONS: [&[&str]; 10] = [
-    &["○", "●", "◇", "◆", "□"],
-    &["■", "△", "▲", "☆", "★"],
-    &["+", "×", "※", "•"],
-    &["░", "▒", "▓", "█"],
-    &["▁", "▂", "▃", "▄"],
-    &["▅", "▆", "▇", "▀"],
-    &["▌", "▐", "▊", "▉"],
-    &["▘", "▝", "▀", "▖", "▌"],
-    &["▞", "▛", "▗", "▚", "▐"],
-    &["▜", "▄", "▙", "▟", "█"],
+const STAMP_LABELS: [&str; 3] = ["Decorators", "Fills", "Blocks"];
+const STAMP_OPTIONS: [&[&str]; 3] = [
+    &[
+        "○", "●", "◇", "◆", "□", "■", "△", "▲", "☆", "★", "+", "×", "※", "•",
+    ],
+    &[
+        "░", "▒", "▓", "█", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▀", "▌", "▐", "▊", "▉",
+    ],
+    &[
+        "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
+    ],
 ];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
@@ -85,13 +80,21 @@ impl MainMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortcutPrefix {
+    Mode,
+    Category(usize),
+    Option { category: usize, page: usize },
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolbarState {
     main_mode: MainMode,
     line_selected: [usize; LINE_LABELS.len()],
     stamp_selected: [usize; STAMP_LABELS.len()],
-    stamp_active_submenu: usize,
+    stamp_active_category: usize,
     shape_selected: [usize; SHAPE_LABELS.len()],
+    shortcut_prefix: Option<ShortcutPrefix>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,8 +106,6 @@ pub struct ToolbarSpan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarAction {
-    CycleMain,
-    CycleSubmenu(usize),
     SelectMain(MainMode),
     SelectSubmenu { submenu: usize, option: usize },
 }
@@ -117,111 +118,162 @@ struct MenuLayout<'a> {
 }
 
 impl ToolbarState {
-    pub fn cycle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        if modifiers.alt_key() {
-            return false;
-        }
-
-        let Key::Character(text) = key else {
-            return false;
-        };
-        let overflow_modifier = modifiers.control_key() || modifiers.super_key();
-        let Some(index) = toolbar_index(text, modifiers.shift_key(), overflow_modifier) else {
-            return false;
-        };
-        let backwards = modifiers.shift_key();
-
-        if index == 0 {
-            let current = MainMode::ALL
-                .iter()
-                .position(|mode| *mode == self.main_mode)
-                .expect("main mode is in the mode list");
-            self.main_mode = MainMode::ALL[cycle_index(current, MainMode::ALL.len(), backwards)];
+    pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+        if matches!(key, Key::Named(NamedKey::Escape)) && self.shortcut_prefix.is_some() {
+            self.shortcut_prefix = None;
             return true;
         }
 
-        let submenu = index - 1;
-        match self.main_mode {
-            MainMode::Line => {
-                cycle_selected(&mut self.line_selected, &LINE_OPTIONS, submenu, backwards)
-            }
-            MainMode::Stamp => {
-                if !cycle_selected(&mut self.stamp_selected, &STAMP_OPTIONS, submenu, backwards) {
-                    return false;
-                }
-                self.stamp_active_submenu = submenu;
-                true
-            }
-            MainMode::Shapes => {
-                cycle_selected(&mut self.shape_selected, &SHAPE_OPTIONS, submenu, backwards)
-            }
-            MainMode::Utilities => submenu == 0,
+        if modifiers != ModifiersState::empty() {
+            return self.cancel_pending_shortcut();
         }
+        let Key::Character(text) = key else {
+            return self.cancel_pending_shortcut();
+        };
+        let Some(digit) = shortcut_digit(text) else {
+            return self.cancel_pending_shortcut();
+        };
+
+        match self.shortcut_prefix.take() {
+            None => {
+                self.shortcut_prefix = if digit == 1 {
+                    Some(ShortcutPrefix::Mode)
+                } else {
+                    digit
+                        .checked_sub(2)
+                        .filter(|category| *category < self.layout().labels.len())
+                        .map(ShortcutPrefix::Category)
+                };
+            }
+            Some(ShortcutPrefix::Mode) => {
+                if let Some(mode) = digit
+                    .checked_sub(1)
+                    .and_then(|index| MainMode::ALL.get(index))
+                {
+                    self.main_mode = *mode;
+                }
+            }
+            Some(ShortcutPrefix::Category(category)) => {
+                if let Some(page) = digit.checked_sub(1)
+                    && self
+                        .layout()
+                        .options
+                        .get(category)
+                        .is_some_and(|options| page * OPTIONS_PER_PAGE < options.len())
+                {
+                    self.shortcut_prefix = Some(ShortcutPrefix::Option { category, page });
+                }
+            }
+            Some(ShortcutPrefix::Option { category, page }) => {
+                let position = if digit == 0 { 9 } else { digit - 1 };
+                let option = page * OPTIONS_PER_PAGE + position;
+                self.apply_action(ToolbarAction::SelectSubmenu {
+                    submenu: category,
+                    option,
+                });
+            }
+        }
+        true
+    }
+
+    pub fn cancel_shortcut(&mut self) {
+        self.shortcut_prefix = None;
+    }
+
+    fn cancel_pending_shortcut(&mut self) -> bool {
+        self.shortcut_prefix.take().is_some()
     }
 
     pub fn main_mode(&self) -> MainMode {
         self.main_mode
     }
 
-    pub fn main_spans(&self) -> Vec<ToolbarSpan> {
-        let mut spans = vec![ToolbarSpan {
-            contents: "<1> ".to_string(),
-            selected: false,
-            action: Some(ToolbarAction::CycleMain),
-        }];
+    pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        match row {
+            MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
+            MENU_FIRST_ROW..=MENU_LAST_ROW => self.menu_spans(row),
+            _ => Vec::new(),
+        }
+    }
+
+    fn main_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let mut spans = vec![plain_span(if row == MAIN_LABEL_ROW {
+            "Mode: ".to_string()
+        } else {
+            "1.    ".to_string()
+        })];
         for (index, mode) in MainMode::ALL.iter().enumerate() {
             if index > 0 {
-                spans.push(ToolbarSpan {
-                    contents: " ".to_string(),
-                    selected: false,
-                    action: None,
-                });
+                spans.push(plain_span(" ".to_string()));
             }
+            let contents = if row == MAIN_LABEL_ROW {
+                mode.label().to_string()
+            } else if index + 1 == MainMode::ALL.len() {
+                (index + 1).to_string()
+            } else {
+                aligned_shortcut(index + 1, mode.label())
+            };
             spans.push(ToolbarSpan {
-                contents: mode.label().to_string(),
-                selected: *mode == self.main_mode,
+                contents,
+                selected: row == MAIN_LABEL_ROW && *mode == self.main_mode,
                 action: Some(ToolbarAction::SelectMain(*mode)),
             });
         }
         spans
     }
 
-    pub fn submenu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+    fn menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
         let layout = self.layout();
+        let relative_row = row - MENU_FIRST_ROW;
+        let page = relative_row / 2;
+        let label_row = relative_row.is_multiple_of(2);
         let mut spans = Vec::new();
-        let range = submenu_range(row, layout.labels.len());
-        for (position, index) in range.enumerate() {
-            let label = layout.labels[index];
-            if position > 0 {
-                spans.push(ToolbarSpan {
-                    contents: GAP.to_string(),
-                    selected: false,
-                    action: None,
-                });
+        for category in 0..layout.labels.len() {
+            let options = layout.options[category];
+            let page_start = page * OPTIONS_PER_PAGE;
+            if page_start >= options.len() {
+                continue;
             }
-            spans.push(ToolbarSpan {
-                contents: format!("{} {label} ", submenu_shortcut_label(index)),
-                selected: false,
-                action: Some(ToolbarAction::CycleSubmenu(index)),
-            });
-            for (option_index, option) in layout.options[index].iter().enumerate() {
-                if option_index > 0 {
-                    spans.push(ToolbarSpan {
-                        contents: " ".to_string(),
-                        selected: false,
-                        action: None,
-                    });
+            if !spans.is_empty() {
+                spans.push(plain_span(GAP.to_string()));
+            }
+            let prefix_width = UnicodeWidthStr::width(layout.labels[category]) + 2;
+            spans.push(plain_span(if label_row {
+                if page == 0 {
+                    format!("{}: ", layout.labels[category])
+                } else {
+                    " ".repeat(prefix_width)
                 }
+            } else {
+                let path = format!("{}.{}.", category + 2, page + 1);
+                format!("{path:>width$} ", width = prefix_width - 1)
+            }));
+
+            for (position, option) in options[page_start..]
+                .iter()
+                .take(OPTIONS_PER_PAGE)
+                .enumerate()
+            {
+                if position > 0 {
+                    spans.push(plain_span(" ".to_string()));
+                }
+                let option_index = page_start + position;
+                let action = ToolbarAction::SelectSubmenu {
+                    submenu: category,
+                    option: option_index,
+                };
                 spans.push(ToolbarSpan {
-                    contents: (*option).to_string(),
-                    selected: option_index == layout.selected[index]
+                    contents: if label_row {
+                        (*option).to_string()
+                    } else {
+                        aligned_shortcut((position + 1) % 10, option)
+                    },
+                    selected: label_row
+                        && option_index == layout.selected[category]
                         && layout
                             .exclusive_submenu
-                            .is_none_or(|active| active == index),
-                    action: Some(ToolbarAction::SelectSubmenu {
-                        submenu: index,
-                        option: option_index,
-                    }),
+                            .is_none_or(|active| active == category),
+                    action: Some(action),
                 });
             }
         }
@@ -266,7 +318,7 @@ impl ToolbarState {
     }
 
     pub fn stamp(&self) -> &'static str {
-        STAMP_OPTIONS[self.stamp_active_submenu][self.stamp_selected[self.stamp_active_submenu]]
+        STAMP_OPTIONS[self.stamp_active_category][self.stamp_selected[self.stamp_active_category]]
     }
 
     pub fn shape_kind(&self) -> ShapeKind {
@@ -289,13 +341,8 @@ impl ToolbarState {
     }
 
     pub fn action_at(&self, row: usize, column: usize) -> Option<ToolbarAction> {
-        let spans = match row {
-            0 => self.main_spans(),
-            1 | 2 => self.submenu_spans(row),
-            _ => return None,
-        };
         let mut start = 0;
-        for span in spans {
+        for span in self.toolbar_spans(row) {
             let end = start + UnicodeWidthStr::width(span.contents.as_str());
             if (start..end).contains(&column) {
                 return span.action;
@@ -306,31 +353,8 @@ impl ToolbarState {
     }
 
     pub fn apply_action(&mut self, action: ToolbarAction) -> bool {
+        self.cancel_shortcut();
         match action {
-            ToolbarAction::CycleMain => {
-                let current = MainMode::ALL
-                    .iter()
-                    .position(|mode| *mode == self.main_mode)
-                    .expect("main mode is in the mode list");
-                self.main_mode = MainMode::ALL[cycle_index(current, MainMode::ALL.len(), false)];
-                true
-            }
-            ToolbarAction::CycleSubmenu(submenu) => match self.main_mode {
-                MainMode::Line => {
-                    cycle_selected(&mut self.line_selected, &LINE_OPTIONS, submenu, false)
-                }
-                MainMode::Stamp => {
-                    if !cycle_selected(&mut self.stamp_selected, &STAMP_OPTIONS, submenu, false) {
-                        return false;
-                    }
-                    self.stamp_active_submenu = submenu;
-                    true
-                }
-                MainMode::Shapes => {
-                    cycle_selected(&mut self.shape_selected, &SHAPE_OPTIONS, submenu, false)
-                }
-                MainMode::Utilities => submenu == 0,
-            },
             ToolbarAction::SelectMain(mode) => {
                 self.main_mode = mode;
                 true
@@ -349,7 +373,7 @@ impl ToolbarState {
                 let selected = match self.main_mode {
                     MainMode::Line => self.line_selected.get_mut(submenu),
                     MainMode::Stamp => {
-                        self.stamp_active_submenu = submenu;
+                        self.stamp_active_category = submenu;
                         self.stamp_selected.get_mut(submenu)
                     }
                     MainMode::Shapes => self.shape_selected.get_mut(submenu),
@@ -376,7 +400,7 @@ impl ToolbarState {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
-                exclusive_submenu: Some(self.stamp_active_submenu),
+                exclusive_submenu: Some(self.stamp_active_category),
             },
             MainMode::Shapes => MenuLayout {
                 labels: &SHAPE_LABELS,
@@ -394,64 +418,32 @@ impl ToolbarState {
     }
 }
 
-fn toolbar_index(text: &str, shifted: bool, overflow_modifier: bool) -> Option<usize> {
-    let digit: usize = match (text, shifted) {
-        ("1" | "!", true) | ("1", false) => 1,
-        ("2" | "@", true) | ("2", false) => 2,
-        ("3" | "#", true) | ("3", false) => 3,
-        ("4" | "$", true) | ("4", false) => 4,
-        ("5" | "%", true) | ("5", false) => 5,
-        ("6" | "^", true) | ("6", false) => 6,
-        ("7" | "&", true) | ("7", false) => 7,
-        ("8" | "*", true) | ("8", false) => 8,
-        ("9" | "(", true) | ("9", false) => 9,
-        ("0" | ")", true) | ("0", false) => 0,
-        _ => return None,
-    };
-    if overflow_modifier {
-        (digit >= 2).then_some(8 + digit)
-    } else if digit == 0 {
-        Some(9)
-    } else {
-        digit.checked_sub(1)
+fn plain_span(contents: String) -> ToolbarSpan {
+    ToolbarSpan {
+        contents,
+        selected: false,
+        action: None,
     }
 }
 
-fn submenu_range(row: usize, submenu_count: usize) -> std::ops::Range<usize> {
-    match row {
-        1 => 0..submenu_count.min(9),
-        2 => 9.min(submenu_count)..submenu_count,
-        _ => 0..0,
-    }
+fn aligned_shortcut(digit: usize, label: &str) -> String {
+    let digit = digit % 10;
+    format!("{digit:<width$}", width = UnicodeWidthStr::width(label))
 }
 
-fn submenu_shortcut_label(submenu: usize) -> String {
-    const DIGITS: [char; 9] = ['2', '3', '4', '5', '6', '7', '8', '9', '0'];
-    if submenu < DIGITS.len() {
-        format!("<{}>", DIGITS[submenu])
-    } else {
-        format!("<C-{}>", DIGITS[(submenu - DIGITS.len()) % DIGITS.len()])
-    }
-}
-
-fn cycle_selected(
-    selected: &mut [usize],
-    options: &[&[&str]],
-    submenu: usize,
-    backwards: bool,
-) -> bool {
-    let (Some(selected), Some(options)) = (selected.get_mut(submenu), options.get(submenu)) else {
-        return false;
-    };
-    *selected = cycle_index(*selected, options.len(), backwards);
-    true
-}
-
-fn cycle_index(current: usize, count: usize, backwards: bool) -> usize {
-    if backwards {
-        (current + count - 1) % count
-    } else {
-        (current + 1) % count
+fn shortcut_digit(text: &str) -> Option<usize> {
+    match text {
+        "0" => Some(0),
+        "1" => Some(1),
+        "2" => Some(2),
+        "3" => Some(3),
+        "4" => Some(4),
+        "5" => Some(5),
+        "6" => Some(6),
+        "7" => Some(7),
+        "8" => Some(8),
+        "9" => Some(9),
+        _ => None,
     }
 }
 
@@ -478,28 +470,31 @@ fn line_ending(selected: usize) -> LineEnding {
 mod tests {
     use super::*;
 
-    fn cycle(toolbar: &mut ToolbarState, key: &str) {
-        assert!(toolbar.cycle_shortcut(&Key::Character(key.into()), ModifiersState::empty()));
+    fn press(toolbar: &mut ToolbarState, key: &str) {
+        assert!(toolbar.handle_shortcut(&Key::Character(key.into()), ModifiersState::empty()));
+    }
+
+    fn row(toolbar: &ToolbarState, row: usize) -> String {
+        toolbar
+            .toolbar_spans(row)
+            .iter()
+            .map(|span| span.contents.as_str())
+            .collect()
     }
 
     #[test]
-    fn one_cycles_the_main_mode_and_shift_one_reverses_it() {
+    fn mode_path_selects_an_exact_mode() {
         let mut toolbar = ToolbarState::default();
-        cycle(&mut toolbar, "1");
-        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
-        assert!(toolbar.cycle_shortcut(&Key::Character("!".into()), ModifiersState::SHIFT,));
+        press(&mut toolbar, "1");
         assert_eq!(toolbar.main_mode(), MainMode::Line);
+        press(&mut toolbar, "3");
+        assert_eq!(toolbar.main_mode(), MainMode::Shapes);
+
+        assert_eq!(row(&toolbar, 0), "Mode: Line Stamp Shape Utils");
+        assert_eq!(row(&toolbar, 1), "1.    1    2     3     4");
         assert_eq!(
             toolbar
-                .main_spans()
-                .iter()
-                .map(|span| span.contents.as_str())
-                .collect::<String>(),
-            "<1> Line Stamp Shape Utils"
-        );
-        assert_eq!(
-            toolbar
-                .main_spans()
+                .toolbar_spans(0)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
@@ -508,109 +503,89 @@ mod tests {
     }
 
     #[test]
-    fn line_submenus_use_two_through_four() {
+    fn three_key_line_option_path_selects_without_cycling() {
         let mut toolbar = ToolbarState::default();
-        cycle(&mut toolbar, "2");
-        cycle(&mut toolbar, "3");
-        cycle(&mut toolbar, "4");
-        cycle(&mut toolbar, "5");
-
-        assert_eq!(toolbar.line_start(), LineEnding::Arrow);
-        assert_eq!(toolbar.line_end(), LineEnding::Arrow);
-        assert_eq!(toolbar.line_style(), LineStyle::Heavy);
-        assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
-        assert_eq!(
-            toolbar
-                .submenu_spans(1)
-                .iter()
-                .map(|span| span.contents.as_str())
-                .collect::<String>(),
-            "<2> Start · ◀ ◆ ●    <3> End · ▶ ◆ ●    <4> Width ─ ━ ═    <5> Corner Smooth Sharp"
-        );
+        for key in ["4", "1", "3"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_style(), LineStyle::Double);
+        assert!(row(&toolbar, 2).contains("Start: · ◀ ◆ ●"));
+        assert!(row(&toolbar, 3).contains("2.1. 1 2 3 4"));
+        assert!(row(&toolbar, 3).contains("4.1. 1 2 3"));
     }
 
     #[test]
-    fn stamp_decorators_and_fills_are_exclusive() {
+    fn digit_zero_selects_the_tenth_option() {
         let mut toolbar = ToolbarState::default();
-        cycle(&mut toolbar, "1");
-        cycle(&mut toolbar, "2");
-        assert_eq!(toolbar.stamp_selected[0], 1);
+        for key in ["1", "2", "2", "1", "0"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(toolbar.stamp(), "★");
 
-        cycle(&mut toolbar, "3");
-        assert_eq!(toolbar.stamp_selected[0], 1);
-        assert_eq!(toolbar.stamp_selected[1], 1);
-        assert_eq!(toolbar.stamp_active_submenu, 1);
-        assert_eq!(
-            toolbar
-                .submenu_spans(1)
-                .iter()
-                .filter(|span| span.selected)
-                .count(),
-            1
-        );
+        for key in ["2", "2", "4"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.stamp(), "•");
     }
 
     #[test]
-    fn mode_controls_visible_submenus_and_tooltip() {
+    fn stamp_pages_keep_every_existing_symbol_visible() {
         let mut toolbar = ToolbarState::default();
-        cycle(&mut toolbar, "1");
-        let submenu = toolbar
-            .submenu_spans(1)
-            .iter()
-            .map(|span| span.contents.as_str())
-            .collect::<String>();
-        assert!(submenu.starts_with("<2> Decorators 1 "));
-        assert!(submenu.contains("    <5> Fills 1 "));
-        assert!(submenu.contains("    <9> Blocks 1 ▘ ▝ ▀"));
-        let overflow = toolbar
-            .submenu_spans(2)
-            .iter()
-            .map(|span| span.contents.as_str())
-            .collect::<String>();
-        assert!(overflow.starts_with("<C-2> Blocks 3 ▜ ▄ ▙ ▟ █"));
-        assert_eq!(
-            toolbar
-                .submenu_spans(1)
-                .iter()
-                .filter(|span| span.selected)
-                .count(),
-            1
-        );
-        assert!(toolbar.tooltip().starts_with("<Space>"));
-
-        cycle(&mut toolbar, "1");
-        assert_eq!(
-            toolbar.tooltip(),
-            "<Escape> to start shape preview, <Space> to confirm, <Escape> to cancel"
-        );
-
-        cycle(&mut toolbar, "1");
-        assert!(
-            toolbar
-                .tooltip()
-                .starts_with("Space start, then Space confirm")
-        );
+        for key in ["1", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert!(row(&toolbar, 2).starts_with("Decorators: ○ ● ◇ ◆ □ ■ △ ▲ ☆ ★"));
+        assert!(row(&toolbar, 2).contains("Fills: ░ ▒ ▓ █ ▁ ▂ ▃ ▄ ▅ ▆"));
+        assert!(row(&toolbar, 2).contains("Blocks: ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
+        assert!(row(&toolbar, 4).contains("            + × ※ •"));
+        assert!(row(&toolbar, 4).contains("       ▇ ▀ ▌ ▐ ▊ ▉"));
+        assert!(row(&toolbar, 4).contains("        ▜ ▄ ▙ ▟ █"));
+        assert!(row(&toolbar, 5).contains("2.2. 1 2 3 4"));
     }
 
     #[test]
-    fn mouse_hit_testing_selects_main_modes_and_submenu_options() {
+    fn invalid_and_cancelled_prefixes_do_not_change_selection() {
         let mut toolbar = ToolbarState::default();
-        let action = toolbar.action_at(0, 10).expect("Stamp is clickable");
+        press(&mut toolbar, "1");
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+
+        press(&mut toolbar, "4");
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.line_style(), LineStyle::Thin);
+
+        press(&mut toolbar, "1");
+        assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+    }
+
+    #[test]
+    fn pending_prefix_consumes_an_invalid_editor_key_then_resets() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "1");
+        assert!(toolbar.handle_shortcut(&Key::Character("r".into()), ModifiersState::empty()));
+        assert!(!toolbar.handle_shortcut(&Key::Character("r".into()), ModifiersState::empty()));
+    }
+
+    #[test]
+    fn mouse_hit_testing_directly_selects_modes_and_options() {
+        let mut toolbar = ToolbarState::default();
+        let action = toolbar.action_at(0, 12).expect("Stamp is clickable");
         assert_eq!(action, ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(toolbar.apply_action(action));
-        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
-        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
-            submenu: 6,
-            option: 1,
-        }));
-        assert_eq!(toolbar.stamp(), "▐");
-        assert_eq!(toolbar.stamp_active_submenu, 6);
-
+        let decorator = toolbar.action_at(2, 16).expect("decorator is clickable");
         assert_eq!(
-            toolbar.action_at(1, 0),
-            Some(ToolbarAction::CycleSubmenu(0))
+            decorator,
+            ToolbarAction::SelectSubmenu {
+                submenu: 0,
+                option: 2
+            }
         );
+        assert!(toolbar.apply_action(decorator));
+        assert_eq!(toolbar.stamp(), "◇");
     }
 
     #[test]
@@ -624,44 +599,15 @@ mod tests {
     #[test]
     fn block_stamps_match_uniline_quadrant_combinations() {
         assert_eq!(
-            STAMP_OPTIONS[7..]
-                .iter()
-                .flat_map(|options| options.iter().copied())
-                .collect::<String>(),
+            STAMP_OPTIONS[2].iter().copied().collect::<String>(),
             "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
         );
     }
 
     #[test]
-    fn rejects_unavailable_submenu_and_unrelated_modifiers() {
+    fn unrelated_modified_keys_are_not_toolbar_shortcuts() {
         let mut toolbar = ToolbarState::default();
-        assert!(!toolbar.cycle_shortcut(&Key::Character("6".into()), ModifiersState::empty()));
-        assert!(!toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::ALT));
-    }
-
-    #[test]
-    fn every_submenu_has_at_most_five_options() {
-        for options in LINE_OPTIONS
-            .into_iter()
-            .chain(STAMP_OPTIONS)
-            .chain(SHAPE_OPTIONS)
-            .chain(UTILITY_OPTIONS)
-        {
-            assert!(options.len() <= 5, "submenu has {} options", options.len());
-        }
-    }
-
-    #[test]
-    fn zero_and_control_or_command_two_reach_the_ninth_and_tenth_stamp_groups() {
-        let mut toolbar = ToolbarState::default();
-        cycle(&mut toolbar, "1");
-        cycle(&mut toolbar, "0");
-        assert_eq!(toolbar.stamp_active_submenu, 8);
-        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::CONTROL,));
-        assert_eq!(toolbar.stamp_active_submenu, 9);
-
-        toolbar.stamp_active_submenu = 8;
-        assert!(toolbar.cycle_shortcut(&Key::Character("2".into()), ModifiersState::SUPER,));
-        assert_eq!(toolbar.stamp_active_submenu, 9);
+        assert!(!toolbar.handle_shortcut(&Key::Character("2".into()), ModifiersState::ALT));
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
     }
 }

@@ -221,33 +221,17 @@ fn render_toolbar(
     width: usize,
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
-    render_toolbar_spans(
-        canvas,
-        0,
-        &state.toolbar.main_spans(),
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
-    render_toolbar_spans(
-        canvas,
-        1,
-        &state.toolbar.submenu_spans(1),
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
-    render_toolbar_spans(
-        canvas,
-        2,
-        &state.toolbar.submenu_spans(2),
-        state,
-        max_columns,
-        metrics,
-        top_padding,
-    );
+    for row in 0..crate::toolbar::TOOLTIP_ROW {
+        render_toolbar_spans(
+            canvas,
+            row,
+            &state.toolbar.toolbar_spans(row),
+            state,
+            max_columns,
+            metrics,
+            top_padding,
+        );
+    }
 
     let tooltip = [Atom {
         face: Face::default(),
@@ -263,13 +247,17 @@ fn render_toolbar(
     }];
     render_line(
         canvas,
-        3,
+        crate::toolbar::TOOLTIP_ROW,
         &tooltip,
         &state.grid.default_face,
         max_columns,
         metrics,
         DrawOrigin::Grid {
-            top_padding: top_padding + crate::toolbar::toolbar_row_offset(3, metrics.cell_height),
+            top_padding: top_padding
+                + crate::toolbar::toolbar_row_offset(
+                    crate::toolbar::TOOLTIP_ROW,
+                    metrics.cell_height,
+                ),
         },
     );
 }

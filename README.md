@@ -12,16 +12,14 @@ The editor opens in **Line** mode.
 | Draw a line | Shift + direction |
 | Clear the current cell | Space or Backspace |
 | Enter or leave text entry | Return |
-| Choose the next tool | `1` |
-| Choose the previous tool | Shift + `1` |
-| Cycle a tool option | `2`–`4` |
-| Cycle an option backwards | Shift + `2`–`4` |
+| Choose a tool directly | `1`, then its displayed number |
+| Choose an option directly | Its displayed three-digit path |
 
 Lines connect automatically into corners, tees, and crossings. Starting a stroke on an existing line extends that connection; starting on an endpoint marker moves the marker to the new endpoint.
 
 ## Toolbar
 
-The first row selects a tool. Press `1` to cycle through **Line**, **Stamp**, **Shape**, and **Utils**. The second row shows the active tool's options; use the number printed beside an option to cycle its values, or Shift + number to cycle backwards.
+The first two rows select a tool directly: press `1`, then the number under **Line**, **Stamp**, **Shape**, or **Utils**. The option rows show hierarchical paths such as `2.1.3`: press the category number, page number, and option number in sequence. On each page, `1` through `9` select the first nine options and `0` selects the tenth.
 
 ### Line
 

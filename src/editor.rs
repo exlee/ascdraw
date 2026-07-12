@@ -76,16 +76,19 @@ impl EditorState {
         self.grid.cursor_face = theme.cursor.clone();
     }
 
-    pub fn cycle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+    pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
         if self.cursor_mode == CursorMode::Text {
             return false;
         }
-        if !self.toolbar.cycle_shortcut(key, modifiers) {
+        let old_mode = self.toolbar.main_mode();
+        if !self.toolbar.handle_shortcut(key, modifiers) {
             return false;
         }
-        self.end_stroke();
-        self.shape_preview = None;
-        self.sync_cursor_mode_with_toolbar();
+        if self.toolbar.main_mode() != old_mode {
+            self.end_stroke();
+            self.shape_preview = None;
+            self.sync_cursor_mode_with_toolbar();
+        }
         true
     }
 
@@ -101,6 +104,7 @@ impl EditorState {
 
     pub fn toggle_text_entry(&mut self) {
         self.end_stroke();
+        self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
         if self.cursor_mode == CursorMode::Text {
             self.sync_cursor_mode_with_toolbar();
@@ -111,6 +115,7 @@ impl EditorState {
 
     pub fn toggle_replace_mode(&mut self) {
         self.end_stroke();
+        self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
         if self.cursor_mode == CursorMode::Replace {
             self.sync_cursor_mode_with_toolbar();
@@ -127,12 +132,14 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.toolbar.cancel_shortcut();
         self.single_replace_pending = true;
         self.cursor_mode = CursorMode::Replace;
         true
     }
 
     fn sync_cursor_mode_with_toolbar(&mut self) {
+        self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
         self.cursor_mode = match self.toolbar.main_mode() {
             MainMode::Line => CursorMode::MoveDraw,
@@ -992,14 +999,14 @@ mod tests {
     #[test]
     fn selected_line_endings_stay_at_the_stroke_endpoints() {
         let mut state = state();
-        state.toolbar.cycle_shortcut(
-            &winit::keyboard::Key::Character("2".into()),
-            winit::keyboard::ModifiersState::empty(),
-        );
-        state.toolbar.cycle_shortcut(
-            &winit::keyboard::Key::Character("3".into()),
-            winit::keyboard::ModifiersState::empty(),
-        );
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 1,
+        });
 
         state.move_or_draw(Direction::Right, true);
         state.move_or_draw(Direction::Right, true);
@@ -1012,14 +1019,10 @@ mod tests {
     #[test]
     fn unadorned_endings_use_the_selected_double_line_style() {
         let mut state = state();
-        state.toolbar.cycle_shortcut(
-            &winit::keyboard::Key::Character("4".into()),
-            winit::keyboard::ModifiersState::empty(),
-        );
-        state.toolbar.cycle_shortcut(
-            &winit::keyboard::Key::Character("4".into()),
-            winit::keyboard::ModifiersState::empty(),
-        );
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 2,
+        });
 
         state.move_or_draw(Direction::Right, true);
         state.move_or_draw(Direction::Right, true);
@@ -1082,7 +1085,7 @@ mod tests {
         let mut state = state();
         state.toggle_text_entry();
         assert_eq!(state.cursor_mode, CursorMode::Text);
-        assert!(!state.cycle_toolbar_shortcut(
+        assert!(!state.handle_toolbar_shortcut(
             &winit::keyboard::Key::Character("1".into()),
             winit::keyboard::ModifiersState::empty(),
         ));
@@ -1091,12 +1094,32 @@ mod tests {
         state.toggle_text_entry();
         assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
 
-        assert!(state.cycle_toolbar_shortcut(
+        for key in ["1", "2"] {
+            assert!(state.handle_toolbar_shortcut(
+                &winit::keyboard::Key::Character(key.into()),
+                winit::keyboard::ModifiersState::empty(),
+            ));
+        }
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
+    fn text_transition_clears_a_pending_toolbar_prefix() {
+        let mut state = state();
+        assert!(state.handle_toolbar_shortcut(
             &winit::keyboard::Key::Character("1".into()),
             winit::keyboard::ModifiersState::empty(),
         ));
-        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(state.cursor_mode, CursorMode::Stamp);
+
+        state.toggle_text_entry();
+        state.toggle_text_entry();
+        assert!(state.handle_toolbar_shortcut(
+            &winit::keyboard::Key::Character("2".into()),
+            winit::keyboard::ModifiersState::empty(),
+        ));
+
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
     }
 
     #[test]
@@ -1104,7 +1127,7 @@ mod tests {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 3,
+            submenu: 1,
             option: 3,
         });
 
@@ -1248,12 +1271,11 @@ mod tests {
     }
 
     fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {
-        for _ in 0..count {
-            state.toolbar.cycle_shortcut(
-                &winit::keyboard::Key::Character(key.into()),
-                winit::keyboard::ModifiersState::empty(),
-            );
-        }
+        let submenu = key.parse::<usize>().expect("numeric toolbar group") - 2;
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu,
+            option: count,
+        });
     }
 
     fn contents(line: &[Atom]) -> String {
