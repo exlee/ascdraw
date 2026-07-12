@@ -29,6 +29,24 @@ pub enum EditCommand {
     InsertTab,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardCommand {
+    Copy,
+    Paste,
+}
+
+/// Returns global clipboard commands before mode-specific key handling.
+pub fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
+    if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
+        return None;
+    }
+    match key {
+        Key::Character(text) if text.eq_ignore_ascii_case("c") => Some(ClipboardCommand::Copy),
+        Key::Character(text) if text.eq_ignore_ascii_case("v") => Some(ClipboardCommand::Paste),
+        _ => None,
+    }
+}
+
 pub fn edit_command(
     key: &Key,
     repeat: bool,
@@ -51,7 +69,7 @@ fn edit_command_for_key(
             || (modifiers.control_key()
                 && !modifiers.alt_key()
                 && !modifiers.super_key()
-                && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("c") || text.eq_ignore_ascii_case("g"))))
+                && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("g"))))
     {
         return Some(EditCommand::CancelTextEntry);
     }
@@ -584,7 +602,6 @@ mod tests {
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
             for (key, modifiers) in [
                 (Key::Named(NamedKey::Escape), ModifiersState::empty()),
-                (Key::Character("c".into()), ModifiersState::CONTROL),
                 (Key::Character("g".into()), ModifiersState::CONTROL),
             ] {
                 assert_eq!(
@@ -594,6 +611,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn control_and_command_clipboard_shortcuts_are_global_and_alt_is_excluded() {
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
+            assert_eq!(
+                clipboard_command(&Key::Character("c".into()), modifiers),
+                Some(ClipboardCommand::Copy)
+            );
+            assert_eq!(
+                clipboard_command(&Key::Character("C".into()), modifiers),
+                Some(ClipboardCommand::Copy)
+            );
+            assert_eq!(
+                clipboard_command(&Key::Character("v".into()), modifiers),
+                Some(ClipboardCommand::Paste)
+            );
+            assert_eq!(
+                clipboard_command(&Key::Character("V".into()), modifiers),
+                Some(ClipboardCommand::Paste)
+            );
+        }
+        assert_eq!(
+            clipboard_command(
+                &Key::Character("c".into()),
+                ModifiersState::CONTROL | ModifiersState::ALT
+            ),
+            None
+        );
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Character("c".into()),
+                ModifiersState::CONTROL,
+                CursorMode::Text
+            ),
+            None,
+            "Ctrl-C is copy, never text cancellation"
+        );
     }
 
     #[test]

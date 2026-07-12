@@ -37,6 +37,7 @@ pub enum ExportOutcome {
 
 pub trait ExportPlatform {
     fn set_clipboard_text(&mut self, text: &str) -> Result<()>;
+    fn clipboard_text(&mut self) -> Result<String>;
     fn choose_save_path(&mut self, kind: FileKind) -> Option<PathBuf>;
     fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf>;
 }
@@ -57,6 +58,13 @@ impl ExportPlatform for NativeExportPlatform {
             .context("failed to copy text to the system clipboard")
     }
 
+    fn clipboard_text(&mut self) -> Result<String> {
+        arboard::Clipboard::new()
+            .context("failed to open the system clipboard")?
+            .get_text()
+            .context("failed to read text from the system clipboard")
+    }
+
     fn choose_save_path(&mut self, kind: FileKind) -> Option<PathBuf> {
         let (name, extension) = file_kind_details(kind);
         rfd::FileDialog::new()
@@ -71,6 +79,18 @@ impl ExportPlatform for NativeExportPlatform {
             .add_filter(name, &[extension])
             .pick_file()
     }
+}
+
+pub fn copy_selection(state: &EditorState, platform: &mut impl ExportPlatform) -> Result<()> {
+    platform.set_clipboard_text(&state.selected_text())
+}
+
+pub fn paste_selection(
+    state: &mut EditorState,
+    platform: &mut impl ExportPlatform,
+) -> Result<bool> {
+    let text = platform.clipboard_text()?;
+    Ok(state.paste_text_rectangle(&text))
 }
 
 fn file_kind_details(kind: FileKind) -> (&'static str, &'static str) {
@@ -248,14 +268,25 @@ mod tests {
     #[derive(Default)]
     struct MockPlatform {
         clipboard: Option<String>,
+        fail_clipboard_read: bool,
+        fail_clipboard_write: bool,
         save: Option<PathBuf>,
         open: Option<PathBuf>,
     }
 
     impl ExportPlatform for MockPlatform {
         fn set_clipboard_text(&mut self, text: &str) -> Result<()> {
+            if self.fail_clipboard_write {
+                bail!("mock clipboard write failed");
+            }
             self.clipboard = Some(text.to_string());
             Ok(())
+        }
+        fn clipboard_text(&mut self) -> Result<String> {
+            if self.fail_clipboard_read {
+                bail!("mock clipboard read failed");
+            }
+            Ok(self.clipboard.clone().unwrap_or_default())
         }
         fn choose_save_path(&mut self, _kind: FileKind) -> Option<PathBuf> {
             self.save.take()
@@ -293,6 +324,45 @@ mod tests {
             ExportOutcome::Unchanged
         );
         assert_eq!(platform.clipboard.as_deref(), Some("ab\ncd"));
+    }
+
+    #[test]
+    fn clipboard_copy_preserves_blank_rows_and_trailing_spaces_without_mutating_state() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("ab\n\nz");
+        state.move_to(Coord::default());
+        state.extend_selection(crate::model::Direction::Right);
+        state.extend_selection(crate::model::Direction::Right);
+        state.extend_selection(crate::model::Direction::Down);
+        state.extend_selection(crate::model::Direction::Down);
+        let before = state.clone();
+        let mut platform = MockPlatform::default();
+        copy_selection(&state, &mut platform).unwrap();
+        assert_eq!(platform.clipboard.as_deref(), Some("ab \n   \nz  "));
+        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.selection, before.selection);
+        assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
+    }
+
+    #[test]
+    fn clipboard_errors_and_zero_width_text_do_not_mutate_state() {
+        let mut state = state_with_selection();
+        let before = state.clone();
+        let mut read_error = MockPlatform {
+            fail_clipboard_read: true,
+            ..MockPlatform::default()
+        };
+        assert!(paste_selection(&mut state, &mut read_error).is_err());
+        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.selection, before.selection);
+
+        let mut empty = MockPlatform {
+            clipboard: Some("\n\r\n".to_string()),
+            ..MockPlatform::default()
+        };
+        assert!(!paste_selection(&mut state, &mut empty).unwrap());
+        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.selection, before.selection);
     }
 
     #[test]

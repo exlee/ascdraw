@@ -487,6 +487,35 @@ mod tests {
     }
 
     #[test]
+    fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.grid.lines = vec![vec![crate::model::Atom {
+            face: crate::model::Face::default(),
+            contents: "x".to_string(),
+        }]];
+        state.move_to(Coord {
+            line: 11,
+            column: 11,
+        });
+        let previous = state.clone();
+        assert!(state.paste_text_rectangle(" "));
+        assert_eq!(
+            resolve_navigation_origin(
+                (2, 2),
+                state.grid.cursor_pos,
+                (10, 10),
+                &state.content_cells(),
+            ),
+            None
+        );
+
+        state = previous.clone();
+        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.selection, previous.selection);
+        assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
+    }
+
+    #[test]
     fn load_reset_origin_is_normalized_instead_of_blindly_kept_at_zero() {
         let content = [Coord {
             line: 40,

@@ -8,7 +8,10 @@ use crate::drawing::{
     glyph_without_connection, is_line_glyph, line_ending_glyph,
 };
 use crate::model::{Atom, Coord, Direction, Face};
-use crate::selection::{CanvasSelection, SelectionBounds, replace_range, selected_text};
+use crate::selection::{
+    CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
+    selected_text,
+};
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip};
 
 #[derive(Debug, Clone)]
@@ -640,6 +643,30 @@ impl EditorState {
         selected_text(&self.grid.lines, self.selection.bounds())
     }
 
+    pub fn paste_text_rectangle(&mut self, text: &str) -> bool {
+        let Some(rectangle) = TextRectangle::from_text(text) else {
+            return false;
+        };
+        let origin = Coord {
+            line: self.selection.bounds().top,
+            column: self.selection.bounds().left,
+        };
+        let bounds = rectangle.bounds_at(origin);
+        self.end_stroke();
+        self.shape_preview = None;
+        self.line_markers
+            .retain(|marker| !bounds.contains(marker.coord));
+        overwrite_rectangle(&mut self.grid.lines, origin, &rectangle);
+        let active = Coord {
+            line: bounds.bottom,
+            column: bounds.right,
+        };
+        self.selection.select(origin, active);
+        self.grid.cursor_pos = active;
+        self.cursor_index = index_for_column(&self.grid.lines[active.line], active.column);
+        true
+    }
+
     pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
         self.grid.lines = if lines.is_empty() {
             vec![Vec::new()]
@@ -1208,6 +1235,79 @@ mod tests {
                 bottom: 1
             }
         );
+    }
+
+    #[test]
+    fn paste_rectangular_overwrite_uses_selection_origin_and_selects_result() {
+        let mut state = state();
+        let outside = Face {
+            fg: "#123456".to_string(),
+            ..Face::default()
+        };
+        state.grid.lines = vec![
+            vec![
+                Atom {
+                    face: outside.clone(),
+                    contents: "L".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "a".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "b".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "R".into(),
+                },
+            ],
+            vec![
+                Atom {
+                    face: outside.clone(),
+                    contents: "l".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "c".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "d".into(),
+                },
+                Atom {
+                    face: outside.clone(),
+                    contents: "r".into(),
+                },
+            ],
+        ];
+        state.move_to(Coord { line: 1, column: 2 });
+        state.extend_selection(Direction::Left);
+        state.extend_selection(Direction::Up);
+
+        assert!(state.paste_text_rectangle("x\nYZ"));
+
+        assert_eq!(contents(&state.grid.lines[0]), "Lx R");
+        assert_eq!(contents(&state.grid.lines[1]), "lYZr");
+        assert_eq!(state.grid.lines[0][0].face, outside);
+        assert_eq!(state.grid.lines[0][1].face, Face::default());
+        assert_eq!(state.selection.anchor(), Coord { line: 0, column: 1 });
+        assert_eq!(state.selection.active(), Coord { line: 1, column: 2 });
+        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
+        assert_eq!(state.selected_text(), "x \nYZ");
+    }
+
+    #[test]
+    fn paste_expands_grid_and_preserves_wide_source_graphemes() {
+        let mut state = state();
+        state.move_to(Coord { line: 2, column: 3 });
+        assert!(state.paste_text_rectangle("😀\r\nq"));
+        assert_eq!(state.grid.lines.len(), 4);
+        assert_eq!(state.selected_text(), "😀\nq ");
+        assert_eq!(state.selection_bounds().width(), 2);
+        assert_eq!(state.selection_bounds().height(), 2);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
     }
 
     #[test]

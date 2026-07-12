@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::model::{Atom, Coord, Face};
@@ -55,11 +56,72 @@ impl CanvasSelection {
         self.active = coord;
     }
 
+    pub fn select(&mut self, anchor: Coord, active: Coord) {
+        self.anchor = anchor;
+        self.active = active;
+    }
+
     pub fn shift(&mut self, columns: usize, lines: usize) {
         self.anchor.column = self.anchor.column.saturating_add(columns);
         self.anchor.line = self.anchor.line.saturating_add(lines);
         self.active.column = self.active.column.saturating_add(columns);
         self.active.line = self.active.line.saturating_add(lines);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRectangle {
+    pub rows: Vec<Vec<Atom>>,
+    pub width: usize,
+}
+
+impl TextRectangle {
+    pub fn from_text(text: &str) -> Option<Self> {
+        let mut rows: Vec<Vec<Atom>> = text
+            .split('\n')
+            .map(|row| {
+                let row = row.strip_suffix('\r').unwrap_or(row);
+                UnicodeSegmentation::graphemes(row, true)
+                    .map(|contents| Atom {
+                        face: Face::default(),
+                        contents: contents.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        let width = rows.iter().map(|row| display_width(row)).max().unwrap_or(0);
+        if width == 0 {
+            return None;
+        }
+        for row in &mut rows {
+            let row_width = display_width(row);
+            row.extend((row_width..width).map(|_| blank_atom()));
+        }
+        Some(Self { rows, width })
+    }
+
+    pub fn bounds_at(&self, origin: Coord) -> SelectionBounds {
+        SelectionBounds {
+            left: origin.column,
+            right: origin.column.saturating_add(self.width.saturating_sub(1)),
+            top: origin.line,
+            bottom: origin
+                .line
+                .saturating_add(self.rows.len().saturating_sub(1)),
+        }
+    }
+}
+
+pub fn overwrite_rectangle(lines: &mut Vec<Vec<Atom>>, origin: Coord, rectangle: &TextRectangle) {
+    let bounds = rectangle.bounds_at(origin);
+    while lines.len() <= bounds.bottom {
+        lines.push(Vec::new());
+    }
+    for (line, replacement) in lines[bounds.top..=bounds.bottom]
+        .iter_mut()
+        .zip(&rectangle.rows)
+    {
+        replace_line_range_with_atoms(line, bounds.left, bounds.right, replacement);
     }
 }
 
@@ -208,6 +270,38 @@ fn replace_line_range(line: &mut Vec<Atom>, left: usize, right: usize, replaceme
         replacement,
         right.saturating_sub(left).saturating_add(1),
     ));
+    prefix.extend(suffix);
+    *line = prefix;
+}
+
+fn replace_line_range_with_atoms(
+    line: &mut Vec<Atom>,
+    left: usize,
+    right: usize,
+    replacement: &[Atom],
+) {
+    let boundary = right.saturating_add(1);
+    let mut prefix = Vec::new();
+    let mut suffix = Vec::new();
+    let mut column = 0usize;
+    for atom in line.iter() {
+        let width = atom_width(atom);
+        let end = column.saturating_add(width);
+        if end <= left {
+            prefix.push(atom.clone());
+        } else if column < left {
+            prefix.extend((column..left).map(|_| blank_atom()));
+        }
+        if column >= boundary {
+            suffix.push(atom.clone());
+        } else if end > boundary {
+            suffix.extend((boundary..end).map(|_| blank_atom()));
+        }
+        column = end;
+    }
+    let prefix_width = display_width(&prefix);
+    prefix.extend((prefix_width..left).map(|_| blank_atom()));
+    prefix.extend_from_slice(replacement);
     prefix.extend(suffix);
     *line = prefix;
 }
@@ -375,6 +469,70 @@ mod tests {
                 }
             ),
             "a xz"
+        );
+    }
+
+    #[test]
+    fn text_rectangle_normalizes_crlf_unequal_rows_trailing_spaces_and_blank_rows() {
+        let rectangle = TextRectangle::from_text("😀x\r\n \r\ny  ").unwrap();
+        assert_eq!(rectangle.width, 3);
+        assert_eq!(rectangle.rows.len(), 3);
+        assert_eq!(
+            selected_text(
+                &rectangle.rows,
+                SelectionBounds {
+                    left: 0,
+                    right: 2,
+                    top: 0,
+                    bottom: 2,
+                }
+            ),
+            "😀x\n   \ny  "
+        );
+        assert!(TextRectangle::from_text("").is_none());
+        assert!(TextRectangle::from_text("\n\r\n").is_none());
+    }
+
+    #[test]
+    fn rectangular_overwrite_preserves_outside_atoms_and_blanks_wide_boundaries() {
+        let outside_face = Face {
+            fg: "#123456".to_string(),
+            ..Face::default()
+        };
+        let left = Atom {
+            face: outside_face.clone(),
+            contents: "L".to_string(),
+        };
+        let right = Atom {
+            face: outside_face,
+            contents: "R".to_string(),
+        };
+        let mut lines = vec![vec![
+            left.clone(),
+            Atom {
+                face: Face::default(),
+                contents: "😀".to_string(),
+            },
+            right.clone(),
+        ]];
+        overwrite_rectangle(
+            &mut lines,
+            Coord { line: 0, column: 2 },
+            &TextRectangle::from_text("x").unwrap(),
+        );
+        assert_eq!(lines[0].first(), Some(&left));
+        assert_eq!(lines[0].last(), Some(&right));
+        assert_eq!(
+            selected_text(
+                &lines,
+                SelectionBounds {
+                    left: 0,
+                    right: 3,
+                    top: 0,
+                    bottom: 0
+                }
+            ),
+            "L xR"
         );
     }
 }

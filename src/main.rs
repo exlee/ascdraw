@@ -36,7 +36,8 @@ use diagnostics::log_error;
 use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
 use input::{
-    EditCommand, edit_command, pointer_position_to_coord, pointer_position_to_toolbar_position,
+    ClipboardCommand, EditCommand, clipboard_command, edit_command, pointer_position_to_coord,
+    pointer_position_to_toolbar_position,
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
@@ -189,7 +190,36 @@ fn try_main() -> Result<ExitCode> {
                             if event.state == ElementState::Pressed =>
                         {
                             editor.note_keypress(Instant::now());
-                            if edit_command(
+                            if clipboard_command(&event.logical_key, editor.modifiers).is_some() {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
+                                let mut platform = NativeExportPlatform;
+                                let result = handle_clipboard_shortcut(
+                                    &mut editor.state,
+                                    &event.logical_key,
+                                    editor.modifiers,
+                                    &mut platform,
+                                )
+                                .expect("clipboard shortcut was already recognized");
+                                match result {
+                                    Ok(true) => {
+                                        if editor.finish_state_change(
+                                            previous_state,
+                                            previous_viewport,
+                                            true,
+                                        ) {
+                                            editor.mark_document_dirty();
+                                        }
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        editor.state = previous_state;
+                                        editor.viewport = previous_viewport;
+                                        log_error(format!("Clipboard operation failed: {error:#}"));
+                                    }
+                                }
+                                editor.request_redraw();
+                            } else if edit_command(
                                 &event.logical_key,
                                 event.repeat,
                                 editor.modifiers,
@@ -300,6 +330,18 @@ fn try_main() -> Result<ExitCode> {
     })?;
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn handle_clipboard_shortcut(
+    state: &mut EditorState,
+    key: &Key,
+    modifiers: ModifiersState,
+    platform: &mut impl export::ExportPlatform,
+) -> Option<Result<bool>> {
+    Some(match clipboard_command(key, modifiers)? {
+        ClipboardCommand::Copy => export::copy_selection(state, platform).map(|()| false),
+        ClipboardCommand::Paste => export::paste_selection(state, platform),
+    })
 }
 
 fn perform_pending_export(editor: &mut EditorWindow) {
@@ -437,6 +479,30 @@ mod tests {
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::keyboard::NamedKey;
 
+    #[derive(Default)]
+    struct ClipboardPlatform {
+        text: String,
+    }
+
+    impl export::ExportPlatform for ClipboardPlatform {
+        fn set_clipboard_text(&mut self, text: &str) -> Result<()> {
+            self.text = text.to_string();
+            Ok(())
+        }
+
+        fn clipboard_text(&mut self) -> Result<String> {
+            Ok(self.text.clone())
+        }
+
+        fn choose_save_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
+            None
+        }
+
+        fn choose_open_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
     #[test]
     fn shape_commands_start_preview_move_and_commit_a_rectangle() {
         let config = AppConfig::default();
@@ -478,7 +544,6 @@ mod tests {
         let config = AppConfig::default();
         for (key, modifiers) in [
             (Key::Named(NamedKey::Escape), ModifiersState::empty()),
-            (Key::Character("c".into()), ModifiersState::CONTROL),
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             for mode in [CursorMode::Text, CursorMode::Replace] {
@@ -503,6 +568,100 @@ mod tests {
             );
             assert_eq!(state.cursor_mode, CursorMode::Shapes);
         }
+    }
+
+    #[test]
+    fn clipboard_shortcuts_precede_all_modes_and_pending_toolbar_paths() {
+        let config = AppConfig::default();
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
+        ] {
+            for modifiers in [ModifiersState::CONTROL, ModifiersState::SUPER] {
+                let mut state = EditorState::new(&config.theme, "test");
+                state.cursor_mode = mode;
+                let mut platform = ClipboardPlatform { text: "v".into() };
+                assert!(
+                    handle_clipboard_shortcut(
+                        &mut state,
+                        &Key::Character("V".into()),
+                        modifiers,
+                        &mut platform,
+                    )
+                    .unwrap()
+                    .unwrap(),
+                    "mode={mode:?}"
+                );
+                assert_eq!(state.selected_text(), "v");
+            }
+        }
+
+        let mut one_shot = EditorState::new(&config.theme, "test");
+        assert!(one_shot.begin_single_replace());
+        let mut platform = ClipboardPlatform {
+            text: "paste".into(),
+        };
+        assert!(
+            handle_clipboard_shortcut(
+                &mut one_shot,
+                &Key::Character("v".into()),
+                ModifiersState::CONTROL,
+                &mut platform,
+            )
+            .unwrap()
+            .unwrap()
+        );
+        assert_eq!(one_shot.selected_text(), "paste");
+        assert_eq!(one_shot.cursor_mode, CursorMode::Replace);
+
+        for prefix in ["2", "0"] {
+            let mut state = EditorState::new(&config.theme, "test");
+            assert!(
+                state.handle_toolbar_shortcut(
+                    &Key::Character(prefix.into()),
+                    ModifiersState::empty()
+                )
+            );
+            let mut platform = ClipboardPlatform { text: "x".into() };
+            assert!(
+                handle_clipboard_shortcut(
+                    &mut state,
+                    &Key::Character("v".into()),
+                    ModifiersState::CONTROL,
+                    &mut platform,
+                )
+                .unwrap()
+                .unwrap()
+            );
+            assert_eq!(state.selected_text(), "x");
+        }
+
+        let mut copy = EditorState::new(&config.theme, "test");
+        copy.insert("copy");
+        copy.move_to(Coord::default());
+        copy.extend_selection(Direction::Right);
+        copy.extend_selection(Direction::Right);
+        copy.extend_selection(Direction::Right);
+        let before = copy.clone();
+        let mut platform = ClipboardPlatform::default();
+        assert!(
+            !handle_clipboard_shortcut(
+                &mut copy,
+                &Key::Character("C".into()),
+                ModifiersState::SUPER,
+                &mut platform,
+            )
+            .unwrap()
+            .unwrap()
+        );
+        assert_eq!(platform.text, "copy");
+        assert_eq!(copy.grid.lines, before.grid.lines);
+        assert_eq!(copy.selection, before.selection);
     }
 
     #[test]
