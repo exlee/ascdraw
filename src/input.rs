@@ -364,10 +364,11 @@ mod tests {
             crate::toolbar::MainMode::Stamp,
         ));
         assert!(toolbar.rows() > line_rows);
+        let last_content_row = toolbar.content_rows() - 1;
         assert_eq!(
             toolbar_position(
                 (PADDING + 4 * cell_width) as f64,
-                (top + crate::toolbar::toolbar_content_row(toolbar.tooltip_row()) * cell_height + 1)
+                (top + crate::toolbar::toolbar_content_row(last_content_row) * cell_height + 1)
                     as f64,
                 viewport_width,
                 cell_width,
@@ -375,7 +376,7 @@ mod tests {
                 top,
                 toolbar.rows(),
             ),
-            Some((toolbar.tooltip_row(), 4, 40))
+            Some((last_content_row, 4, 40))
         );
     }
 

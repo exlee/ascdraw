@@ -5,7 +5,6 @@ use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 use crate::export::ExportAction;
 
 pub const TOOLBAR_ROW_GAP: usize = 0;
-pub const TOOLTIP_GAP_ROWS: usize = 1;
 
 const MAIN_LABEL_ROW: usize = 0;
 const MAIN_SHORTCUT_ROW: usize = 1;
@@ -84,6 +83,21 @@ pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSp
     }
     boxed.push(plain_span("│".to_string()));
     boxed
+}
+
+pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
+    if tooltip == Tooltip::None || width == 0 {
+        return Vec::new();
+    }
+    let (contents, _) = clipped_to_width(tooltip.text(), width);
+    vec![ToolbarSpan {
+        contents,
+        selected: false,
+        highlighted: false,
+        tooltip: true,
+        action: None,
+        right_aligned: false,
+    }]
 }
 
 fn push_clipped_spans(
@@ -190,7 +204,7 @@ pub enum ShapeKind {
 }
 
 impl MainMode {
-    const ALL: [Self; 4] = [Self::Line, Self::Stamp, Self::Shapes, Self::Utilities];
+    pub const ALL: [Self; 4] = [Self::Line, Self::Stamp, Self::Shapes, Self::Utilities];
 
     fn label(self) -> &'static str {
         match self {
@@ -198,6 +212,53 @@ impl MainMode {
             Self::Stamp => "Stamp",
             Self::Shapes => "Shape",
             Self::Utilities => "Utils",
+        }
+    }
+
+    pub fn tooltip(self) -> Tooltip {
+        match self {
+            Self::Line => Tooltip::Line,
+            Self::Stamp => Tooltip::Stamp,
+            Self::Shapes => Tooltip::Shapes,
+            Self::Utilities => Tooltip::Utilities,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tooltip {
+    #[default]
+    None,
+    Line,
+    Stamp,
+    Shapes,
+    Utilities,
+    Text,
+    Replace,
+    Export,
+}
+
+impl Tooltip {
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Line => {
+                "Shift-direction draws; Alt-hjkl/arrows resize selection; Escape collapses; Space/Backspace clears; r then character replaces"
+            }
+            Self::Stamp => {
+                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
+            }
+            Self::Shapes => {
+                "Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
+            }
+            Self::Utilities => {
+                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
+            }
+            Self::Text => "<Ret> to exit text mode, arrows move freely over the canvas",
+            Self::Replace => "<Shift-Ret> to exit replace mode, arrows move freely over the canvas",
+            Self::Export => {
+                "TXT/JSON export selection only; PNG canvas-only screenshot is deferred"
+            }
         }
     }
 }
@@ -416,12 +477,8 @@ impl ToolbarState {
             .unwrap_or(0)
     }
 
-    pub fn tooltip_row(&self) -> usize {
-        MENU_FIRST_ROW + self.menu_row_count() + TOOLTIP_GAP_ROWS
-    }
-
     pub fn content_rows(&self) -> usize {
-        self.tooltip_row() + 1
+        MENU_FIRST_ROW + self.menu_row_count()
     }
 
     pub fn rows(&self) -> usize {
@@ -602,24 +659,11 @@ impl ToolbarState {
         spans
     }
 
-    pub fn tooltip(&self) -> &'static str {
+    pub fn tooltip(&self) -> Tooltip {
         if self.export_open {
-            return "TXT/JSON export selection only; PNG canvas-only screenshot is deferred";
+            return Tooltip::Export;
         }
-        match self.main_mode {
-            MainMode::Line => {
-                "Shift-direction draws; Alt-hjkl/arrows resize selection; Escape collapses; Space/Backspace clears; r then character replaces"
-            }
-            MainMode::Stamp => {
-                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; Space fills with stamp; r then character replaces"
-            }
-            MainMode::Shapes => {
-                "Alt-hjkl/arrows resize selection; Escape collapses/cancels preview; Space confirms; Backspace clears; r then character replaces"
-            }
-            MainMode::Utilities => {
-                "Alt-hjkl/arrows resize selection; Escape collapses; Backspace clears; r then character replaces"
-            }
-        }
+        self.main_mode.tooltip()
     }
 
     pub fn line_style(&self) -> LineStyle {
@@ -881,31 +925,23 @@ mod tests {
     }
 
     #[test]
-    fn boxed_toolbar_height_tracks_actual_menu_rows_and_compact_tooltip_gap() {
+    fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
         assert_eq!(toolbar.menu_row_count(), 2);
-        assert_eq!(toolbar.tooltip_row(), 5);
-        assert_eq!(toolbar.rows(), 8);
-        assert_eq!(
-            toolbar_content_row(toolbar.tooltip_row()),
-            toolbar.rows() - 2
-        );
+        assert_eq!(toolbar.content_rows(), 4);
+        assert_eq!(toolbar.rows(), 6);
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert_eq!(toolbar.menu_row_count(), 6);
-        assert_eq!(toolbar.tooltip_row(), 9);
-        assert_eq!(toolbar.rows(), 12);
-        assert_eq!(
-            toolbar.tooltip_row() - (MENU_FIRST_ROW + toolbar.menu_row_count() - 1) - 1,
-            TOOLTIP_GAP_ROWS
-        );
+        assert_eq!(toolbar.content_rows(), 8);
+        assert_eq!(toolbar.rows(), 10);
 
         for mode in [MainMode::Shapes, MainMode::Utilities] {
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
             assert_eq!(toolbar.menu_row_count(), 2);
-            assert_eq!(toolbar.rows(), 8);
+            assert_eq!(toolbar.rows(), 6);
         }
     }
 
@@ -1163,22 +1199,47 @@ mod tests {
     }
 
     #[test]
-    fn tooltips_describe_current_canvas_selection_shortcuts() {
+    fn main_modes_map_to_distinct_typed_tooltips() {
         let mut toolbar = ToolbarState::default();
-        for mode in MainMode::ALL {
+        let expected = [
+            Tooltip::Line,
+            Tooltip::Stamp,
+            Tooltip::Shapes,
+            Tooltip::Utilities,
+        ];
+        for (mode, tooltip) in MainMode::ALL.into_iter().zip(expected) {
+            assert_eq!(mode.tooltip(), tooltip);
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
-            let tooltip = toolbar.tooltip();
-            assert!(tooltip.contains("Alt-hjkl/arrows resize selection"));
-            assert!(tooltip.contains("Escape collapses"));
-            assert!(tooltip.contains("Backspace clears"));
-            assert!(tooltip.contains("r then character replaces"));
+            assert_eq!(toolbar.tooltip(), tooltip);
+            assert!(tooltip.text().contains("Alt-hjkl/arrows resize selection"));
         }
 
+        assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
+        assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
+        assert_ne!(Tooltip::Shapes.text(), Tooltip::Utilities.text());
+
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        assert!(toolbar.tooltip().contains("Space fills with stamp"));
+        assert!(toolbar.tooltip().text().contains("Space fills with stamp"));
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
-        assert!(toolbar.tooltip().contains("export selection only"));
+        assert_eq!(toolbar.tooltip(), Tooltip::Export);
+        assert!(toolbar.tooltip().text().contains("export selection only"));
+    }
+
+    #[test]
+    fn tooltip_is_clipped_by_unicode_display_width_and_never_boxed() {
+        let spans = tooltip_spans(Tooltip::Stamp, 13);
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].tooltip);
+        assert_eq!(UnicodeWidthStr::width(spans[0].contents.as_str()), 13);
+        assert!(!spans[0].contents.contains('│'));
+
+        let toolbar = ToolbarState::default();
+        for row in 0..toolbar.content_rows() {
+            assert!(toolbar.toolbar_spans(row).iter().all(|span| !span.tooltip));
+        }
+        assert!(tooltip_spans(Tooltip::Line, 0).is_empty());
+        assert!(tooltip_spans(Tooltip::None, 20).is_empty());
     }
 
     #[test]

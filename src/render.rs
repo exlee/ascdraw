@@ -86,7 +86,6 @@ struct RenderFrame<'a> {
     toolbar_metrics: &'a CellMetrics,
     layout: LayoutMetrics,
     width: usize,
-    height: usize,
     viewport: ViewportOffset,
 }
 
@@ -140,7 +139,6 @@ pub fn render(
                 window.scale_factor(),
             ),
             width,
-            height,
             viewport,
         },
     );
@@ -157,7 +155,6 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         toolbar_metrics,
         layout,
         width,
-        height,
         viewport,
     } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
@@ -180,7 +177,7 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
             0.0,
             layout.grid_top as f32,
             width as f32,
-            height.saturating_sub(layout.grid_top) as f32,
+            layout.grid_bottom.saturating_sub(layout.grid_top) as f32,
         ),
         None,
         false,
@@ -213,6 +210,7 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         metrics,
     );
     canvas.restore();
+    render_bottom_tooltip(canvas, state, toolbar_metrics, layout, width);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -288,7 +286,7 @@ fn render_toolbar(
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let mut rows = vec![(0, crate::toolbar::toolbar_border_spans(max_columns, true))];
-    for row in 0..state.toolbar.tooltip_row() {
+    for row in 0..state.toolbar.content_rows() {
         let physical_row = crate::toolbar::toolbar_content_row(row);
         rows.push((
             physical_row,
@@ -296,30 +294,6 @@ fn render_toolbar(
         ));
     }
 
-    let tooltip = match state.cursor_mode {
-        CursorMode::Text => {
-            "<Ret> to exit text mode, arrows move freely over the canvas".to_string()
-        }
-        CursorMode::Replace => {
-            "<Shift-Ret> to exit replace mode, arrows move freely over the canvas".to_string()
-        }
-        _ => state.toolbar.tooltip().to_string(),
-    };
-    let tooltip_spans = crate::toolbar::boxed_toolbar_spans(
-        &[crate::toolbar::ToolbarSpan {
-            contents: tooltip,
-            selected: false,
-            highlighted: false,
-            tooltip: true,
-            action: None,
-            right_aligned: false,
-        }],
-        max_columns,
-    );
-    rows.push((
-        crate::toolbar::toolbar_content_row(state.toolbar.tooltip_row()),
-        tooltip_spans,
-    ));
     rows.push((
         state.toolbar.rows() - 1,
         crate::toolbar::toolbar_border_spans(max_columns, false),
@@ -341,6 +315,29 @@ fn render_toolbar(
     }
 }
 
+fn render_bottom_tooltip(
+    canvas: &Canvas,
+    state: &EditorState,
+    metrics: &CellMetrics,
+    layout: LayoutMetrics,
+    width: usize,
+) {
+    if !layout.tooltip_visible {
+        return;
+    }
+    let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let spans = crate::toolbar::tooltip_spans(state.tooltip(), max_columns);
+    render_toolbar_span_contents(
+        canvas,
+        0,
+        &spans,
+        state,
+        max_columns,
+        metrics,
+        layout.tooltip_top,
+    );
+}
+
 fn render_toolbar_span_contents(
     canvas: &Canvas,
     row: usize,
@@ -350,17 +347,7 @@ fn render_toolbar_span_contents(
     metrics: &CellMetrics,
     top_padding: usize,
 ) {
-    let atoms: Vec<_> = spans
-        .iter()
-        .map(|span| Atom {
-            face: if span.tooltip {
-                state.theme.tooltip.clone()
-            } else {
-                Face::default()
-            },
-            contents: span.contents.clone(),
-        })
-        .collect();
+    let atoms = toolbar_atoms(spans, state);
     render_line(
         canvas,
         row,
@@ -372,6 +359,20 @@ fn render_toolbar_span_contents(
             top_padding: top_padding + crate::toolbar::toolbar_row_offset(row, metrics.cell_height),
         },
     );
+}
+
+fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &EditorState) -> Vec<Atom> {
+    spans
+        .iter()
+        .map(|span| Atom {
+            face: if span.tooltip {
+                state.theme.tooltip.clone()
+            } else {
+                Face::default()
+            },
+            contents: span.contents.clone(),
+        })
+        .collect()
 }
 
 fn render_toolbar_span_outlines(
@@ -1621,6 +1622,39 @@ mod tests {
             toolbar_span_outline_color(&state, &highlighted),
             Some(Rgba::rgb(0xff, 0xd7, 0x00))
         );
+    }
+
+    #[test]
+    fn bottom_tooltip_uses_screen_bottom_geometry_width_clipping_and_theme_face() {
+        let config = AppConfig::default();
+        let state = EditorState::new(&config.theme, "test");
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let width = PADDING * 2 + 12 * metrics.cell_width;
+        let height = 320;
+        let layout = layout_metrics(
+            width,
+            height,
+            &metrics,
+            metrics.cell_height,
+            &state.toolbar,
+            false,
+            1.0,
+        );
+
+        assert!(layout.tooltip_visible);
+        assert_eq!(layout.tooltip_top, height - metrics.cell_height);
+        let spans = crate::toolbar::tooltip_spans(state.tooltip(), 12);
+        assert_eq!(UnicodeWidthStr::width(spans[0].contents.as_str()), 12);
+        let atoms = toolbar_atoms(&spans, &state);
+        assert_eq!(atoms[0].face, state.theme.tooltip);
     }
 
     #[test]

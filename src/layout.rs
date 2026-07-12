@@ -4,6 +4,7 @@ use crate::toolbar::ToolbarState;
 
 pub const PADDING: usize = 20;
 pub const SCROLL_MARGIN_CELLS: i64 = 3;
+pub const TOOLTIP_GRID_GAP: usize = PADDING;
 const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -12,6 +13,9 @@ pub struct LayoutMetrics {
     pub grid_top: usize,
     pub cols: usize,
     pub rows: usize,
+    pub grid_bottom: usize,
+    pub tooltip_top: usize,
+    pub tooltip_visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -217,13 +221,36 @@ pub fn layout_metrics(
     let top_padding = content_top_padding(scale_factor, transparent_menubar);
     let grid_top = top_padding + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height);
     let cols = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
-    let rows = height.saturating_sub(grid_top + PADDING) / metrics.cell_height.max(1);
+    let (rows, grid_bottom, tooltip_top, tooltip_visible) =
+        vertical_geometry(height, grid_top, metrics.cell_height, toolbar_cell_height);
     LayoutMetrics {
         top_padding,
         grid_top,
         cols,
         rows: rows.max(1),
+        grid_bottom,
+        tooltip_top,
+        tooltip_visible,
     }
+}
+
+fn vertical_geometry(
+    height: usize,
+    grid_top: usize,
+    grid_cell_height: usize,
+    tooltip_cell_height: usize,
+) -> (usize, usize, usize, bool) {
+    let tooltip_top = height.saturating_sub(tooltip_cell_height);
+    let tooltip_visible = tooltip_cell_height > 0
+        && height >= tooltip_cell_height
+        && tooltip_top >= grid_top.saturating_add(TOOLTIP_GRID_GAP);
+    let grid_bottom = if tooltip_visible {
+        tooltip_top.saturating_sub(TOOLTIP_GRID_GAP)
+    } else {
+        height.saturating_sub(PADDING)
+    };
+    let rows = grid_bottom.saturating_sub(grid_top) / grid_cell_height.max(1);
+    (rows.max(1), grid_bottom, tooltip_top, tooltip_visible)
 }
 
 #[cfg(test)]
@@ -294,7 +321,35 @@ mod tests {
         let grid_top = top_padding + crate::toolbar::toolbar_height(&toolbar, cell_height);
 
         assert_eq!(grid_top, PADDING + toolbar.rows() * cell_height);
-        assert_eq!(grid_top, 164);
+        assert_eq!(grid_top, 128);
+    }
+
+    #[test]
+    fn bottom_tooltip_reserves_its_row_and_gap_from_the_grid() {
+        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(400, 128, 18, 18);
+        assert!(visible);
+        assert_eq!(tooltip_top, 382);
+        assert_eq!(grid_bottom, tooltip_top - TOOLTIP_GRID_GAP);
+        assert_eq!(rows, 13);
+        assert!(grid_top_and_rows_fit_before(128, rows, 18, grid_bottom));
+    }
+
+    #[test]
+    fn short_viewport_geometry_saturates_and_hides_overlapping_tooltip() {
+        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(40, 128, 18, 18);
+        assert!(!visible);
+        assert_eq!(tooltip_top, 22);
+        assert_eq!(grid_bottom, 20);
+        assert_eq!(rows, 1);
+    }
+
+    fn grid_top_and_rows_fit_before(
+        grid_top: usize,
+        rows: usize,
+        cell_height: usize,
+        grid_bottom: usize,
+    ) -> bool {
+        grid_top.saturating_add(rows.saturating_mul(cell_height)) <= grid_bottom
     }
 
     #[test]

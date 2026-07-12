@@ -9,7 +9,7 @@ use crate::drawing::{
 };
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::selection::{CanvasSelection, SelectionBounds, replace_range, selected_text};
-use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
+use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -82,6 +82,17 @@ impl EditorState {
         self.grid.default_face = theme.default.clone();
         self.grid.cursor_face = theme.cursor_block.clone();
         self.theme = theme.clone();
+    }
+
+    pub fn tooltip(&self) -> Tooltip {
+        if self.toolbar.export_menu_open() {
+            return Tooltip::Export;
+        }
+        match self.cursor_mode {
+            CursorMode::Text => Tooltip::Text,
+            CursorMode::Replace => Tooltip::Replace,
+            _ => self.toolbar.tooltip(),
+        }
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
@@ -1611,6 +1622,23 @@ mod tests {
         }
         assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
         assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
+    fn tooltip_tracks_editor_mode_and_export_override() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        assert_eq!(state.tooltip(), Tooltip::Line);
+
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert_eq!(state.tooltip(), Tooltip::Stamp);
+        state.toggle_text_entry();
+        assert_eq!(state.tooltip(), Tooltip::Text);
+        state.toggle_text_entry();
+        state.toggle_replace_mode();
+        assert_eq!(state.tooltip(), Tooltip::Replace);
+
+        assert!(state.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
+        assert_eq!(state.tooltip(), Tooltip::Export);
     }
 
     #[test]
