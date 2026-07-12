@@ -548,15 +548,19 @@ impl ToolbarState {
             if category > 0 {
                 spans.push(plain_span(GAP.to_string()));
             }
-            let prefix_width = UnicodeWidthStr::width(*label) + 2;
+            let cell_start = spans_width(&spans);
+            let path = format!("0.{}.", category + 1);
+            let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
+            let cell_width = prefix_width
+                + EXPORT_OPTIONS[category]
+                    .iter()
+                    .map(|(option, _)| UnicodeWidthStr::width(*option))
+                    .sum::<usize>()
+                + EXPORT_OPTIONS[category].len().saturating_sub(1);
             let mut prefix = plain_span(if label_row {
-                format!("{label}: ")
+                pad_right_to_width(format!("{label}:"), prefix_width)
             } else {
-                format!(
-                    "{:>width$} ",
-                    format!("0.{}.", category + 1),
-                    width = prefix_width - 1
-                )
+                pad_left_to_width(path, prefix_width - 1) + " "
             });
             prefix.highlighted = !label_row
                 && (self.pending_shortcut() == Some(PendingShortcut::ExportCategory)
@@ -579,6 +583,7 @@ impl ToolbarState {
                     right_aligned: false,
                 });
             }
+            pad_spans_to_width(&mut spans, cell_start + cell_width);
         }
         spans
     }
@@ -592,26 +597,28 @@ impl ToolbarState {
         for category in 0..layout.labels.len() {
             let options = layout.options[category];
             let page_start = page * OPTIONS_PER_PAGE;
-            if page_start >= options.len() {
-                continue;
-            }
-            if !spans.is_empty() {
+            if category > 0 {
                 spans.push(plain_span(GAP.to_string()));
             }
-            let prefix_width = UnicodeWidthStr::width(layout.labels[category]) + 2;
+            let prefix_width =
+                submenu_prefix_width(layout.labels[category], category, options.len());
+            let cell_width = submenu_cell_width(prefix_width, options);
+            let cell_start = spans_width(&spans);
+            if page_start >= options.len() {
+                spans.push(plain_span(" ".repeat(cell_width)));
+                continue;
+            }
             let mut prefix = plain_span(if label_row {
                 if page == 0 {
-                    format!("{}: ", layout.labels[category])
+                    pad_right_to_width(format!("{}:", layout.labels[category]), prefix_width)
                 } else {
                     " ".repeat(prefix_width)
                 }
             } else {
-                let path = if options.len() <= OPTIONS_PER_PAGE {
-                    format!("{}.", category + 2)
-                } else {
-                    format!("{}.{}.", category + 2, page + 1)
-                };
-                format!("{path:>width$} ", width = prefix_width - 1)
+                pad_left_to_width(
+                    submenu_path(category, page, options.len()),
+                    prefix_width - 1,
+                ) + " "
             });
             prefix.highlighted = (matches!(
                 self.pending_shortcut(),
@@ -655,6 +662,7 @@ impl ToolbarState {
                     right_aligned: false,
                 });
             }
+            pad_spans_to_width(&mut spans, cell_start + cell_width);
         }
         spans
     }
@@ -809,6 +817,69 @@ fn plain_span(contents: String) -> ToolbarSpan {
     }
 }
 
+fn spans_width(spans: &[ToolbarSpan]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
+        .sum()
+}
+
+fn pad_spans_to_width(spans: &mut Vec<ToolbarSpan>, width: usize) {
+    let padding = width.saturating_sub(spans_width(spans));
+    if padding > 0 {
+        spans.push(plain_span(" ".repeat(padding)));
+    }
+}
+
+fn pad_right_to_width(contents: String, width: usize) -> String {
+    let padding = width.saturating_sub(UnicodeWidthStr::width(contents.as_str()));
+    contents + &" ".repeat(padding)
+}
+
+fn pad_left_to_width(contents: String, width: usize) -> String {
+    let padding = width.saturating_sub(UnicodeWidthStr::width(contents.as_str()));
+    " ".repeat(padding) + &contents
+}
+
+fn menu_prefix_width<'a>(label: &str, paths: impl IntoIterator<Item = &'a str>) -> usize {
+    paths
+        .into_iter()
+        .map(|path| UnicodeWidthStr::width(path) + 1)
+        .chain(std::iter::once(UnicodeWidthStr::width(label) + 2))
+        .max()
+        .unwrap_or(0)
+}
+
+fn submenu_path(category: usize, page: usize, option_count: usize) -> String {
+    if option_count <= OPTIONS_PER_PAGE {
+        format!("{}.", category + 2)
+    } else {
+        format!("{}.{}.", category + 2, page + 1)
+    }
+}
+
+fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
+    let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
+    let paths: Vec<_> = (0..page_count)
+        .map(|page| submenu_path(category, page, option_count))
+        .collect();
+    menu_prefix_width(label, paths.iter().map(String::as_str))
+}
+
+fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
+    prefix_width
+        + options
+            .chunks(OPTIONS_PER_PAGE)
+            .map(|page| {
+                page.iter()
+                    .map(|option| UnicodeWidthStr::width(*option))
+                    .sum::<usize>()
+                    + page.len().saturating_sub(1)
+            })
+            .max()
+            .unwrap_or(0)
+}
+
 fn aligned_shortcut(digit: usize, label: &str) -> String {
     let digit = digit % 10;
     format!("{digit:<width$}", width = UnicodeWidthStr::width(label))
@@ -887,6 +958,43 @@ mod tests {
 
     fn spans_text(spans: &[ToolbarSpan]) -> String {
         spans.iter().map(|span| span.contents.as_str()).collect()
+    }
+
+    fn span_starts(spans: &[ToolbarSpan]) -> Vec<(usize, &ToolbarSpan)> {
+        spans
+            .iter()
+            .scan(0, |column, span| {
+                let start = *column;
+                *column += UnicodeWidthStr::width(span.contents.as_str());
+                Some((start, span))
+            })
+            .collect()
+    }
+
+    fn prefix_start(spans: &[ToolbarSpan], prefix: &str) -> usize {
+        span_starts(spans)
+            .into_iter()
+            .find_map(|(start, span)| (span.contents.trim() == prefix).then_some(start))
+            .unwrap_or_else(|| panic!("prefix {prefix:?} missing from {:?}", spans_text(spans)))
+    }
+
+    fn option_start(spans: &[ToolbarSpan], category: usize, option: usize) -> usize {
+        span_starts(spans)
+            .into_iter()
+            .find_map(|(start, span)| {
+                (span.action
+                    == Some(ToolbarAction::SelectSubmenu {
+                        submenu: category,
+                        option,
+                    }))
+                .then_some(start)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "category {category} option {option} missing from {:?}",
+                    spans_text(spans)
+                )
+            })
     }
 
     #[test]
@@ -1035,6 +1143,109 @@ mod tests {
     }
 
     #[test]
+    fn every_menu_category_keeps_fixed_prefix_and_option_columns_across_pages() {
+        let mut toolbar = ToolbarState::default();
+
+        for mode in MainMode::ALL {
+            toolbar.apply_action(ToolbarAction::SelectMain(mode));
+            let layout = toolbar.layout();
+            let expected: Vec<_> = layout
+                .labels
+                .iter()
+                .enumerate()
+                .map(|(category, label)| {
+                    let spans = toolbar.toolbar_spans(MENU_FIRST_ROW);
+                    (
+                        prefix_start(&spans, &format!("{label}:")),
+                        option_start(&spans, category, 0),
+                    )
+                })
+                .collect();
+
+            for (category, (options, expected)) in
+                layout.options.iter().zip(expected.iter()).enumerate()
+            {
+                for page in 0..options.len().div_ceil(OPTIONS_PER_PAGE) {
+                    let label_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2);
+                    let shortcut_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page * 2 + 1);
+                    let path = submenu_path(category, page, options.len());
+                    assert_eq!(prefix_start(&shortcut_spans, &path), expected.0);
+                    assert_eq!(
+                        option_start(&label_spans, category, page * OPTIONS_PER_PAGE),
+                        expected.1
+                    );
+                    assert_eq!(
+                        option_start(&shortcut_spans, category, page * OPTIONS_PER_PAGE),
+                        expected.1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stamp_page_paths_stay_aligned_when_earlier_categories_are_exhausted() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        let page_one = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
+        let page_two = toolbar.toolbar_spans(MENU_FIRST_ROW + 3);
+        let page_three = toolbar.toolbar_spans(MENU_FIRST_ROW + 5);
+        assert_eq!(
+            prefix_start(&page_one, "2.1."),
+            prefix_start(&page_two, "2.2.")
+        );
+        assert_eq!(
+            prefix_start(&page_one, "3.1."),
+            prefix_start(&page_two, "3.2.")
+        );
+        assert_eq!(
+            prefix_start(&page_one, "3.1."),
+            prefix_start(&page_three, "3.3.")
+        );
+        assert_eq!(
+            prefix_start(&page_one, "5.1."),
+            prefix_start(&page_two, "5.2.")
+        );
+
+        let fills_start = prefix_start(&page_one, "4.");
+        let fills_cell_width = submenu_cell_width(
+            submenu_prefix_width(STAMP_LABELS[2], 2, STAMP_OPTIONS[2].len()),
+            STAMP_OPTIONS[2],
+        );
+        let blocks_start = prefix_start(&page_two, "5.2.");
+        assert_eq!(
+            blocks_start,
+            fills_start + fills_cell_width + UnicodeWidthStr::width(GAP)
+        );
+    }
+
+    #[test]
+    fn export_categories_use_the_same_columns_for_labels_shortcuts_and_options() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        let labels = toolbar.toolbar_spans(MENU_FIRST_ROW);
+        let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
+
+        for (category, label) in EXPORT_LABELS.iter().enumerate() {
+            assert_eq!(
+                prefix_start(&labels, &format!("{label}:")),
+                prefix_start(&shortcuts, &format!("0.{}.", category + 1))
+            );
+            let action = ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1);
+            let label_option = span_starts(&labels)
+                .into_iter()
+                .find_map(|(start, span)| (span.action == Some(action)).then_some(start))
+                .unwrap();
+            let shortcut_option = span_starts(&shortcuts)
+                .into_iter()
+                .find_map(|(start, span)| (span.action == Some(action)).then_some(start))
+                .unwrap();
+            assert_eq!(label_option, shortcut_option);
+        }
+    }
+
+    #[test]
     fn invalid_and_cancelled_prefixes_do_not_change_selection() {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, "1");
@@ -1132,6 +1343,62 @@ mod tests {
             .expect("flattened Width shortcut hit tests");
         assert!(toolbar.apply_action(width));
         assert_eq!(toolbar.line_style(), LineStyle::Double);
+    }
+
+    #[test]
+    fn mouse_hit_testing_tracks_later_page_options_after_column_padding() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        let box_width = 160;
+
+        for (row, expected) in [
+            (
+                MENU_FIRST_ROW + 2,
+                ToolbarAction::SelectSubmenu {
+                    submenu: 0,
+                    option: 10,
+                },
+            ),
+            (
+                MENU_FIRST_ROW + 4,
+                ToolbarAction::SelectSubmenu {
+                    submenu: 1,
+                    option: 20,
+                },
+            ),
+            (
+                MENU_FIRST_ROW + 2,
+                ToolbarAction::SelectSubmenu {
+                    submenu: 3,
+                    option: 10,
+                },
+            ),
+        ] {
+            let visible = boxed_toolbar_spans(&toolbar.toolbar_spans(row), box_width);
+            let column = span_starts(&visible)
+                .into_iter()
+                .find_map(|(start, span)| (span.action == Some(expected)).then_some(start))
+                .expect("later-page option remains visible");
+            assert_eq!(toolbar.action_at(row, column, box_width), Some(expected));
+        }
+    }
+
+    #[test]
+    fn every_padded_unicode_menu_row_clips_to_exact_narrow_box_width() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        for width in 0..48 {
+            for row in 0..toolbar.content_rows() {
+                let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+                assert_eq!(UnicodeWidthStr::width(spans_text(&boxed).as_str()), width);
+                assert!(boxed.iter().all(|span| {
+                    span.contents
+                        .chars()
+                        .all(|character| UnicodeWidthChar::width(character).is_some())
+                }));
+            }
+        }
     }
 
     #[test]
