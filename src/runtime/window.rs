@@ -744,6 +744,39 @@ mod tests {
     }
 
     #[test]
+    fn rejected_literal_clear_can_restore_document_selection_and_cursor_atomically() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.move_to(Coord { line: 5, column: 5 });
+        state.insert("x");
+        state.move_to(Coord {
+            line: 12,
+            column: 12,
+        });
+        state.insert("y");
+        state.move_to(Coord {
+            line: 12,
+            column: 12,
+        });
+        let previous = state.clone();
+
+        state.clear_selection();
+        assert_eq!(
+            resolve_navigation_origin(
+                (2, 2),
+                state.grid.cursor_pos,
+                (10, 10),
+                &state.content_cells(),
+            ),
+            None
+        );
+
+        state = previous.clone();
+        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.selection, previous.selection);
+        assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
+    }
+
+    #[test]
     fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
         let mut state = EditorState::new(&AppConfig::default().theme, "test");
         state.grid.lines = vec![vec![crate::model::Atom {

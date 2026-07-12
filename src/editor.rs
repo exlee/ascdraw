@@ -689,7 +689,11 @@ impl EditorState {
         if !self.selection_contains_nonblank() {
             return;
         }
-        self.replace_selection(None);
+        let bounds = self.selection.bounds();
+        self.line_markers
+            .retain(|marker| !bounds.contains(marker.coord));
+        replace_range(&mut self.grid.lines, bounds, None);
+        self.restore_active_cursor_index();
     }
 
     fn selection_contains_nonblank(&self) -> bool {
@@ -1477,6 +1481,96 @@ mod tests {
                 bottom: 1
             }
         );
+    }
+
+    #[test]
+    fn clear_is_literal_and_does_not_cap_neighboring_line_cells() {
+        let mut state = state();
+        state.insert("│\n│\n│");
+        state.move_to(Coord { line: 1, column: 0 });
+
+        state.clear_selection();
+
+        assert_eq!(contents(&state.grid.lines[0]), "│");
+        assert_eq!(contents(&state.grid.lines[1]), " ");
+        assert_eq!(contents(&state.grid.lines[2]), "│");
+    }
+
+    #[test]
+    fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
+        let mut state = state();
+        let perimeter_face = state.theme.selection.clone();
+        let center_face = state.theme.cursor_drawing.clone();
+        state.grid.lines = ["┌┬┐", "├┼┤", "└┴┘"]
+            .into_iter()
+            .map(|row| {
+                row.chars()
+                    .map(|contents| Atom {
+                        face: perimeter_face.clone(),
+                        contents: contents.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        state.grid.lines[1][1].face = center_face;
+        let before = state.grid.lines.clone();
+        state.move_to(Coord { line: 1, column: 1 });
+
+        state.clear_selection();
+
+        for coord in [
+            Coord { line: 0, column: 0 },
+            Coord { line: 0, column: 1 },
+            Coord { line: 0, column: 2 },
+            Coord { line: 1, column: 0 },
+            Coord { line: 1, column: 2 },
+            Coord { line: 2, column: 0 },
+            Coord { line: 2, column: 1 },
+            Coord { line: 2, column: 2 },
+        ] {
+            assert_eq!(
+                state.grid.lines[coord.line][coord.column],
+                before[coord.line][coord.column]
+            );
+        }
+        assert_eq!(contents(&state.grid.lines[1]), "├ ┤");
+    }
+
+    #[test]
+    fn clear_removes_only_markers_whose_cells_are_selected() {
+        let mut state = state();
+        state.insert("◆─◆");
+        let inside = PlacedLineMarker {
+            coord: Coord { line: 0, column: 0 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "─".into(),
+        };
+        let outside = PlacedLineMarker {
+            coord: Coord { line: 0, column: 2 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "─".into(),
+        };
+        state.line_markers = vec![inside, outside.clone()];
+        state.move_to(Coord::default());
+
+        state.clear_selection();
+
+        assert_eq!(contents(&state.grid.lines[0]), " ─◆");
+        assert_eq!(state.line_markers, vec![outside]);
+    }
+
+    #[test]
+    fn replacement_retains_its_existing_smart_connection_cleanup() {
+        let mut state = state();
+        state.insert("│\n│\n│");
+        state.move_to(Coord { line: 1, column: 0 });
+
+        assert!(state.begin_single_replace());
+        state.write_text("x");
+
+        assert_eq!(contents(&state.grid.lines[0]), "╵");
+        assert_eq!(contents(&state.grid.lines[1]), "x");
+        assert_eq!(contents(&state.grid.lines[2]), "╷");
     }
 
     #[test]

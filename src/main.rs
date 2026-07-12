@@ -632,6 +632,27 @@ mod tests {
     }
 
     #[test]
+    fn backspace_and_line_space_route_to_the_same_literal_clear() {
+        let config = AppConfig::default();
+        let mut cleared = Vec::new();
+        for key in [Key::Named(NamedKey::Backspace), Key::Named(NamedKey::Space)] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.insert("│\n│\n│");
+            state.move_to(Coord { line: 1, column: 0 });
+
+            assert_eq!(
+                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty()),
+                Some(true)
+            );
+            assert_eq!(line_contents(&state.grid.lines[0]), "│");
+            assert_eq!(line_contents(&state.grid.lines[1]), " ");
+            assert_eq!(line_contents(&state.grid.lines[2]), "│");
+            cleared.push(state.edit_snapshot());
+        }
+        assert_eq!(cleared[0], cleared[1]);
+    }
+
+    #[test]
     fn modified_directions_precede_and_cancel_pending_toolbar_prefixes() {
         let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
         assert!(

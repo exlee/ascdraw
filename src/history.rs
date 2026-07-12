@@ -206,4 +206,39 @@ mod tests {
         assert_eq!(clear_history.undo(cleared.clone()), Some(edited.clone()));
         assert_eq!(clear_history.redo(edited), Some(cleared.clone()));
     }
+
+    #[test]
+    fn literal_selection_clear_is_one_transaction_and_blank_clear_retains_redo() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert("x ");
+        state.move_to(crate::model::Coord::default());
+        let edited = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+
+        state.clear_selection();
+        let cleared = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(edited.clone(), &cleared));
+
+        let restored = history.undo(cleared.clone()).expect("clear is undoable");
+        assert_eq!(restored, edited);
+        state.restore_edit_snapshot(restored.edit.clone());
+        state.move_to(crate::model::Coord { line: 0, column: 1 });
+        let before_blank_clear = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: restored.viewport,
+        };
+        state.clear_selection();
+        let after_blank_clear = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: restored.viewport,
+        };
+        assert!(!history.record_change(before_blank_clear, &after_blank_clear));
+        assert_eq!(history.redo(after_blank_clear), Some(cleared));
+    }
 }
