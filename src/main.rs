@@ -21,6 +21,7 @@ mod input;
 mod layout;
 #[cfg(target_os = "macos")]
 mod macos;
+mod icon;
 mod model;
 mod render;
 mod runtime;
@@ -88,6 +89,8 @@ fn try_main() -> Result<ExitCode> {
     let mut last_autosave_check = Instant::now();
     #[cfg(target_os = "macos")]
     let mut installed_macos_menus = false;
+    #[cfg(target_os = "macos")]
+    let mut should_apply_app_icon = true;
 
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::WaitUntil(
@@ -162,6 +165,15 @@ fn try_main() -> Result<ExitCode> {
                             ) {
                                 log_error(format!("render failed: {error:#}"));
                                 should_close = true;
+                            } else {
+                                #[cfg(target_os = "macos")]
+                                if should_apply_app_icon {
+                                    should_apply_app_icon = false;
+                                    if let Err(error) = icon::apply_app_icon() {
+                                        log_error(format!("app icon setup failed: {error:#}"));
+                                    }
+                                }
+
                             }
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
@@ -530,7 +542,10 @@ mod tests {
         let mut state = EditorState::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
 
-        assert!(!apply_edit_command(&mut state, EditCommand::StartOrConfirmShape));
+        assert!(!apply_edit_command(
+            &mut state,
+            EditCommand::StartOrConfirmShape
+        ));
         for command in [
             EditCommand::Move(Direction::Right),
             EditCommand::Move(Direction::Right),
@@ -545,7 +560,10 @@ mod tests {
             .lines_with_shape_preview()
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
-        assert!(!apply_edit_command(&mut state, EditCommand::StartOrConfirmShape));
+        assert!(!apply_edit_command(
+            &mut state,
+            EditCommand::StartOrConfirmShape
+        ));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
     }
