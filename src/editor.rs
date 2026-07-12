@@ -1218,7 +1218,7 @@ mod tests {
 
         state.place_stamp();
 
-        assert_eq!(state.selected_text(), "○○\n○○");
+        assert_eq!(state.selected_text(), "□□\n□□");
         assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 1 });
         assert_eq!(
             state.selection_bounds(),
@@ -1658,7 +1658,7 @@ mod tests {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 1,
+            submenu: 2,
             option: 3,
         });
 
@@ -1675,7 +1675,7 @@ mod tests {
 
         state.draw_stamp(Direction::Right);
 
-        assert_eq!(contents(&state.grid.lines[0]), "○○");
+        assert_eq!(contents(&state.grid.lines[0]), "□□");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 

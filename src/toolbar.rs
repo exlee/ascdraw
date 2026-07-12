@@ -129,18 +129,40 @@ const LINE_OPTIONS: [&[&str]; 4] = [
     &["─", "━", "═"],
     &["Smooth", "Sharp"],
 ];
-const STAMP_LABELS: [&str; 3] = ["Decorators", "Fills", "Blocks"];
-const STAMP_OPTIONS: [&[&str]; 3] = [
-    &[
-        "○", "●", "◇", "◆", "□", "■", "△", "▲", "☆", "★", "+", "×", "※", "•",
-    ],
-    &[
-        "░", "▒", "▓", "█", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "▀", "▌", "▐", "▊", "▉",
-    ],
-    &[
-        "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
-    ],
+// Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
+// lines remain the responsibility of the connection-mask engine in drawing.rs;
+// only the three standalone diagonal operators are repeated here.
+#[cfg(test)]
+const SQUARES_AND_DIAMONDS: [&str; 6] = ["□", "■", "▫", "▪", "◆", "◊"];
+#[cfg(test)]
+const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø"];
+#[cfg(test)]
+const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
+const DECORATORS: [&str; 20] = [
+    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
+    "¤",
 ];
+
+#[cfg(test)]
+const ARROW_ROTATIONS: [[&str; 4]; 6] = [
+    ["△", "▷", "▽", "◁"],
+    ["▲", "▶", "▼", "◀"],
+    ["↑", "→", "↓", "←"],
+    ["▵", "▹", "▿", "◃"],
+    ["▴", "▸", "▾", "◂"],
+    ["↕", "↔", "↕", "↔"],
+];
+const ARROWS: [&str; 22] = [
+    "△", "▷", "▽", "◁", "▲", "▶", "▼", "◀", "↑", "→", "↓", "←", "▵", "▹", "▿", "◃", "▴", "▸", "▾",
+    "◂", "↕", "↔",
+];
+const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
+const QUADRANT_BLOCKS: [&str; 15] = [
+    "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
+];
+
+const STAMP_LABELS: [&str; 4] = ["Decorators", "Arrows", "Fills", "Blocks"];
+const STAMP_OPTIONS: [&[&str]; 4] = [&DECORATORS, &ARROWS, &GREY_SHADING, &QUADRANT_BLOCKS];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["Rect", "Rnd Rect", "Ellipsis"],
@@ -801,7 +823,10 @@ fn line_ending(selected: usize) -> LineEnding {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     fn press(toolbar: &mut ToolbarState, key: &str) {
         assert!(toolbar.handle_shortcut(&Key::Character(key.into()), ModifiersState::empty()));
@@ -869,9 +894,9 @@ mod tests {
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        assert_eq!(toolbar.menu_row_count(), 4);
-        assert_eq!(toolbar.tooltip_row(), 7);
-        assert_eq!(toolbar.rows(), 10);
+        assert_eq!(toolbar.menu_row_count(), 6);
+        assert_eq!(toolbar.tooltip_row(), 9);
+        assert_eq!(toolbar.rows(), 12);
         assert_eq!(
             toolbar.tooltip_row() - (MENU_FIRST_ROW + toolbar.menu_row_count() - 1) - 1,
             TOOLTIP_GAP_ROWS
@@ -926,16 +951,21 @@ mod tests {
     #[test]
     fn three_key_multi_page_path_and_digit_zero_select_exact_options() {
         let mut toolbar = ToolbarState::default();
-        for key in ["1", "2", "2", "1", "0"] {
+        for key in ["1", "2", "3", "1", "0"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(toolbar.stamp(), "★");
+        assert_eq!(toolbar.stamp(), "→");
 
-        for key in ["2", "2", "4"] {
+        for key in ["3", "3", "2"] {
             press(&mut toolbar, key);
         }
-        assert_eq!(toolbar.stamp(), "•");
+        assert_eq!(toolbar.stamp(), "↔");
+
+        for key in ["2", "2", "0"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.stamp(), "¤");
     }
 
     #[test]
@@ -951,18 +981,21 @@ mod tests {
     }
 
     #[test]
-    fn stamp_pages_keep_every_existing_symbol_visible() {
+    fn stamp_pages_show_the_complete_uniline_standalone_inventory() {
         let mut toolbar = ToolbarState::default();
         for key in ["1", "2"] {
             press(&mut toolbar, key);
         }
-        assert!(row(&toolbar, 2).starts_with("Decorators: ○ ● ◇ ◆ □ ■ △ ▲ ☆ ★"));
-        assert!(row(&toolbar, 2).contains("Fills: ░ ▒ ▓ █ ▁ ▂ ▃ ▄ ▅ ▆"));
+        assert!(row(&toolbar, 2).starts_with("Decorators: □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
+        assert!(row(&toolbar, 2).contains("Arrows: △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"));
+        assert!(row(&toolbar, 2).contains("Fills: ░ ▒ ▓ █"));
         assert!(row(&toolbar, 2).contains("Blocks: ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
-        assert!(row(&toolbar, 4).contains("            + × ※ •"));
-        assert!(row(&toolbar, 4).contains("       ▇ ▀ ▌ ▐ ▊ ▉"));
+        assert!(row(&toolbar, 4).contains("            ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
+        assert!(row(&toolbar, 4).contains("        ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"));
         assert!(row(&toolbar, 4).contains("        ▜ ▄ ▙ ▟ █"));
-        assert!(row(&toolbar, 5).contains("2.2. 1 2 3 4"));
+        assert!(row(&toolbar, 5).contains("2.2. 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 6).contains("        ↕ ↔"));
+        assert!(row(&toolbar, 7).contains("3.3. 1 2"));
     }
 
     #[test]
@@ -1039,7 +1072,7 @@ mod tests {
             }
         );
         assert!(toolbar.apply_action(decorator));
-        assert_eq!(toolbar.stamp(), "◇");
+        assert_eq!(toolbar.stamp(), "▫");
 
         assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
         let shortcut_spans = toolbar.toolbar_spans(3);
@@ -1149,19 +1182,131 @@ mod tests {
     }
 
     #[test]
-    fn every_stamp_symbol_is_one_utf8_character_and_one_display_cell() {
+    fn every_stamp_symbol_is_one_grapheme_and_one_display_cell() {
         for symbol in STAMP_OPTIONS.into_iter().flatten() {
-            assert_eq!(symbol.chars().count(), 1, "{symbol:?}");
+            assert_eq!(
+                UnicodeSegmentation::graphemes(*symbol, true).count(),
+                1,
+                "{symbol:?}"
+            );
             assert_eq!(UnicodeWidthStr::width(*symbol), 1, "{symbol:?}");
         }
     }
 
     #[test]
-    fn block_stamps_match_uniline_quadrant_combinations() {
+    fn stamp_families_exactly_match_the_documented_uniline_sets() {
+        assert_eq!(&DECORATORS[..6], SQUARES_AND_DIAMONDS);
+        assert_eq!(&DECORATORS[6..13], DOTS_AND_CIRCLES);
+        assert_eq!(&DECORATORS[13..], CROSSES_AND_OPERATORS);
+        assert_eq!(ARROWS.len(), 22);
         assert_eq!(
-            STAMP_OPTIONS[2].iter().copied().collect::<String>(),
+            ARROWS.iter().copied().collect::<String>(),
+            "△▷▽◁▲▶▼◀↑→↓←▵▹▿◃▴▸▾◂↕↔"
+        );
+        assert_eq!(GREY_SHADING.iter().copied().collect::<String>(), "░▒▓█");
+        assert_eq!(
+            QUADRANT_BLOCKS.iter().copied().collect::<String>(),
             "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
         );
+
+        let counts =
+            STAMP_OPTIONS
+                .into_iter()
+                .flatten()
+                .fold(HashMap::new(), |mut counts, symbol| {
+                    *counts.entry(*symbol).or_insert(0) += 1;
+                    counts
+                });
+        assert_eq!(counts.len(), 60);
+        assert_eq!(counts.get("█"), Some(&2));
+        assert!(
+            counts
+                .iter()
+                .all(|(symbol, count)| *symbol == "█" || *count == 1)
+        );
+    }
+
+    #[test]
+    fn arrow_styles_preserve_uniline_up_right_down_left_rotation_order() {
+        assert_eq!(
+            ARROW_ROTATIONS,
+            [
+                ["△", "▷", "▽", "◁"],
+                ["▲", "▶", "▼", "◀"],
+                ["↑", "→", "↓", "←"],
+                ["▵", "▹", "▿", "◃"],
+                ["▴", "▸", "▾", "◂"],
+                ["↕", "↔", "↕", "↔"],
+            ]
+        );
+    }
+
+    #[test]
+    fn stars_excluded_decorations_ascii_and_connected_lines_are_not_stamps() {
+        let stamps: Vec<_> = STAMP_OPTIONS.into_iter().flatten().copied().collect();
+        for excluded in [
+            "☆", "★", "○", "◇", "※", "▁", "▂", "▃", "▅", "▆", "▇", "▊", "▉",
+        ] {
+            assert!(
+                !stamps.contains(&excluded),
+                "excluded decoration {excluded:?}"
+            );
+        }
+        for ascii in [
+            "^", "v", "V", "|", "\"", "-", "_", ">", "<", "=", "+", "/", "\\", "'", "`", "#", "o",
+            "O", "*", ".",
+        ] {
+            assert!(!stamps.contains(&ascii), "ASCII conversion glyph {ascii:?}");
+        }
+        for connected_line in ["─", "━", "═", "┌", "╬", "╎", "╏"] {
+            assert!(
+                !stamps.contains(&connected_line),
+                "connected line {connected_line:?}"
+            );
+        }
+        for diagonal in ["╳", "╱", "╲"] {
+            assert!(
+                stamps.contains(&diagonal),
+                "standalone diagonal {diagonal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stamp_selection_is_exclusive_across_families() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        assert_eq!(toolbar.stamp(), "□");
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 21
+        }));
+        assert_eq!(toolbar.stamp(), "↔");
+        assert_eq!(
+            toolbar
+                .toolbar_spans(6)
+                .iter()
+                .filter(|span| span.selected)
+                .count(),
+            1
+        );
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 3,
+            option: 14
+        }));
+        assert_eq!(toolbar.stamp(), "█");
+        let selected_count: usize = (0..toolbar.menu_row_count())
+            .map(|row| {
+                toolbar
+                    .toolbar_spans(MENU_FIRST_ROW + row)
+                    .iter()
+                    .filter(|span| span.selected)
+                    .count()
+            })
+            .sum();
+        assert_eq!(selected_count, 1);
     }
 
     #[test]
