@@ -107,7 +107,11 @@ fn edit_command_for_key(
     }
 
     if matches!(key, Key::Named(NamedKey::Backspace)) {
-        return Some(EditCommand::Clear);
+        return if matches!(mode, CursorMode::Text | CursorMode::Insert) {
+            Some(EditCommand::Backspace)
+        } else {
+            Some(EditCommand::Clear)
+        };
     }
 
     if !mode.accepts_text()
@@ -453,7 +457,7 @@ mod tests {
                 ModifiersState::empty(),
                 CursorMode::Insert,
             ),
-            Some(EditCommand::Clear)
+            Some(EditCommand::Backspace)
         );
     }
 
@@ -472,10 +476,8 @@ mod tests {
     #[test]
     fn maps_backspace_to_clear_in_every_mode() {
         for mode in [
-            CursorMode::Insert,
             CursorMode::Replace,
             CursorMode::MoveDraw,
-            CursorMode::Text,
             CursorMode::Stamp,
             CursorMode::Shapes,
             CursorMode::Utilities,
@@ -487,6 +489,19 @@ mod tests {
                     mode,
                 ),
                 Some(EditCommand::Clear)
+            );
+        }
+        for mode in [
+            CursorMode::Text,
+            CursorMode::Insert,
+        ] {
+            assert_eq!(
+                edit_command_for_key(
+                    &Key::Named(NamedKey::Backspace),
+                    ModifiersState::empty(),
+                    mode,
+                ),
+                Some(EditCommand::Backspace)
             );
         }
 
