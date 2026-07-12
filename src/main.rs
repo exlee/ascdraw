@@ -37,6 +37,7 @@ use app::{
 use diagnostics::log_error;
 use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
+use history::HistoryGroup;
 use input::{
     ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
     history_command, move_selection_command, ordered_direction_command, pointer_position_to_coord,
@@ -185,10 +186,18 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
+                            let released_shift =
+                                editor.modifiers.shift_key() && !modifiers.state().shift_key();
                             editor.modifiers = modifiers.state();
                             editor.ordered_modifiers.update(editor.modifiers);
+                            if released_shift {
+                                editor.state.end_stroke();
+                                editor.finish_history_transaction();
+                            }
                         }
                         WindowEvent::Focused(false) => {
+                            editor.state.end_stroke();
+                            editor.finish_history_transaction();
                             editor.modifiers = ModifiersState::empty();
                             editor.ordered_modifiers.update(editor.modifiers);
                         }
@@ -202,12 +211,16 @@ fn try_main() -> Result<ExitCode> {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 editor.state.write_text(&text);
-                                if editor.finish_state_change(
+                                if editor.finish_grouped_state_change(
                                     previous_state,
                                     previous_viewport,
                                     true,
+                                    HistoryGroup::TextSession,
                                 ) {
                                     editor.mark_document_dirty();
+                                }
+                                if !editor.state.cursor_mode.accepts_text() {
+                                    editor.finish_history_transaction();
                                 }
                                 editor.request_redraw();
                             }
@@ -230,6 +243,8 @@ fn try_main() -> Result<ExitCode> {
                             } else if clipboard_command(&event.logical_key, editor.modifiers)
                                 .is_some()
                             {
+                                editor.state.end_stroke();
+                                editor.finish_history_transaction();
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 let mut platform = NativeExportPlatform;
@@ -277,6 +292,8 @@ fn try_main() -> Result<ExitCode> {
                             } else if let Some(action) =
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
+                                editor.state.end_stroke();
+                                editor.finish_history_transaction();
                                 pending_command = Some(app_command_from_user_action(action));
                             } else if editor.state.toolbar.pending_shortcut().is_none()
                                 && let Some(command) = view_command(
@@ -286,9 +303,17 @@ fn try_main() -> Result<ExitCode> {
                                     editor.state.toolbar.utility_kind(),
                                 )
                             {
+                                editor.state.end_stroke();
+                                editor.finish_history_transaction();
                                 editor.state.toolbar.cancel_shortcut();
                                 editor.apply_view_command(command);
                             } else {
+                                let history_group = history_group_for_key(
+                                    &editor.state,
+                                    &event.logical_key,
+                                    editor.modifiers,
+                                    &editor.ordered_modifiers,
+                                );
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 let handled = handle_editor_key_with_order(
@@ -300,13 +325,29 @@ fn try_main() -> Result<ExitCode> {
                                     &editor.ordered_modifiers,
                                 );
                                 if let Some(document_changed) = handled {
-                                    let document_changed = editor.finish_state_change(
-                                        previous_state,
-                                        previous_viewport,
-                                        document_changed,
-                                    );
+                                    if history_group.is_none() {
+                                        editor.state.end_stroke();
+                                    }
+                                    let document_changed = match history_group {
+                                        Some(group) => editor.finish_grouped_state_change(
+                                            previous_state,
+                                            previous_viewport,
+                                            document_changed,
+                                            group,
+                                        ),
+                                        None => editor.finish_state_change(
+                                            previous_state,
+                                            previous_viewport,
+                                            document_changed,
+                                        ),
+                                    };
                                     if document_changed {
                                         editor.mark_document_dirty();
+                                    }
+                                    if history_group == Some(HistoryGroup::TextSession)
+                                        && !editor.state.cursor_mode.accepts_text()
+                                    {
+                                        editor.finish_history_transaction();
                                     }
                                     editor.request_redraw();
                                 }
@@ -473,6 +514,20 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
+fn history_group_for_key(
+    state: &EditorState,
+    key: &Key,
+    modifiers: ModifiersState,
+    ordered_modifiers: &input::OrderedModifierTracker,
+) -> Option<HistoryGroup> {
+    if state.cursor_mode.accepts_text() {
+        return Some(HistoryGroup::TextSession);
+    }
+    ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
+        .is_some_and(|command| matches!(command.command, EditCommand::Draw(_)))
+        .then_some(HistoryGroup::LineStroke)
+}
+
 fn handle_editor_key_with_order(
     state: &mut EditorState,
     key: &Key,
@@ -589,20 +644,20 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
         }
         EditCommand::ConfirmOrTextEntry => {
             if state.has_shape_preview() {
-                state.start_shape_or_confirm();
+                state.start_shape_or_confirm()
             } else {
                 state.toggle_text_entry();
+                false
             }
-            false
-        },
+        }
         EditCommand::ConfirmOrReplace => {
             if state.has_shape_preview() {
-                state.start_shape_or_confirm();
+                state.start_shape_or_confirm()
             } else {
                 state.toggle_replace_mode();
+                false
             }
-            false
-        },
+        }
         EditCommand::BeginSingleReplace => {
             state.begin_single_replace();
             false
@@ -615,10 +670,7 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.place_stamp();
             true
         }
-        EditCommand::StartOrConfirmShape => {
-            state.start_shape_or_confirm();
-            false
-        }
+        EditCommand::StartOrConfirmShape => state.start_shape_or_confirm(),
         EditCommand::Home => {
             state.move_home();
             false
@@ -689,6 +741,10 @@ mod tests {
         let config = AppConfig::default();
         let mut state = EditorState::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        let before = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
 
         assert!(!apply_edit_command(
             &mut state,
@@ -708,12 +764,60 @@ mod tests {
             .lines_with_shape_preview()
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
-        assert!(!apply_edit_command(
+        assert!(apply_edit_command(
             &mut state,
             EditCommand::StartOrConfirmShape
         ));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+        let placed = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        let mut shape_history = history::EditHistory::default();
+        assert!(shape_history.record_change(before.clone(), &placed));
+        assert_eq!(shape_history.undo(placed), Some(before));
+    }
+
+    #[test]
+    fn history_grouping_routes_only_line_strokes_and_text_accepting_sessions() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        let mut ordered = input::OrderedModifierTracker::default();
+        ordered.update(ModifiersState::SHIFT);
+        assert_eq!(
+            history_group_for_key(
+                &state,
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::SHIFT,
+                &ordered,
+            ),
+            Some(HistoryGroup::LineStroke)
+        );
+        assert_eq!(
+            history_group_for_key(
+                &state,
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::empty(),
+                &input::OrderedModifierTracker::default(),
+            ),
+            None
+        );
+
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            state.cursor_mode = mode;
+            assert_eq!(
+                history_group_for_key(
+                    &state,
+                    &Key::Character("u".into()),
+                    ModifiersState::empty(),
+                    &input::OrderedModifierTracker::default(),
+                ),
+                Some(HistoryGroup::TextSession),
+                "mode {mode:?}"
+            );
+        }
     }
 
     #[test]

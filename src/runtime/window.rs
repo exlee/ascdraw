@@ -13,7 +13,7 @@ use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::EditorState;
-use crate::history::{EditHistory, HistorySnapshot};
+use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
     LayoutMetrics, ViewportOffset, content_intersects_inner_screen, content_top_padding,
@@ -105,6 +105,7 @@ impl EditorWindow {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.state.end_stroke();
         let current = self.history_snapshot();
         let Some(snapshot) = self.history.undo(current) else {
             return false;
@@ -113,7 +114,13 @@ impl EditorWindow {
         true
     }
 
+    pub fn finish_history_transaction(&mut self) -> bool {
+        let current = self.history_snapshot();
+        self.history.finish_transaction(&current)
+    }
+
     pub fn redo(&mut self) -> bool {
+        self.state.end_stroke();
         let current = self.history_snapshot();
         let Some(snapshot) = self.history.redo(current) else {
             return false;
@@ -136,6 +143,38 @@ impl EditorWindow {
         previous_viewport: ViewportOffset,
         document_changed: bool,
     ) -> bool {
+        self.finish_state_change_in_group(previous_state, previous_viewport, document_changed, None)
+    }
+
+    pub fn finish_grouped_state_change(
+        &mut self,
+        previous_state: EditorState,
+        previous_viewport: ViewportOffset,
+        document_changed: bool,
+        group: HistoryGroup,
+    ) -> bool {
+        self.finish_state_change_in_group(
+            previous_state,
+            previous_viewport,
+            document_changed,
+            Some(group),
+        )
+    }
+
+    fn finish_state_change_in_group(
+        &mut self,
+        previous_state: EditorState,
+        previous_viewport: ViewportOffset,
+        document_changed: bool,
+        group: Option<HistoryGroup>,
+    ) -> bool {
+        let previous = HistorySnapshot {
+            edit: previous_state.edit_snapshot(),
+            viewport: previous_viewport,
+        };
+        if group.is_none() {
+            self.history.finish_transaction(&previous);
+        }
         let menu_selections_changed =
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
         let prepend = self.state.take_pending_prepend();
@@ -193,12 +232,13 @@ impl EditorWindow {
             if !document_changed {
                 return false;
             }
-            let previous = HistorySnapshot {
-                edit: previous_state.edit_snapshot(),
-                viewport: previous_viewport,
-            };
             let current = self.history_snapshot();
-            return self.history.record_change(previous, &current);
+            return match group {
+                Some(group) => self
+                    .history
+                    .record_grouped_change(group, previous, &current),
+                None => self.history.record_change(previous, &current),
+            };
         }
 
         self.state = previous_state;
@@ -537,6 +577,8 @@ pub fn close_window(
     elwt: &ActiveEventLoop,
 ) {
     if let Some(mut editor) = windows.remove(&window_id) {
+        editor.state.end_stroke();
+        editor.finish_history_transaction();
         save_editor_documents(std::iter::once(&mut editor), "close");
     }
     if windows.is_empty() {
@@ -545,6 +587,10 @@ pub fn close_window(
 }
 
 pub fn save_windows_on_exit(windows: &mut HashMap<WindowId, EditorWindow>) {
+    for editor in windows.values_mut() {
+        editor.state.end_stroke();
+        editor.finish_history_transaction();
+    }
     save_editor_documents(windows.values_mut(), "application exit");
 }
 

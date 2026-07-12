@@ -812,7 +812,7 @@ impl EditorState {
         };
     }
 
-    pub fn start_shape_or_confirm(&mut self) {
+    pub fn start_shape_or_confirm(&mut self) -> bool {
         let preview = self.shape_preview.take();
         let had_preview = preview.is_some();
         let had_selection = !self.selection.is_collapsed();
@@ -821,17 +821,18 @@ impl EditorState {
         self.collapse_selection();
 
         if self.cursor_mode != CursorMode::Shapes {
-            return;
+            return false;
         }
 
         if had_preview {
             self.shape_preview = preview;
             self.confirm_shape();
-            return;
+            return true;
         }
         if !had_preview && !had_selection {
             self.toggle_shape_preview();
         }
+        false
     }
 
     pub fn selection_bounds(&self) -> SelectionBounds {

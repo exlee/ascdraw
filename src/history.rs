@@ -15,14 +15,61 @@ pub struct HistorySnapshot {
 pub struct EditHistory {
     undo: VecDeque<HistorySnapshot>,
     redo: VecDeque<HistorySnapshot>,
+    pending: Option<PendingChange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryGroup {
+    LineStroke,
+    TextSession,
+}
+
+#[derive(Debug)]
+struct PendingChange {
+    group: HistoryGroup,
+    previous: HistorySnapshot,
 }
 
 impl EditHistory {
     pub fn record_change(&mut self, previous: HistorySnapshot, current: &HistorySnapshot) -> bool {
+        self.finish_transaction(&previous);
         if previous.edit.same_document(&current.edit) {
             return false;
         }
         push_bounded(&mut self.undo, previous);
+        self.redo.clear();
+        true
+    }
+
+    pub fn record_grouped_change(
+        &mut self,
+        group: HistoryGroup,
+        previous: HistorySnapshot,
+        current: &HistorySnapshot,
+    ) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.group != group)
+        {
+            self.finish_transaction(&previous);
+        }
+        if previous.edit.same_document(&current.edit) {
+            return false;
+        }
+        self.pending
+            .get_or_insert(PendingChange { group, previous });
+        true
+    }
+
+    pub fn finish_transaction(&mut self, current: &HistorySnapshot) -> bool {
+        let Some(pending) = self.pending.take() else {
+            return false;
+        };
+        if pending.previous.edit.same_document(&current.edit) {
+            return false;
+        }
+        push_bounded(&mut self.undo, pending.previous);
         self.redo.clear();
         true
     }
@@ -32,6 +79,7 @@ impl EditHistory {
         previous: HistorySnapshot,
         current: &HistorySnapshot,
     ) -> bool {
+        self.finish_transaction(&previous);
         if previous == *current {
             return false;
         }
@@ -41,20 +89,27 @@ impl EditHistory {
     }
 
     pub fn undo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
+        self.finish_transaction(&current);
         let previous = self.undo.pop_back()?;
         push_bounded(&mut self.redo, current);
         Some(previous)
     }
 
     pub fn redo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
+        self.finish_transaction(&current);
         let next = self.redo.pop_back()?;
         push_bounded(&mut self.undo, current);
         Some(next)
     }
 
     #[cfg(test)]
-    fn lengths(&self) -> (usize, usize) {
+    pub(crate) fn lengths(&self) -> (usize, usize) {
         (self.undo.len(), self.redo.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_pending_transaction(&self) -> bool {
+        self.pending.is_some()
     }
 }
 
@@ -101,6 +156,113 @@ mod tests {
         assert!(history.record_change(one, &three));
         assert_eq!(history.lengths(), (2, 0));
         assert!(history.redo(three).is_none());
+    }
+
+    #[test]
+    fn multi_step_line_stroke_commits_once_and_reports_dirty_before_commit() {
+        let blank = snapshot("", ViewportOffset::default());
+        let one = snapshot("─", ViewportOffset { x: 1, y: 0 });
+        let complete = snapshot("──", ViewportOffset { x: 2, y: 0 });
+        let mut history = EditHistory::default();
+
+        assert!(history.record_grouped_change(HistoryGroup::LineStroke, blank.clone(), &one));
+        assert!(history.has_pending_transaction());
+        assert_eq!(history.lengths(), (0, 0));
+        assert!(history.record_grouped_change(HistoryGroup::LineStroke, one, &complete));
+        assert_eq!(history.lengths(), (0, 0));
+
+        assert!(history.finish_transaction(&complete));
+        assert_eq!(history.lengths(), (1, 0));
+        assert_eq!(history.undo(complete), Some(blank));
+    }
+
+    #[test]
+    fn text_insert_replace_and_single_replace_sessions_each_commit_once_on_exit() {
+        for mode in [
+            crate::app::CursorMode::Text,
+            crate::app::CursorMode::Insert,
+            crate::app::CursorMode::Replace,
+        ] {
+            let mut state = EditorState::new(&AppConfig::default().theme, "test");
+            state.cursor_mode = mode;
+            let before = HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: ViewportOffset::default(),
+            };
+            state.write_text("a");
+            let one = HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: ViewportOffset::default(),
+            };
+            state.write_text("b");
+            let two = HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: ViewportOffset::default(),
+            };
+            let mut history = EditHistory::default();
+            assert!(history.record_grouped_change(HistoryGroup::TextSession, before.clone(), &one));
+            assert!(history.record_grouped_change(HistoryGroup::TextSession, one, &two));
+            state.cancel_text_entry();
+            let exited = HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: ViewportOffset::default(),
+            };
+            assert!(history.finish_transaction(&exited));
+            assert_eq!(history.lengths(), (1, 0), "mode {mode:?}");
+            assert_eq!(history.undo(exited), Some(before), "mode {mode:?}");
+        }
+
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.place_stamp();
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        assert!(state.begin_single_replace());
+        state.write_text("x");
+        assert_ne!(state.cursor_mode, crate::app::CursorMode::Replace);
+        let replaced = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_grouped_change(
+            HistoryGroup::TextSession,
+            before.clone(),
+            &replaced
+        ));
+        assert!(history.finish_transaction(&replaced));
+        assert_eq!(history.undo(replaced), Some(before));
+    }
+
+    #[test]
+    fn no_op_grouped_sessions_and_interruptions_preserve_redo() {
+        let blank = snapshot("", ViewportOffset::default());
+        let edited = snapshot("x", ViewportOffset::default());
+        let mut history = EditHistory::default();
+        assert!(history.record_change(blank.clone(), &edited));
+        assert_eq!(history.undo(edited.clone()), Some(blank.clone()));
+
+        assert!(!history.record_grouped_change(HistoryGroup::TextSession, blank.clone(), &blank));
+        assert!(!history.finish_transaction(&blank));
+        assert_eq!(history.lengths(), (0, 1));
+        assert_eq!(history.redo(blank.clone()), Some(edited.clone()));
+
+        assert_eq!(history.undo(edited.clone()), Some(blank.clone()));
+        let transient = snapshot("z", ViewportOffset::default());
+        assert!(history.record_grouped_change(
+            HistoryGroup::TextSession,
+            blank.clone(),
+            &transient
+        ));
+        assert!(history.record_grouped_change(HistoryGroup::TextSession, transient, &blank));
+        assert!(!history.finish_transaction(&blank));
+        assert_eq!(history.lengths(), (0, 1));
+
+        let interim = snapshot("y", ViewportOffset { x: 4, y: 5 });
+        assert!(history.record_grouped_change(HistoryGroup::TextSession, blank.clone(), &interim));
+        assert_eq!(history.undo(interim), Some(blank));
+        assert_eq!(history.lengths(), (0, 1));
     }
 
     #[test]
