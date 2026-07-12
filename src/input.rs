@@ -1,4 +1,3 @@
-use winit::event::KeyEvent;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::app::AppConfig;
@@ -17,6 +16,7 @@ pub enum EditCommand {
     ToggleTextEntry,
     ToggleReplaceMode,
     BeginSingleReplace,
+    CancelTextEntry,
     PlaceStamp,
     ToggleShapePreview,
     ConfirmShape,
@@ -29,14 +29,15 @@ pub enum EditCommand {
 }
 
 pub fn edit_command(
-    event: &KeyEvent,
+    key: &Key,
+    repeat: bool,
     modifiers: ModifiersState,
     mode: CursorMode,
 ) -> Option<EditCommand> {
-    if event.repeat && matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+    if repeat && matches!(key, Key::Named(NamedKey::Escape)) {
         return None;
     }
-    edit_command_for_key(&event.logical_key, modifiers, mode)
+    edit_command_for_key(key, modifiers, mode)
 }
 
 fn edit_command_for_key(
@@ -44,6 +45,16 @@ fn edit_command_for_key(
     modifiers: ModifiersState,
     mode: CursorMode,
 ) -> Option<EditCommand> {
+    if mode.accepts_text()
+        && (matches!(key, Key::Named(NamedKey::Escape))
+            || (modifiers.control_key()
+                && !modifiers.alt_key()
+                && !modifiers.super_key()
+                && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("c") || text.eq_ignore_ascii_case("g"))))
+    {
+        return Some(EditCommand::CancelTextEntry);
+    }
+
     if matches!(key, Key::Named(NamedKey::Enter)) {
         return Some(if modifiers.shift_key() {
             EditCommand::ToggleReplaceMode
@@ -405,6 +416,41 @@ mod tests {
                 edit_command_for_key(&Key::Character("r".into()), ModifiersState::empty(), mode,),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn cancel_keys_exit_every_text_accepting_mode() {
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            for (key, modifiers) in [
+                (Key::Named(NamedKey::Escape), ModifiersState::empty()),
+                (Key::Character("c".into()), ModifiersState::CONTROL),
+                (Key::Character("g".into()), ModifiersState::CONTROL),
+            ] {
+                assert_eq!(
+                    edit_command_for_key(&key, modifiers, mode),
+                    Some(EditCommand::CancelTextEntry),
+                    "mode={mode:?}, key={key:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn control_cancel_keys_do_nothing_in_ordinary_drawing_modes() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            for key in [Key::Character("c".into()), Key::Character("g".into())] {
+                assert_eq!(
+                    edit_command_for_key(&key, ModifiersState::CONTROL, mode),
+                    None,
+                    "mode={mode:?}, key={key:?}"
+                );
+            }
         }
     }
 

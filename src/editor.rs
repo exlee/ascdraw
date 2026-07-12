@@ -77,7 +77,8 @@ impl EditorState {
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        if self.cursor_mode == CursorMode::Text {
+        if self.cursor_mode.accepts_text() {
+            self.toolbar.cancel_shortcut();
             return false;
         }
         let old_mode = self.toolbar.main_mode();
@@ -135,6 +136,15 @@ impl EditorState {
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = true;
         self.cursor_mode = CursorMode::Replace;
+        true
+    }
+
+    pub fn cancel_text_entry(&mut self) -> bool {
+        if !self.cursor_mode.accepts_text() {
+            return false;
+        }
+        self.end_stroke();
+        self.sync_cursor_mode_with_toolbar();
         true
     }
 
@@ -900,6 +910,45 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_text_replace_and_single_replace_restores_the_toolbar_mode() {
+        for editing_mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            let mut state = state();
+            assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+            state.cursor_mode = editing_mode;
+
+            assert!(state.cancel_text_entry());
+
+            assert_eq!(state.cursor_mode, CursorMode::Stamp);
+        }
+
+        let mut state = state();
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        assert!(state.begin_single_replace());
+
+        assert!(state.cancel_text_entry());
+
+        assert_eq!(state.cursor_mode, CursorMode::Shapes);
+    }
+
+    #[test]
+    fn cancelling_text_entry_clears_a_pending_toolbar_prefix() {
+        let mut state = state();
+        assert!(
+            state
+                .toolbar
+                .handle_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        state.cursor_mode = CursorMode::Replace;
+
+        assert!(state.cancel_text_entry());
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
+        );
+
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+    }
+
+    #[test]
     fn cursor_column_tracks_wide_graphemes() {
         let mut state = state();
         state.insert("😀x");
@@ -1102,6 +1151,20 @@ mod tests {
         }
         assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
         assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
+    fn toolbar_shortcuts_are_bypassed_in_every_text_accepting_mode() {
+        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+            let mut state = state();
+            state.cursor_mode = mode;
+
+            assert!(
+                !state
+                    .handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
+            );
+            assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        }
     }
 
     #[test]

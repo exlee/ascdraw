@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use winit::event::{ElementState, Event, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::keyboard::{Key, ModifiersState};
 use winit::window::WindowId;
 
 mod app;
@@ -176,31 +177,29 @@ fn try_main() -> Result<ExitCode> {
                             if event.state == ElementState::Pressed =>
                         {
                             editor.note_keypress(Instant::now());
-                            if let Some(action) =
+                            if edit_command(
+                                &event.logical_key,
+                                event.repeat,
+                                editor.modifiers,
+                                editor.state.cursor_mode,
+                            ) == Some(EditCommand::CancelTextEntry)
+                            {
+                                editor.state.cancel_text_entry();
+                                editor.request_redraw();
+                            } else if let Some(action) =
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
                                 pending_command = Some(app_command_from_user_action(action));
-                            } else if editor
-                                .state
-                                .handle_toolbar_shortcut(&event.logical_key, editor.modifiers)
-                            {
-                                editor.request_redraw();
-                            } else if let Some(command) =
-                                edit_command(&event, editor.modifiers, editor.state.cursor_mode)
-                            {
-                                if apply_edit_command(&mut editor.state, command) {
+                            } else if let Some(document_changed) = handle_editor_key(
+                                &mut editor.state,
+                                &event.logical_key,
+                                event.text.as_deref(),
+                                event.repeat,
+                                editor.modifiers,
+                            ) {
+                                if document_changed {
                                     editor.mark_document_dirty();
                                 }
-                                editor.request_redraw();
-                            } else if !editor.modifiers.control_key()
-                                && editor.state.cursor_mode.accepts_text()
-                                && !editor.modifiers.alt_key()
-                                && !editor.modifiers.super_key()
-                                && let Some(text) = event.text
-                                && !text.chars().all(char::is_control)
-                            {
-                                editor.state.write_text(&text);
-                                editor.mark_document_dirty();
                                 editor.request_redraw();
                             }
                         }
@@ -273,6 +272,32 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
+fn handle_editor_key(
+    state: &mut EditorState,
+    key: &Key,
+    text: Option<&str>,
+    repeat: bool,
+    modifiers: ModifiersState,
+) -> Option<bool> {
+    if state.handle_toolbar_shortcut(key, modifiers) {
+        return Some(false);
+    }
+    if let Some(command) = edit_command(key, repeat, modifiers, state.cursor_mode) {
+        return Some(apply_edit_command(state, command));
+    }
+    if !modifiers.control_key()
+        && state.cursor_mode.accepts_text()
+        && !modifiers.alt_key()
+        && !modifiers.super_key()
+        && let Some(text) = text
+        && !text.chars().all(char::is_control)
+    {
+        state.write_text(text);
+        return Some(true);
+    }
+    None
+}
+
 fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
     match command {
         EditCommand::Move(direction) => {
@@ -305,6 +330,10 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
         }
         EditCommand::BeginSingleReplace => {
             state.begin_single_replace();
+            false
+        }
+        EditCommand::CancelTextEntry => {
+            state.cancel_text_entry();
             false
         }
         EditCommand::PlaceStamp => {
@@ -349,9 +378,10 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::AppConfig;
-    use crate::model::Direction;
+    use crate::app::{AppConfig, CursorMode};
+    use crate::model::{Coord, Direction};
     use crate::toolbar::{MainMode, ToolbarAction};
+    use winit::keyboard::NamedKey;
 
     #[test]
     fn shape_commands_start_preview_move_and_commit_a_rectangle() {
@@ -380,6 +410,93 @@ mod tests {
         assert!(apply_edit_command(&mut state, EditCommand::ConfirmShape));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    #[test]
+    fn cancel_keys_route_out_of_text_replace_and_single_replace() {
+        let config = AppConfig::default();
+        for (key, modifiers) in [
+            (Key::Named(NamedKey::Escape), ModifiersState::empty()),
+            (Key::Character("c".into()), ModifiersState::CONTROL),
+            (Key::Character("g".into()), ModifiersState::CONTROL),
+        ] {
+            for mode in [CursorMode::Text, CursorMode::Replace] {
+                let mut state = EditorState::new(&config.theme, "test");
+                assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+                state.cursor_mode = mode;
+
+                assert_eq!(
+                    handle_editor_key(&mut state, &key, None, false, modifiers),
+                    Some(false)
+                );
+                assert_eq!(state.cursor_mode, CursorMode::Stamp);
+            }
+
+            let mut state = EditorState::new(&config.theme, "test");
+            assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+            assert!(state.begin_single_replace());
+
+            assert_eq!(
+                handle_editor_key(&mut state, &key, None, false, modifiers),
+                Some(false)
+            );
+            assert_eq!(state.cursor_mode, CursorMode::Shapes);
+        }
+    }
+
+    #[test]
+    fn digits_route_to_insert_replace_and_single_replace() {
+        let config = AppConfig::default();
+        let digit = Key::Character("2".into());
+
+        let mut insert = EditorState::new(&config.theme, "test");
+        insert.toggle_text_entry();
+        assert_eq!(
+            handle_editor_key(
+                &mut insert,
+                &digit,
+                Some("2"),
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&insert.grid.lines[0]), "2");
+
+        let mut replace = EditorState::new(&config.theme, "test");
+        replace.insert("a");
+        replace.move_to(Coord::default());
+        replace.toggle_replace_mode();
+        assert_eq!(
+            handle_editor_key(
+                &mut replace,
+                &digit,
+                Some("2"),
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&replace.grid.lines[0]), "2");
+        assert_eq!(replace.cursor_mode, CursorMode::Replace);
+
+        let mut single_replace = EditorState::new(&config.theme, "test");
+        single_replace.insert("a");
+        single_replace.move_to(Coord::default());
+        assert!(single_replace.begin_single_replace());
+        assert_eq!(
+            handle_editor_key(
+                &mut single_replace,
+                &digit,
+                Some("2"),
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&single_replace.grid.lines[0]), "2");
+        assert_eq!(single_replace.grid.cursor_pos, Coord::default());
+        assert_eq!(single_replace.cursor_mode, CursorMode::MoveDraw);
     }
 
     fn line_contents(line: &[crate::model::Atom]) -> String {
