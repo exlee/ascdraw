@@ -87,6 +87,12 @@ enum ShortcutPrefix {
     Option { category: usize, page: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CategoryShortcut {
+    Select(usize),
+    Page(usize),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolbarState {
     main_mode: MainMode,
@@ -154,18 +160,26 @@ impl ToolbarState {
                 }
             }
             Some(ShortcutPrefix::Category(category)) => {
-                if let Some(page) = digit.checked_sub(1)
-                    && self
-                        .layout()
-                        .options
-                        .get(category)
-                        .is_some_and(|options| page * OPTIONS_PER_PAGE < options.len())
-                {
-                    self.shortcut_prefix = Some(ShortcutPrefix::Option { category, page });
+                let option_count = self
+                    .layout()
+                    .options
+                    .get(category)
+                    .map_or(0, |options| options.len());
+                match category_shortcut(option_count, digit) {
+                    Some(CategoryShortcut::Select(option)) => {
+                        self.apply_action(ToolbarAction::SelectSubmenu {
+                            submenu: category,
+                            option,
+                        });
+                    }
+                    Some(CategoryShortcut::Page(page)) => {
+                        self.shortcut_prefix = Some(ShortcutPrefix::Option { category, page });
+                    }
+                    None => {}
                 }
             }
             Some(ShortcutPrefix::Option { category, page }) => {
-                let position = if digit == 0 { 9 } else { digit - 1 };
+                let position = shortcut_position(digit);
                 let option = page * OPTIONS_PER_PAGE + position;
                 self.apply_action(ToolbarAction::SelectSubmenu {
                     submenu: category,
@@ -245,7 +259,11 @@ impl ToolbarState {
                     " ".repeat(prefix_width)
                 }
             } else {
-                let path = format!("{}.{}.", category + 2, page + 1);
+                let path = if options.len() <= OPTIONS_PER_PAGE {
+                    format!("{}.", category + 2)
+                } else {
+                    format!("{}.{}.", category + 2, page + 1)
+                };
                 format!("{path:>width$} ", width = prefix_width - 1)
             }));
 
@@ -447,6 +465,22 @@ fn shortcut_digit(text: &str) -> Option<usize> {
     }
 }
 
+fn category_shortcut(option_count: usize, digit: usize) -> Option<CategoryShortcut> {
+    if option_count <= OPTIONS_PER_PAGE {
+        let option = shortcut_position(digit);
+        (option < option_count).then_some(CategoryShortcut::Select(option))
+    } else {
+        digit
+            .checked_sub(1)
+            .filter(|page| page * OPTIONS_PER_PAGE < option_count)
+            .map(CategoryShortcut::Page)
+    }
+}
+
+fn shortcut_position(digit: usize) -> usize {
+    if digit == 0 { 9 } else { digit - 1 }
+}
+
 fn line_style(selected: usize) -> LineStyle {
     match selected {
         0 => LineStyle::Thin,
@@ -503,19 +537,26 @@ mod tests {
     }
 
     #[test]
-    fn three_key_line_option_path_selects_without_cycling() {
+    fn two_key_line_width_and_corner_paths_select_without_cycling() {
         let mut toolbar = ToolbarState::default();
-        for key in ["4", "1", "3"] {
+        for key in ["4", "3"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.line_style(), LineStyle::Double);
+
+        for key in ["5", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
+
         assert!(row(&toolbar, 2).contains("Start: · ◀ ◆ ●"));
-        assert!(row(&toolbar, 3).contains("2.1. 1 2 3 4"));
-        assert!(row(&toolbar, 3).contains("4.1. 1 2 3"));
+        assert!(row(&toolbar, 3).contains("2. 1 2 3 4"));
+        assert!(row(&toolbar, 3).contains("4. 1 2 3"));
+        assert!(row(&toolbar, 3).contains("5. 1      2"));
     }
 
     #[test]
-    fn digit_zero_selects_the_tenth_option() {
+    fn three_key_multi_page_path_and_digit_zero_select_exact_options() {
         let mut toolbar = ToolbarState::default();
         for key in ["1", "2", "2", "1", "0"] {
             press(&mut toolbar, key);
@@ -527,6 +568,18 @@ mod tests {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.stamp(), "•");
+    }
+
+    #[test]
+    fn a_ten_option_category_flattens_and_maps_zero_to_the_tenth_option() {
+        assert_eq!(
+            category_shortcut(OPTIONS_PER_PAGE, 0),
+            Some(CategoryShortcut::Select(9))
+        );
+        assert_eq!(
+            category_shortcut(OPTIONS_PER_PAGE + 1, 1),
+            Some(CategoryShortcut::Page(0))
+        );
     }
 
     #[test]
@@ -586,6 +639,29 @@ mod tests {
         );
         assert!(toolbar.apply_action(decorator));
         assert_eq!(toolbar.stamp(), "◇");
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let shortcut_spans = toolbar.toolbar_spans(3);
+        let (column, _) = shortcut_spans
+            .iter()
+            .scan(0, |column, span| {
+                let start = *column;
+                *column += UnicodeWidthStr::width(span.contents.as_str());
+                Some((start, span))
+            })
+            .find(|(_, span)| {
+                span.action
+                    == Some(ToolbarAction::SelectSubmenu {
+                        submenu: 2,
+                        option: 2,
+                    })
+            })
+            .expect("flattened Width shortcut is clickable");
+        let width = toolbar
+            .action_at(3, column)
+            .expect("flattened Width shortcut hit tests");
+        assert!(toolbar.apply_action(width));
+        assert_eq!(toolbar.line_style(), LineStyle::Double);
     }
 
     #[test]
