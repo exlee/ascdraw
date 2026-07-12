@@ -7,6 +7,7 @@ use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_with_connection, glyph_with_connection_and_corner,
     glyph_without_connection, is_line_glyph, line_ending_glyph,
 };
+use crate::layout::ContentBounds;
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::toolbar::{MainMode, ShapeKind, ToolbarAction, ToolbarState};
 
@@ -30,6 +31,7 @@ pub struct EditorState {
     line_markers: Vec<PlacedLineMarker>,
     shape_preview: Option<ShapePreview>,
     single_replace_pending: bool,
+    pending_prepend: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,7 @@ impl EditorState {
             line_markers: Vec::new(),
             shape_preview: None,
             single_replace_pending: false,
+            pending_prepend: (0, 0),
         }
     }
 
@@ -282,12 +285,19 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
-    pub fn move_to(&mut self, coord: Coord) {
+    pub fn move_to(&mut self, coord: Coord) -> bool {
+        let old_line_count = self.grid.lines.len();
+        let old_width = self
+            .grid
+            .lines
+            .get(coord.line)
+            .map_or(0, |line| display_width(line));
         self.end_stroke();
         self.move_to_without_ending_stroke(coord);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.end = self.grid.cursor_pos;
         }
+        self.grid.lines.len() != old_line_count || coord.column > old_width
     }
 
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
@@ -307,25 +317,25 @@ impl EditorState {
         self.sync_cursor_column();
     }
 
-    pub fn move_cursor(&mut self, direction: Direction) {
-        self.move_or_draw(direction, false);
+    pub fn move_cursor(&mut self, direction: Direction) -> bool {
+        let changed = self.move_or_draw(direction, false);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.end = self.grid.cursor_pos;
         }
+        changed
     }
 
-    pub fn move_or_draw(&mut self, direction: Direction, draw: bool) {
+    pub fn move_or_draw(&mut self, direction: Direction, draw: bool) -> bool {
+        let prepended = self.prepare_adjacent(direction);
         let from = self.grid.cursor_pos;
-        let Some(to) = adjacent_coord(from, direction) else {
-            return;
-        };
+        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
         let line_style = self.toolbar.line_style();
         let corner_style = self.toolbar.line_corner();
 
         if !draw {
             self.end_stroke();
             self.move_to_without_ending_stroke(to);
-            return;
+            return prepended;
         }
 
         let continuing_stroke = self
@@ -359,7 +369,7 @@ impl EditorState {
             self.add_connection(to, direction.opposite(), line_style, corner_style)
         else {
             self.active_stroke = None;
-            return;
+            return true;
         };
 
         if !continuing_stroke
@@ -388,14 +398,14 @@ impl EditorState {
             end_base_glyph,
             moving_ending,
         });
+        true
     }
 
     pub fn move_or_erase(&mut self, direction: Direction) {
+        self.prepare_adjacent(direction);
         self.end_stroke();
         let from = self.grid.cursor_pos;
-        let Some(to) = adjacent_coord(from, direction) else {
-            return;
-        };
+        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
         self.erase_connection_or_cell(from, direction);
         self.move_to_without_ending_stroke(to);
         self.erase_connection_or_cell(to, direction.opposite());
@@ -557,9 +567,9 @@ impl EditorState {
     }
 
     pub fn draw_stamp(&mut self, direction: Direction) {
-        let Some(to) = adjacent_coord(self.grid.cursor_pos, direction) else {
-            return;
-        };
+        self.prepare_adjacent(direction);
+        let to = adjacent_coord(self.grid.cursor_pos, direction)
+            .expect("canvas edge was structurally extended");
         self.shape_preview = None;
         self.place_stamp();
         self.move_to_without_ending_stroke(to);
@@ -572,9 +582,9 @@ impl EditorState {
             return;
         }
 
-        let Some(to) = adjacent_coord(self.grid.cursor_pos, direction) else {
-            return;
-        };
+        self.prepare_adjacent(direction);
+        let to = adjacent_coord(self.grid.cursor_pos, direction)
+            .expect("canvas edge was structurally extended");
         self.shape_preview = None;
         self.clear_cell();
         self.move_to_without_ending_stroke(to);
@@ -637,6 +647,89 @@ impl EditorState {
     fn sync_cursor_column(&mut self) {
         self.grid.cursor_pos.column =
             display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
+    }
+
+    pub fn take_pending_prepend(&mut self) -> (usize, usize) {
+        std::mem::take(&mut self.pending_prepend)
+    }
+
+    pub fn content_bounds(&self) -> Option<ContentBounds> {
+        let mut bounds: Option<ContentBounds> = None;
+        for (line_index, line) in self.grid.lines.iter().enumerate() {
+            let mut column = 0;
+            for atom in line {
+                let width = atom_width(atom);
+                if !atom.contents.chars().all(char::is_whitespace) {
+                    bounds = Some(match bounds {
+                        Some(current) => ContentBounds {
+                            left: current.left.min(column),
+                            right: current
+                                .right
+                                .max(column.saturating_add(width.saturating_sub(1))),
+                            top: current.top.min(line_index),
+                            bottom: current.bottom.max(line_index),
+                        },
+                        None => ContentBounds {
+                            left: column,
+                            right: column.saturating_add(width.saturating_sub(1)),
+                            top: line_index,
+                            bottom: line_index,
+                        },
+                    });
+                }
+                column = column.saturating_add(width);
+            }
+        }
+        bounds
+    }
+
+    fn prepare_adjacent(&mut self, direction: Direction) -> bool {
+        match direction {
+            Direction::Up if self.grid.cursor_pos.line == 0 => {
+                self.prepend_line();
+                true
+            }
+            Direction::Left if self.grid.cursor_pos.column == 0 => {
+                self.prepend_column();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn prepend_line(&mut self) {
+        self.grid.lines.insert(0, Vec::new());
+        self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
+        if let Some(stroke) = self.active_stroke.as_mut() {
+            stroke.end.line = stroke.end.line.saturating_add(1);
+        }
+        for marker in &mut self.line_markers {
+            marker.coord.line = marker.coord.line.saturating_add(1);
+        }
+        if let Some(preview) = self.shape_preview.as_mut() {
+            preview.anchor.line = preview.anchor.line.saturating_add(1);
+            preview.end.line = preview.end.line.saturating_add(1);
+        }
+        self.pending_prepend.1 = self.pending_prepend.1.saturating_add(1);
+    }
+
+    fn prepend_column(&mut self) {
+        for line in &mut self.grid.lines {
+            line.insert(0, blank_atom());
+        }
+        self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(1);
+        self.cursor_index = self.cursor_index.saturating_add(1);
+        if let Some(stroke) = self.active_stroke.as_mut() {
+            stroke.end.column = stroke.end.column.saturating_add(1);
+        }
+        for marker in &mut self.line_markers {
+            marker.coord.column = marker.coord.column.saturating_add(1);
+        }
+        if let Some(preview) = self.shape_preview.as_mut() {
+            preview.anchor.column = preview.anchor.column.saturating_add(1);
+            preview.end.column = preview.end.column.saturating_add(1);
+        }
+        self.pending_prepend.0 = self.pending_prepend.0.saturating_add(1);
     }
 }
 
@@ -990,6 +1083,109 @@ mod tests {
         assert_eq!(state.grid.lines.len(), 2);
         assert_eq!(contents(&state.grid.lines[0]), " ");
         assert_eq!(contents(&state.grid.lines[1]), " ");
+    }
+
+    #[test]
+    fn moving_up_at_zero_prepends_and_shifts_coordinate_state() {
+        let mut state = state();
+        state.insert("ab");
+        state.move_to(Coord { line: 0, column: 1 });
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord::default(),
+            ending: LineEnding::Arrow,
+            base_glyph: "╶".to_string(),
+        });
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord::default(),
+            end: state.grid.cursor_pos,
+        });
+
+        assert!(state.move_cursor(Direction::Up));
+
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+        assert_eq!(contents(&state.grid.lines[0]), " ");
+        assert_eq!(contents(&state.grid.lines[1]), "ab");
+        assert_eq!(state.line_markers[0].coord.line, 1);
+        let preview = state.shape_preview.unwrap();
+        assert_eq!(preview.anchor.line, 1);
+        assert_eq!(preview.end, state.grid.cursor_pos);
+        assert_eq!(state.take_pending_prepend(), (0, 1));
+    }
+
+    #[test]
+    fn prepending_shifts_an_active_stroke_endpoint() {
+        let mut state = state();
+        state.active_stroke = Some(ActiveStroke {
+            end: Coord::default(),
+            end_base_glyph: "─".to_string(),
+            moving_ending: LineEnding::None,
+        });
+
+        state.prepend_line();
+
+        assert_eq!(state.active_stroke.unwrap().end.line, 1);
+    }
+
+    #[test]
+    fn moving_left_at_zero_prepends_every_line_and_shifts_coordinate_state() {
+        let mut state = state();
+        state.insert("a\nb");
+        state.move_to(Coord::default());
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 1, column: 0 },
+            ending: LineEnding::Arrow,
+            base_glyph: "╶".to_string(),
+        });
+        state.shape_preview = Some(ShapePreview {
+            anchor: Coord::default(),
+            end: Coord { line: 1, column: 0 },
+        });
+
+        assert!(state.move_cursor(Direction::Left));
+
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert_eq!(contents(&state.grid.lines[0]), " a");
+        assert_eq!(contents(&state.grid.lines[1]), " b");
+        assert_eq!(state.line_markers[0].coord.column, 1);
+        let preview = state.shape_preview.unwrap();
+        assert_eq!(preview.anchor.column, 1);
+        assert_eq!(preview.end, state.grid.cursor_pos);
+        assert_eq!(state.take_pending_prepend(), (1, 0));
+    }
+
+    #[test]
+    fn drawing_connects_across_newly_prepended_top_and_left_cells() {
+        let mut top = state();
+        top.move_or_draw(Direction::Right, true);
+        top.move_or_draw(Direction::Up, true);
+        assert_eq!(contents(&top.grid.lines[0]), " ╷");
+        assert_eq!(contents(&top.grid.lines[1]), "╶╯");
+
+        let mut left = state();
+        left.move_or_draw(Direction::Down, true);
+        left.move_or_draw(Direction::Left, true);
+        assert_eq!(contents(&left.grid.lines[0]), " ╷");
+        assert_eq!(contents(&left.grid.lines[1]), "╶╯");
+    }
+
+    #[test]
+    fn content_bounds_ignore_allocated_blank_padding() {
+        let mut state = state();
+        state.move_to(Coord {
+            line: 8,
+            column: 12,
+        });
+        assert_eq!(state.content_bounds(), None);
+        state.write_text("x");
+        assert_eq!(
+            state.content_bounds(),
+            Some(ContentBounds {
+                left: 12,
+                right: 12,
+                top: 8,
+                bottom: 8,
+            })
+        );
     }
 
     #[test]

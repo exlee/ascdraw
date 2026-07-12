@@ -168,8 +168,16 @@ fn try_main() -> Result<ExitCode> {
                                 && !editor.modifiers.alt_key()
                                 && !editor.modifiers.super_key()
                             {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
                                 editor.state.write_text(&text);
-                                editor.mark_document_dirty();
+                                if editor.finish_state_change(
+                                    previous_state,
+                                    previous_viewport,
+                                    true,
+                                ) {
+                                    editor.mark_document_dirty();
+                                }
                                 editor.request_redraw();
                             }
                         }
@@ -190,17 +198,27 @@ fn try_main() -> Result<ExitCode> {
                                 user_keys.action_for_event(&event, editor.modifiers)
                             {
                                 pending_command = Some(app_command_from_user_action(action));
-                            } else if let Some(document_changed) = handle_editor_key(
-                                &mut editor.state,
-                                &event.logical_key,
-                                event.text.as_deref(),
-                                event.repeat,
-                                editor.modifiers,
-                            ) {
-                                if document_changed {
-                                    editor.mark_document_dirty();
+                            } else {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
+                                let handled = handle_editor_key(
+                                    &mut editor.state,
+                                    &event.logical_key,
+                                    event.text.as_deref(),
+                                    event.repeat,
+                                    editor.modifiers,
+                                );
+                                if let Some(document_changed) = handled {
+                                    let document_changed = editor.finish_state_change(
+                                        previous_state,
+                                        previous_viewport,
+                                        document_changed,
+                                    );
+                                    if document_changed {
+                                        editor.mark_document_dirty();
+                                    }
+                                    editor.request_redraw();
                                 }
-                                editor.request_redraw();
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
@@ -236,7 +254,14 @@ fn try_main() -> Result<ExitCode> {
                                 editor.state.apply_toolbar_action(action);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
                                 editor.state.move_to(coord);
+                                editor.finish_state_change(
+                                    previous_state,
+                                    previous_viewport,
+                                    false,
+                                );
                                 editor.request_redraw();
                             }
                         }
@@ -303,10 +328,7 @@ fn handle_editor_key(
 
 fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
     match command {
-        EditCommand::Move(direction) => {
-            state.move_cursor(direction);
-            false
-        }
+        EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => {
             state.move_or_draw(direction, true);
             true
@@ -413,6 +435,16 @@ mod tests {
         assert!(apply_edit_command(&mut state, EditCommand::ConfirmShape));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    #[test]
+    fn structural_edge_movement_reports_a_document_change() {
+        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        assert!(apply_edit_command(
+            &mut state,
+            EditCommand::Move(model::Direction::Up)
+        ));
+        assert_eq!(state.grid.lines.len(), 2);
     }
 
     #[test]

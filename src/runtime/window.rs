@@ -13,7 +13,10 @@ use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::EditorState;
-use crate::layout::{ViewportOffset, content_top_padding};
+use crate::layout::{
+    ContentBounds, ViewportOffset, clamped_navigation_origin, content_top_padding, layout_metrics,
+    navigation_origin,
+};
 #[cfg(target_os = "macos")]
 use crate::macos;
 use crate::model::Coord;
@@ -88,6 +91,57 @@ impl EditorWindow {
         self.document_dirty = true;
     }
 
+    pub fn finish_state_change(
+        &mut self,
+        previous_state: EditorState,
+        previous_viewport: ViewportOffset,
+        document_changed: bool,
+    ) -> bool {
+        let prepend = self.state.take_pending_prepend();
+        let cursor_moved = self.state.grid.cursor_pos != previous_state.grid.cursor_pos;
+        if !cursor_moved && prepend == (0, 0) {
+            return document_changed;
+        }
+
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let toolbar_metrics = self.renderer.title_metrics(scale_factor);
+        let size = self.window.inner_size();
+        let layout = layout_metrics(
+            size.width as usize,
+            size.height as usize,
+            &metrics,
+            toolbar_metrics.cell_height,
+            &self.state.toolbar,
+            self.transparent_menubar,
+            scale_factor,
+        );
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        self.viewport
+            .compensate_for_prepend(prepend.0, prepend.1, cell_size);
+        let current = self.viewport.origin(cell_size);
+        let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
+        let bounds = self.state.content_bounds();
+
+        if let Some(origin) = resolve_navigation_origin(
+            current,
+            previous_state.grid.cursor_pos,
+            self.state.grid.cursor_pos,
+            viewport_cells,
+            bounds,
+            document_changed,
+        ) {
+            if origin != current {
+                self.viewport.set_origin(origin, cell_size);
+            }
+            return document_changed;
+        }
+
+        self.state = previous_state;
+        self.viewport = previous_viewport;
+        false
+    }
+
     pub fn autosave_if_idle(&mut self, now: Instant) -> Result<bool> {
         if !should_autosave(self.document_dirty, self.last_keypress, now) {
             return Ok(false);
@@ -104,6 +158,24 @@ impl EditorWindow {
         self.document_dirty = false;
         Ok(true)
     }
+}
+
+fn resolve_navigation_origin(
+    current: (i64, i64),
+    previous_cursor: Coord,
+    cursor: Coord,
+    viewport: (usize, usize),
+    bounds: Option<ContentBounds>,
+    document_changed: bool,
+) -> Option<(i64, i64)> {
+    navigation_origin(current, cursor, viewport, bounds)
+        .or_else(|| {
+            let normalized = clamped_navigation_origin(current, previous_cursor, viewport, bounds);
+            navigation_origin(normalized, cursor, viewport, bounds)
+        })
+        .or_else(|| {
+            document_changed.then(|| clamped_navigation_origin(current, cursor, viewport, bounds))
+        })
 }
 
 pub fn create_editor_window(
@@ -281,5 +353,70 @@ mod tests {
             keypress,
             keypress + Duration::from_secs(10)
         ));
+    }
+
+    #[test]
+    fn runtime_navigation_allows_far_blank_horizontal_and_vertical_positions() {
+        let bounds = Some(ContentBounds {
+            left: 5,
+            right: 5,
+            top: 5,
+            bottom: 5,
+        });
+        assert_eq!(
+            resolve_navigation_origin(
+                (0, 0),
+                Coord { line: 5, column: 5 },
+                Coord {
+                    line: 1,
+                    column: 20
+                },
+                (24, 24),
+                bounds,
+                false,
+            ),
+            Some((0, 0))
+        );
+        assert_eq!(
+            resolve_navigation_origin(
+                (0, 0),
+                Coord { line: 5, column: 5 },
+                Coord {
+                    line: 20,
+                    column: 1
+                },
+                (24, 24),
+                bounds,
+                false,
+            ),
+            Some((0, 0))
+        );
+    }
+
+    #[test]
+    fn runtime_navigation_rejects_only_when_cursor_visibility_needs_illegal_panning() {
+        let bounds = Some(ContentBounds {
+            left: 5,
+            right: 5,
+            top: 5,
+            bottom: 5,
+        });
+        assert_eq!(
+            resolve_navigation_origin(
+                (2, 2),
+                Coord {
+                    line: 11,
+                    column: 11
+                },
+                Coord {
+                    line: 12,
+                    column: 12
+                },
+                (10, 10),
+                bounds,
+                false,
+            ),
+            None
+        );
     }
 }
