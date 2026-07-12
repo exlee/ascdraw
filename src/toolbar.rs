@@ -306,6 +306,7 @@ pub enum PendingShortcut {
     Option { category: usize, page: usize },
     ExportCategory,
     ExportOption(usize),
+    ExportFlat(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,6 +393,11 @@ impl ToolbarState {
             return self.cancel_pending_shortcut();
         };
 
+        if digit == 0 && self.export_open {
+            self.close_export_menu();
+            return true;
+        }
+
         match self.shortcut_prefix.take() {
             None => {
                 if digit == 0 {
@@ -467,6 +473,9 @@ impl ToolbarState {
                     self.queue_export(*action);
                 }
             }
+            Some(PendingShortcut::ExportFlat(_)) => {
+                self.select_export_mode_digit(digit);
+            }
         }
         true
     }
@@ -491,7 +500,21 @@ impl ToolbarState {
 
     fn queue_export(&mut self, action: ExportAction) {
         self.pending_export_action = Some(action);
-        self.close_export_menu();
+        self.keep_export_active(action);
+    }
+
+    pub fn keep_export_active(&mut self, action: ExportAction) {
+        let category = EXPORT_OPTIONS
+            .iter()
+            .position(|options| options.iter().any(|(_, candidate)| *candidate == action))
+            .expect("every export action belongs to an export category");
+        self.export_open = true;
+        self.active_export_category = Some(category);
+        self.shortcut_prefix = Some(if EXPORT_OPTIONS[category].len() == 1 {
+            PendingShortcut::ExportFlat(category)
+        } else {
+            PendingShortcut::ExportOption(category)
+        });
     }
 
     fn toggle_export_menu(&mut self) {
@@ -677,6 +700,9 @@ impl ToolbarState {
             } else {
                 let highlighted_prefix = match self.pending_shortcut() {
                     Some(PendingShortcut::ExportOption(pending)) if pending == category => {
+                        Some(path.clone())
+                    }
+                    Some(PendingShortcut::ExportFlat(pending)) if pending == category => {
                         Some(path.clone())
                     }
                     _ => None,
@@ -2030,7 +2056,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_export_paths_queue_actions_and_escape_closes_without_changing_mode() {
+    fn keyboard_export_paths_queue_actions_stay_active_and_escape_restores_mode() {
         let mut toolbar = ToolbarState::default();
         let mode = toolbar.main_mode();
         for key in ["0", "2", "1"] {
@@ -2040,11 +2066,14 @@ mod tests {
             toolbar.take_export_action(),
             Some(ExportAction::ClipboardTxt)
         );
-        assert!(!toolbar.export_menu_open());
+        assert!(toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, Some(0));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(0))
+        );
         assert_eq!(toolbar.main_mode(), mode);
 
-        press(&mut toolbar, "0");
-        assert!(toolbar.export_menu_open());
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert!(!toolbar.export_menu_open());
         assert_eq!(toolbar.main_mode(), mode);
@@ -2150,9 +2179,79 @@ mod tests {
                 press(&mut toolbar, key);
             }
             assert_eq!(toolbar.take_export_action(), Some(expected));
-            assert!(!toolbar.export_menu_open());
-            assert_eq!(toolbar.pending_shortcut(), None);
+            assert!(toolbar.export_menu_open());
+            let category = EXPORT_OPTIONS
+                .iter()
+                .position(|options| options.iter().any(|(_, action)| *action == expected))
+                .unwrap();
+            assert_eq!(toolbar.active_export_category, Some(category));
+            assert_eq!(
+                toolbar.pending_shortcut(),
+                Some(if EXPORT_OPTIONS[category].len() == 1 {
+                    PendingShortcut::ExportFlat(category)
+                } else {
+                    PendingShortcut::ExportOption(category)
+                })
+            );
         }
+    }
+
+    #[test]
+    fn every_export_action_stays_in_its_category_after_take_and_can_repeat() {
+        for (category, options) in EXPORT_OPTIONS.iter().enumerate() {
+            for (_, action) in *options {
+                let mut toolbar = ToolbarState::default();
+                assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+                assert!(toolbar.apply_action(ToolbarAction::RunExport(*action)));
+                let durable = toolbar.durable_selections();
+
+                for _ in 0..2 {
+                    assert_eq!(toolbar.take_export_action(), Some(*action));
+                    assert_eq!(toolbar.take_export_action(), None);
+                    assert!(toolbar.export_menu_open());
+                    assert_eq!(toolbar.active_export_category, Some(category));
+                    assert_eq!(toolbar.durable_selections(), durable);
+                    assert_eq!(toolbar.tooltip(), Tooltip::Export);
+                    assert_eq!(selected_main_mode_count(&toolbar), 0);
+                    assert!(toolbar.apply_action(ToolbarAction::RunExport(*action)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completed_export_keeps_exact_prefix_highlight_and_zero_toggles_closed() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["0", "3", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::SaveJson));
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["3."]
+        );
+
+        // The active option prefix accepts another action directly.
+        press(&mut toolbar, "1");
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::SaveTxt));
+        assert_eq!(toolbar.active_export_category, Some(1));
+
+        // Zero is always the peer-mode toggle, even while an option prefix is active.
+        press(&mut toolbar, "0");
+        assert!(!toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, None);
+        assert_eq!(selected_main_mode_count(&toolbar), 1);
+
+        for key in ["0", "5"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
+        assert_eq!(
+            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
+            vec!["5"]
+        );
+        press(&mut toolbar, "5");
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
     }
 
     #[test]
@@ -2202,8 +2301,12 @@ mod tests {
 
         assert!(toolbar.apply_action(ToolbarAction::RunExport(ExportAction::SaveJson)));
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::SaveJson));
-        assert!(!toolbar.export_menu_open());
-        assert_eq!(toolbar.active_export_category, None);
+        assert!(toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, Some(1));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(1))
+        );
     }
 
     #[test]
@@ -2213,7 +2316,12 @@ mod tests {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
-        assert!(!toolbar.export_menu_open());
+        assert!(toolbar.export_menu_open());
+        assert_eq!(toolbar.active_export_category, Some(3));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportFlat(3))
+        );
     }
 
     #[test]

@@ -408,19 +408,20 @@ fn perform_pending_export(editor: &mut EditorWindow) {
     let Some(action) = editor.state.toolbar.take_export_action() else {
         return;
     };
-    if action.is_png() {
-        log_error("PNG export is deferred; it will use an Egui canvas-only screenshot");
-        return;
-    }
     let previous_state = editor.state.clone();
     let previous_viewport = editor.viewport;
     let mut platform = NativeExportPlatform;
-    match export::perform(
+    let outcome = perform_export_action(
         action,
         &mut editor.state,
         &mut editor.viewport,
         &mut platform,
-    ) {
+    );
+    if action.is_png() {
+        log_error("PNG export is deferred; it will use an Egui canvas-only screenshot");
+        return;
+    }
+    match outcome {
         Ok(ExportOutcome::DocumentLoaded) => {
             editor.viewport = layout::ViewportOffset::default();
             if editor.finish_state_change(previous_state, previous_viewport, true) {
@@ -438,6 +439,20 @@ fn perform_pending_export(editor: &mut EditorWindow) {
         Ok(ExportOutcome::Unchanged) => {}
         Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
     }
+}
+
+fn perform_export_action(
+    action: export::ExportAction,
+    state: &mut EditorState,
+    viewport: &mut layout::ViewportOffset,
+    platform: &mut impl export::ExportPlatform,
+) -> anyhow::Result<ExportOutcome> {
+    let outcome = export::perform(action, state, viewport, platform);
+    // Loading a project restores its durable toolbar selections and therefore
+    // resets transient interactions. Export is a peer mode, so re-establish it
+    // before any outcome-specific viewport validation or history recording.
+    state.toolbar.keep_export_active(action);
+    outcome
 }
 
 fn app_command_from_user_action(action: UserAction) -> AppCommand {
@@ -604,16 +619,22 @@ mod tests {
     use super::*;
     use crate::app::{AppConfig, CursorMode};
     use crate::model::{Coord, Direction};
-    use crate::toolbar::{MainMode, ToolbarAction};
+    use crate::toolbar::{MainMode, PendingShortcut, ToolbarAction};
     use winit::keyboard::NamedKey;
 
     #[derive(Default)]
     struct ClipboardPlatform {
         text: String,
+        save: Option<std::path::PathBuf>,
+        open: Option<std::path::PathBuf>,
+        fail_clipboard_write: bool,
     }
 
     impl export::ExportPlatform for ClipboardPlatform {
         fn set_clipboard_text(&mut self, text: &str) -> Result<()> {
+            if self.fail_clipboard_write {
+                anyhow::bail!("mock clipboard write failed");
+            }
             self.text = text.to_string();
             Ok(())
         }
@@ -623,11 +644,11 @@ mod tests {
         }
 
         fn choose_save_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
-            None
+            self.save.take()
         }
 
         fn choose_open_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
-            None
+            self.open.take()
         }
     }
 
@@ -975,7 +996,10 @@ mod tests {
             for modifiers in [ModifiersState::CONTROL, ModifiersState::SUPER] {
                 let mut state = EditorState::new(&config.theme, "test");
                 state.cursor_mode = mode;
-                let mut platform = ClipboardPlatform { text: "v".into() };
+                let mut platform = ClipboardPlatform {
+                    text: "v".into(),
+                    ..ClipboardPlatform::default()
+                };
                 assert!(
                     handle_clipboard_shortcut(
                         &mut state,
@@ -995,6 +1019,7 @@ mod tests {
         assert!(one_shot.begin_single_replace());
         let mut platform = ClipboardPlatform {
             text: "paste".into(),
+            ..ClipboardPlatform::default()
         };
         assert!(
             handle_clipboard_shortcut(
@@ -1017,7 +1042,10 @@ mod tests {
                     ModifiersState::empty()
                 )
             );
-            let mut platform = ClipboardPlatform { text: "x".into() };
+            let mut platform = ClipboardPlatform {
+                text: "x".into(),
+                ..ClipboardPlatform::default()
+            };
             assert!(
                 handle_clipboard_shortcut(
                     &mut state,
@@ -1140,6 +1168,166 @@ mod tests {
         assert!(!state.toolbar.export_menu_open());
         assert_eq!(state.selection_bounds(), bounds);
         assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
+    }
+
+    #[test]
+    fn every_export_outcome_keeps_its_transient_peer_mode_ready() {
+        let config = AppConfig::default();
+        for (action, pending) in [
+            (
+                export::ExportAction::ClipboardTxt,
+                PendingShortcut::ExportOption(0),
+            ),
+            (
+                export::ExportAction::ClipboardPng,
+                PendingShortcut::ExportOption(0),
+            ),
+            (
+                export::ExportAction::SaveTxt,
+                PendingShortcut::ExportOption(1),
+            ),
+            (
+                export::ExportAction::SaveJson,
+                PendingShortcut::ExportOption(1),
+            ),
+            (
+                export::ExportAction::SavePng,
+                PendingShortcut::ExportOption(1),
+            ),
+            (
+                export::ExportAction::LoadTxt,
+                PendingShortcut::ExportOption(2),
+            ),
+            (
+                export::ExportAction::LoadJson,
+                PendingShortcut::ExportOption(2),
+            ),
+            (export::ExportAction::Clear, PendingShortcut::ExportFlat(3)),
+        ] {
+            let mut state = EditorState::new(&config.theme, "test");
+            let durable = state.toolbar.durable_selections();
+            assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
+            assert_eq!(state.toolbar.take_export_action(), Some(action));
+            let mut platform = ClipboardPlatform::default();
+            let outcome = perform_export_action(
+                action,
+                &mut state,
+                &mut layout::ViewportOffset::default(),
+                &mut platform,
+            )
+            .unwrap();
+
+            assert_eq!(state.toolbar.take_export_action(), None);
+            assert!(state.toolbar.export_menu_open(), "action={action:?}");
+            assert_eq!(state.toolbar.pending_shortcut(), Some(pending));
+            assert_eq!(state.toolbar.tooltip(), crate::toolbar::Tooltip::Export);
+            assert_eq!(state.toolbar.durable_selections(), durable);
+            assert_eq!(
+                outcome,
+                if action == export::ExportAction::Clear {
+                    ExportOutcome::CanvasCleared
+                } else {
+                    ExportOutcome::Unchanged
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn export_error_consumes_once_but_keeps_the_action_prefix_active() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        let action = export::ExportAction::ClipboardTxt;
+        assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
+        assert_eq!(state.toolbar.take_export_action(), Some(action));
+        let mut platform = ClipboardPlatform {
+            fail_clipboard_write: true,
+            ..ClipboardPlatform::default()
+        };
+
+        assert!(
+            perform_export_action(
+                action,
+                &mut state,
+                &mut layout::ViewportOffset::default(),
+                &mut platform,
+            )
+            .is_err()
+        );
+        assert_eq!(state.toolbar.take_export_action(), None);
+        assert!(state.toolbar.export_menu_open());
+        assert_eq!(
+            state.toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(0))
+        );
+    }
+
+    #[test]
+    fn project_load_restores_durable_menus_behind_active_export_load() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "ascdraw-export-mode-{}-{}.json",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let config = AppConfig::default();
+        let mut source = EditorState::new(&config.theme, "source");
+        source.insert("saved canvas");
+        assert!(source.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(source.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 4,
+        }));
+        let saved_menus = source.toolbar.durable_selections();
+        let saved_viewport = layout::ViewportOffset { x: -19, y: 23 };
+        let mut source_viewport = saved_viewport;
+        let mut save = ClipboardPlatform {
+            save: Some(path.clone()),
+            ..ClipboardPlatform::default()
+        };
+        perform_export_action(
+            export::ExportAction::SaveJson,
+            &mut source,
+            &mut source_viewport,
+            &mut save,
+        )
+        .unwrap();
+
+        let mut target = EditorState::new(&config.theme, "target");
+        assert!(target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+        assert!(
+            target.apply_toolbar_action(ToolbarAction::RunExport(export::ExportAction::LoadJson,))
+        );
+        assert_eq!(
+            target.toolbar.take_export_action(),
+            Some(export::ExportAction::LoadJson)
+        );
+        let mut target_viewport = layout::ViewportOffset::default();
+        let mut load = ClipboardPlatform {
+            open: Some(path.clone()),
+            ..ClipboardPlatform::default()
+        };
+        assert_eq!(
+            perform_export_action(
+                export::ExportAction::LoadJson,
+                &mut target,
+                &mut target_viewport,
+                &mut load,
+            )
+            .unwrap(),
+            ExportOutcome::ProjectLoaded
+        );
+        assert_eq!(target.toolbar.durable_selections(), saved_menus);
+        assert_eq!(target_viewport, saved_viewport);
+        assert!(target.toolbar.export_menu_open());
+        assert_eq!(
+            target.toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(2))
+        );
+        assert!(target.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
+        assert!(!target.toolbar.export_menu_open());
+        assert_eq!(target.toolbar.main_mode(), MainMode::Stamp);
+        let _ = std::fs::remove_file(path);
     }
 
     fn line_contents(line: &[crate::model::Atom]) -> String {

@@ -1606,7 +1606,7 @@ mod tests {
     }
 
     #[test]
-    fn export_open_category_escape_and_action_close_round_trips_are_anchored() {
+    fn export_actions_stay_open_without_drift_and_escape_round_trips() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = EditorState::new(&config.theme, "test");
@@ -1639,15 +1639,16 @@ mod tests {
         );
         assert_eq!(viewport, initial);
 
+        apply_mouse_toolbar_transition(
+            &mut state,
+            ToolbarAction::ToggleExportMenu,
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
+        let export_viewport = viewport;
         for _ in 0..12 {
-            apply_mouse_toolbar_transition(
-                &mut state,
-                ToolbarAction::ToggleExportMenu,
-                &mut viewport,
-                &config,
-                toolbar_cell_height,
-                cell_size,
-            );
             apply_mouse_toolbar_transition(
                 &mut state,
                 ToolbarAction::SelectExportCategory(3),
@@ -1656,7 +1657,16 @@ mod tests {
                 toolbar_cell_height,
                 cell_size,
             );
+            assert_eq!(viewport, export_viewport);
         }
+        apply_keyboard_toolbar_transition(
+            &mut state,
+            Key::Named(NamedKey::Escape),
+            &mut viewport,
+            &config,
+            toolbar_cell_height,
+            cell_size,
+        );
         assert_eq!(viewport, initial);
     }
 
@@ -1737,16 +1747,35 @@ mod tests {
                 canvas_screen_position(cursor, initial_grid_top, cell_size, initial);
             let mut viewport = initial;
 
+            if use_keyboard {
+                apply_keyboard_toolbar_transition(
+                    &mut state,
+                    Key::Character("0".into()),
+                    &mut viewport,
+                    &config,
+                    toolbar_cell_height,
+                    cell_size,
+                );
+            } else {
+                apply_mouse_toolbar_transition(
+                    &mut state,
+                    ToolbarAction::ToggleExportMenu,
+                    &mut viewport,
+                    &config,
+                    toolbar_cell_height,
+                    cell_size,
+                );
+            }
+            let export_viewport = viewport;
+            let export_grid_top = grid_top(
+                1.0,
+                config.transparent_menubar,
+                toolbar_cell_height,
+                &state.toolbar,
+            );
+
             for _ in 0..4 {
                 if use_keyboard {
-                    apply_keyboard_toolbar_transition(
-                        &mut state,
-                        Key::Character("0".into()),
-                        &mut viewport,
-                        &config,
-                        toolbar_cell_height,
-                        cell_size,
-                    );
                     apply_keyboard_toolbar_transition(
                         &mut state,
                         Key::Character("5".into()),
@@ -1780,9 +1809,9 @@ mod tests {
                     toolbar_cell_height,
                     cell_size,
                 );
-                assert_eq!(viewport, initial);
+                assert_eq!(viewport, export_viewport);
                 assert_eq!(
-                    canvas_screen_position(cursor, initial_grid_top, cell_size, viewport),
+                    canvas_screen_position(cursor, export_grid_top, cell_size, viewport),
                     initial_screen
                 );
             }
@@ -1804,13 +1833,13 @@ mod tests {
             x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 4,
             y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 3,
         };
-        let grid_top = grid_top(
+        let initial_grid_top = grid_top(
             1.0,
             config.transparent_menubar,
             toolbar_cell_height,
             &state.toolbar,
         );
-        let screen = canvas_screen_position(cursor, grid_top, cell_size, initial);
+        let screen = canvas_screen_position(cursor, initial_grid_top, cell_size, initial);
         let mut viewport = initial;
 
         apply_mouse_toolbar_transition(
@@ -1837,9 +1866,14 @@ mod tests {
             cell_size,
         );
 
-        assert_eq!(viewport, initial);
+        let export_grid_top = grid_top(
+            1.0,
+            config.transparent_menubar,
+            toolbar_cell_height,
+            &state.toolbar,
+        );
         assert_eq!(
-            canvas_screen_position(cursor, grid_top, cell_size, viewport),
+            canvas_screen_position(cursor, export_grid_top, cell_size, viewport),
             screen
         );
         assert!(
