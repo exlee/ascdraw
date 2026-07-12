@@ -211,6 +211,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.renderer,
                                 editor.window.scale_factor(),
                                 &config,
+                                &editor.state.toolbar,
                             );
                             editor.mouse_cell = pointer_position_to_coord(
                                 position.x,
@@ -218,6 +219,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.renderer,
                                 editor.window.scale_factor(),
                                 &config,
+                                &editor.state.toolbar,
                                 editor.viewport,
                             );
                         }

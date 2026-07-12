@@ -109,7 +109,11 @@ impl CursorMode {
 #[serde(rename_all = "kebab-case")]
 pub struct ThemeConfig {
     pub default: Face,
-    pub cursor: Face,
+    pub selection: Face,
+    pub selection_highlight: Face,
+    pub cursor_drawing: Face,
+    pub cursor_block: Face,
+    pub tooltip: Face,
 }
 
 impl Default for ThemeConfig {
@@ -173,8 +177,9 @@ fn load_config_with_env(env_var: impl Fn(&str) -> Option<OsString>) -> Result<Ap
     if let Some(path) = user_config_path_with_env(&env_var) {
         match fs::read_to_string(&path) {
             Ok(contents) => {
-                let user_value = toml::from_str::<Value>(&contents)
+                let mut user_value = toml::from_str::<Value>(&contents)
                     .with_context(|| format!("failed to parse {}", path.display()))?;
+                normalize_legacy_theme(&mut user_value);
                 merge_toml_value(&mut value, user_value);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -224,8 +229,15 @@ fn bundled_default_value() -> Value {
     static VALUE: OnceLock<Value> = OnceLock::new();
     VALUE
         .get_or_init(|| {
-            toml::from_str(include_str!("../ascdraw.toml"))
-                .expect("bundled ascdraw.toml should parse")
+            let mut config: Value = toml::from_str(include_str!("../ascdraw.toml"))
+                .expect("bundled ascdraw.toml should parse");
+            let theme: Value = toml::from_str(include_str!("../theme.toml"))
+                .expect("bundled theme.toml should parse");
+            config
+                .as_table_mut()
+                .expect("bundled ascdraw.toml should be a table")
+                .insert("theme".to_string(), theme);
+            config
         })
         .clone()
 }
@@ -265,12 +277,8 @@ fn bundled_default_cursor_shape_config() -> CursorShapeConfig {
 }
 
 fn bundled_default_theme_config() -> ThemeConfig {
-    bundled_default_value()
-        .get("theme")
-        .cloned()
-        .expect("bundled ascdraw.toml should contain [theme]")
-        .try_into()
-        .expect("bundled [theme] should match ThemeConfig")
+    toml::from_str(include_str!("../theme.toml"))
+        .expect("bundled theme.toml should match ThemeConfig")
 }
 
 fn bundled_default_macos_config() -> MacosConfig {
@@ -306,17 +314,61 @@ fn merge_toml_value(base: &mut Value, overlay: Value) {
     }
 }
 
+fn normalize_legacy_theme(value: &mut Value) {
+    let Some(theme) = value.get_mut("theme").and_then(Value::as_table_mut) else {
+        return;
+    };
+    if !theme.contains_key("cursor-block")
+        && let Some(cursor) = theme.remove("cursor")
+    {
+        theme.insert("cursor-block".to_string(), cursor);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn default_theme_is_black_on_white() {
+    fn bundled_theme_has_all_semantic_faces() {
         let config = AppConfig::default();
         assert_eq!(config.theme.default.fg, "black");
         assert_eq!(config.theme.default.bg, "white");
-        assert_eq!(config.theme.cursor.fg, "white");
-        assert_eq!(config.theme.cursor.bg, "black");
+        assert_eq!(config.theme.selection.fg, "orangered");
+        assert_eq!(config.theme.selection.bg, "default");
+        assert_eq!(config.theme.selection_highlight.fg, "gold");
+        assert_eq!(config.theme.selection_highlight.bg, "default");
+        assert_eq!(config.theme.cursor_drawing.fg, "darkblue");
+        assert_eq!(config.theme.cursor_drawing.bg, "default");
+        assert_eq!(config.theme.cursor_block.fg, "default");
+        assert_eq!(config.theme.cursor_block.bg, "default");
+        assert_eq!(config.theme.cursor_block.attributes, ["reverse"]);
+        assert_eq!(config.theme.tooltip.fg, "grey");
+        assert_eq!(config.theme.tooltip.bg, "default");
+    }
+
+    #[test]
+    fn bundled_theme_is_a_standalone_toml_stylesheet() {
+        let theme: ThemeConfig = toml::from_str(include_str!("../theme.toml")).unwrap();
+        let value: Value = toml::from_str(include_str!("../theme.toml")).unwrap();
+        assert_eq!(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("theme.toml")
+                .file_name()
+                .unwrap(),
+            "theme.toml"
+        );
+        assert_eq!(theme, ThemeConfig::default());
+        for name in [
+            "default",
+            "selection",
+            "selection-highlight",
+            "cursor-drawing",
+            "cursor-block",
+            "tooltip",
+        ] {
+            assert!(value.get(name).is_some(), "missing literal face {name}");
+        }
     }
 
     #[test]
@@ -336,11 +388,28 @@ mod tests {
         let mut value = bundled_default_value();
         merge_toml_value(
             &mut value,
-            toml::from_str("font-size = 18.0\n[theme.default]\nfg = 'blue'\n").unwrap(),
+            toml::from_str(
+                "font-size = 18.0\n[theme.default]\nfg = 'blue'\n[theme.tooltip]\nfg = 'cyan'\n",
+            )
+            .unwrap(),
         );
         let config: AppConfig = value.try_into().unwrap();
         assert_eq!(config.font_size, 18.0);
         assert_eq!(config.theme.default.fg, "blue");
         assert_eq!(config.theme.default.bg, "white");
+        assert_eq!(config.theme.selection.fg, "orangered");
+        assert_eq!(config.theme.tooltip.fg, "cyan");
+        assert_eq!(config.theme.tooltip.bg, "default");
+    }
+
+    #[test]
+    fn legacy_cursor_face_overrides_cursor_block() {
+        let mut value: Value = toml::from_str("[theme.cursor]\nfg = 'red'\n").unwrap();
+        normalize_legacy_theme(&mut value);
+        let mut config = bundled_default_value();
+        merge_toml_value(&mut config, value);
+        let config: AppConfig = config.try_into().unwrap();
+        assert_eq!(config.theme.cursor_block.fg, "red");
+        assert_eq!(config.theme.cursor_block.attributes, ["reverse"]);
     }
 }

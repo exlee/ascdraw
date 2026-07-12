@@ -5,6 +5,7 @@ use crate::app::CursorMode;
 use crate::layout::{PADDING, ViewportOffset, content_top_padding};
 use crate::model::{Coord, Direction};
 use crate::render::Renderer;
+use crate::toolbar::ToolbarState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditCommand {
@@ -181,12 +182,13 @@ pub fn pointer_position_to_coord(
     renderer: &Renderer,
     scale_factor: f64,
     config: &AppConfig,
+    toolbar: &ToolbarState,
     viewport: ViewportOffset,
 ) -> Option<Coord> {
     let metrics = renderer.metrics(scale_factor);
     let toolbar_metrics = renderer.title_metrics(scale_factor);
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
-        + crate::toolbar::toolbar_height(toolbar_metrics.cell_height);
+        + crate::toolbar::toolbar_height(toolbar, toolbar_metrics.cell_height);
     let grid_x = x - PADDING as f64 - viewport.x as f64;
     let grid_y = y - grid_top as f64 - viewport.y as f64;
     if grid_x < 0.0 || grid_y < 0.0 {
@@ -204,6 +206,7 @@ pub fn pointer_position_to_toolbar_position(
     renderer: &Renderer,
     scale_factor: f64,
     config: &AppConfig,
+    toolbar: &ToolbarState,
 ) -> Option<(usize, usize)> {
     let metrics = renderer.title_metrics(scale_factor);
     toolbar_position(
@@ -213,6 +216,7 @@ pub fn pointer_position_to_toolbar_position(
         metrics.cell_width,
         metrics.cell_height,
         content_top_padding(scale_factor, config.transparent_menubar),
+        toolbar.rows(),
     )
 }
 
@@ -223,6 +227,7 @@ fn toolbar_position(
     cell_width: usize,
     cell_height: usize,
     top_padding: usize,
+    toolbar_rows: usize,
 ) -> Option<(usize, usize)> {
     let toolbar_x = x - PADDING as f64;
     let toolbar_y = y - top_padding as f64;
@@ -231,10 +236,7 @@ fn toolbar_position(
     }
     let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
     let row = (toolbar_y / stride as f64).floor() as usize;
-    if row == 0
-        || row + 1 >= crate::toolbar::TOOLBAR_ROWS
-        || toolbar_y as usize % stride >= cell_height
-    {
+    if row == 0 || row + 1 >= toolbar_rows || toolbar_y as usize % stride >= cell_height {
         return None;
     }
     let column = (toolbar_x / cell_width.max(1) as f64).floor() as usize;
@@ -255,6 +257,7 @@ mod tests {
         let cell_width = 10;
         let cell_height = 16;
         let viewport_width = PADDING * 2 + 20 * cell_width;
+        let toolbar_rows = ToolbarState::default().rows();
 
         assert_eq!(
             toolbar_position(
@@ -264,6 +267,7 @@ mod tests {
                 cell_width,
                 cell_height,
                 top,
+                toolbar_rows,
             ),
             None,
             "top border is inert"
@@ -276,6 +280,7 @@ mod tests {
                 cell_width,
                 cell_height,
                 top,
+                toolbar_rows,
             ),
             Some((0, 6))
         );
@@ -294,6 +299,7 @@ mod tests {
                     cell_width,
                     cell_height,
                     top,
+                    toolbar_rows,
                 ),
                 None,
                 "box border or padding column {border_column} is inert"
@@ -302,11 +308,12 @@ mod tests {
         assert_eq!(
             toolbar_position(
                 (PADDING + 2 * cell_width) as f64,
-                (top + (crate::toolbar::TOOLBAR_ROWS - 1) * cell_height) as f64,
+                (top + (toolbar_rows - 1) * cell_height) as f64,
                 viewport_width,
                 cell_width,
                 cell_height,
                 top,
+                toolbar_rows,
             ),
             None,
             "bottom border is inert"
@@ -316,8 +323,56 @@ mod tests {
     #[test]
     fn too_narrow_toolbar_has_no_clickable_interior() {
         assert_eq!(
-            toolbar_position((PADDING + 2) as f64, 17.0, PADDING * 2 + 3, 1, 16, 0,),
+            toolbar_position(
+                (PADDING + 2) as f64,
+                17.0,
+                PADDING * 2 + 3,
+                1,
+                16,
+                0,
+                ToolbarState::default().rows(),
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn pointer_mapping_uses_the_active_dynamic_toolbar_height() {
+        let top = 20;
+        let cell_width = 8;
+        let cell_height = 16;
+        let viewport_width = PADDING * 2 + 40 * cell_width;
+        let mut toolbar = ToolbarState::default();
+        let line_rows = toolbar.rows();
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 4 * cell_width) as f64,
+                (top + (line_rows - 1) * cell_height) as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+                line_rows,
+            ),
+            None
+        );
+
+        toolbar.apply_action(crate::toolbar::ToolbarAction::SelectMain(
+            crate::toolbar::MainMode::Stamp,
+        ));
+        assert!(toolbar.rows() > line_rows);
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 4 * cell_width) as f64,
+                (top + crate::toolbar::toolbar_content_row(toolbar.tooltip_row()) * cell_height + 1)
+                    as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+                toolbar.rows(),
+            ),
+            Some((toolbar.tooltip_row(), 2))
         );
     }
 

@@ -1,0 +1,18 @@
+[default]
+fg = "black"
+bg = "white"
+
+[selection]
+fg = "orangered"
+
+[selection-highlight]
+fg = "gold"
+
+[cursor-drawing]
+fg = "darkblue"
+
+[cursor-block]
+attributes = ["reverse"]
+
+[tooltip]
+fg = "grey"

@@ -41,7 +41,7 @@ These tools expose their planned options and canvas navigation, but their editin
 
 ## Configuration
 
-Bundled defaults live in [`ascdraw.toml`](ascdraw.toml). Put personal overrides in:
+Bundled application defaults live in [`ascdraw.toml`](ascdraw.toml), while the bundled stylesheet lives in [`theme.toml`](theme.toml). Put personal overrides in:
 
 ```text
 ~/.config/ascdraw/config.toml
@@ -60,6 +60,8 @@ Default application shortcuts:
 | Close window | Command + `W` |
 
 All shortcuts can be changed in the `[keys]` section of the configuration file.
+
+Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `selection`, `selection-highlight` (a pending menu prefix), `cursor-drawing`, `cursor-block`, and `tooltip`. Unspecified face colors inherit from `default`.
 
 ## Current scope
 

@@ -53,6 +53,7 @@ impl EditorWindow {
             scale_factor,
             self.transparent_menubar,
             old_toolbar_metrics.cell_height,
+            &self.state.toolbar,
         );
         self.renderer.apply_config(config);
         let new_metrics = self.renderer.metrics(scale_factor);
@@ -61,6 +62,7 @@ impl EditorWindow {
             scale_factor,
             config.transparent_menubar,
             new_toolbar_metrics.cell_height,
+            &self.state.toolbar,
         );
         self.viewport.reanchor_cursor(
             self.state.grid.cursor_pos,
@@ -227,6 +229,7 @@ fn adjust_font_size(
         scale_factor,
         config.transparent_menubar,
         toolbar_metrics.cell_height,
+        &editor.state.toolbar,
     );
     let changed = match action {
         FontSizeAction::Increase => editor.renderer.adjust_font_size(1.0),
@@ -246,9 +249,14 @@ fn adjust_font_size(
     }
 }
 
-fn grid_top(scale_factor: f64, transparent_menubar: bool, toolbar_cell_height: usize) -> usize {
+fn grid_top(
+    scale_factor: f64,
+    transparent_menubar: bool,
+    toolbar_cell_height: usize,
+    toolbar: &crate::toolbar::ToolbarState,
+) -> usize {
     content_top_padding(scale_factor, transparent_menubar)
-        + crate::toolbar::toolbar_height(toolbar_cell_height)
+        + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height)
 }
 
 #[cfg(test)]

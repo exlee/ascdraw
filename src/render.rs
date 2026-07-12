@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use winit::window::Window;
 
 use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
-use crate::editor::{EditorState, GridState};
+use crate::editor::EditorState;
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
@@ -23,10 +23,8 @@ use crate::model::{Atom, Face};
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
-const TOOLBAR_SELECTION: Rgba = Rgba::rgb(0xff, 0x45, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
-const DRAWING_CURSOR: Rgba = Rgba::rgb(0x00, 0x00, 0x8b);
 const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
 
 #[derive(Clone)]
@@ -134,6 +132,7 @@ pub fn render(
                 height,
                 &metrics,
                 title_metrics.cell_height,
+                &state.toolbar,
                 config.transparent_menubar,
                 window.scale_factor(),
             ),
@@ -203,9 +202,8 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
 
     render_grid_cursor(
         canvas,
-        &state.grid,
+        state,
         lines,
-        state.cursor_mode,
         &config.display.cursor_shape,
         grid_layout,
         metrics,
@@ -230,7 +228,7 @@ fn render_toolbar(
         metrics,
         top_padding,
     );
-    for row in 0..crate::toolbar::TOOLTIP_ROW {
+    for row in 0..state.toolbar.tooltip_row() {
         let physical_row = crate::toolbar::toolbar_content_row(row);
         render_toolbar_spans(
             canvas,
@@ -256,13 +254,15 @@ fn render_toolbar(
         &[crate::toolbar::ToolbarSpan {
             contents: tooltip,
             selected: false,
+            highlighted: false,
+            tooltip: true,
             action: None,
         }],
         max_columns,
     );
     render_toolbar_spans(
         canvas,
-        crate::toolbar::toolbar_content_row(crate::toolbar::TOOLTIP_ROW),
+        crate::toolbar::toolbar_content_row(state.toolbar.tooltip_row()),
         &tooltip_spans,
         state,
         max_columns,
@@ -271,7 +271,7 @@ fn render_toolbar(
     );
     render_toolbar_spans(
         canvas,
-        crate::toolbar::TOOLBAR_ROWS - 1,
+        state.toolbar.rows() - 1,
         &crate::toolbar::toolbar_border_spans(max_columns, false),
         state,
         max_columns,
@@ -292,7 +292,11 @@ fn render_toolbar_spans(
     let atoms: Vec<_> = spans
         .iter()
         .map(|span| Atom {
-            face: Face::default(),
+            face: if span.tooltip {
+                state.theme.tooltip.clone()
+            } else {
+                Face::default()
+            },
             contents: span.contents.clone(),
         })
         .collect();
@@ -308,11 +312,6 @@ fn render_toolbar_spans(
         },
     );
 
-    let mut paint = Paint::default();
-    paint
-        .set_anti_alias(false)
-        .set_color(TOOLBAR_SELECTION.to_color())
-        .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
     let top = (row_top(row, metrics, top_padding)
         + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32
         - TOOLBAR_SELECTION_PADDING;
@@ -321,7 +320,14 @@ fn render_toolbar_spans(
     let mut column = 0;
     for span in spans {
         let span_width = UnicodeWidthStr::width(span.contents.as_str());
-        if span.selected && span_width > 0 {
+        if let Some(color) = toolbar_span_outline_color(state, span)
+            && span_width > 0
+        {
+            let mut paint = Paint::default();
+            paint
+                .set_anti_alias(false)
+                .set_color(color.to_color())
+                .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
             let left = (PADDING + column * metrics.cell_width) as f32 - TOOLBAR_SELECTION_PADDING;
             let right = left
                 + (span_width * metrics.cell_width).saturating_sub(1) as f32
@@ -333,6 +339,20 @@ fn render_toolbar_spans(
         }
         column += span_width;
     }
+}
+
+fn toolbar_span_outline_color(
+    state: &EditorState,
+    span: &crate::toolbar::ToolbarSpan,
+) -> Option<Rgba> {
+    let face = if span.highlighted {
+        &state.theme.selection_highlight
+    } else if span.selected {
+        &state.theme.selection
+    } else {
+        return None;
+    };
+    Some(resolve_derived_face(&state.grid.default_face, face, FALLBACK_FG, FALLBACK_BG).fg)
 }
 
 fn visible_grid_layout(
@@ -471,13 +491,14 @@ fn render_line_at(
 
 fn render_grid_cursor(
     canvas: &Canvas,
-    grid: &GridState,
+    state: &EditorState,
     rendered_lines: &[Vec<Atom>],
-    cursor_mode: CursorMode,
     cursor_shape_config: &CursorShapeConfig,
     layout: LayoutMetrics,
     metrics: &CellMetrics,
 ) {
+    let grid = &state.grid;
+    let cursor_mode = state.cursor_mode;
     let cols = layout.cols;
     let rows = layout.rows;
     if cols == 0 || rows == 0 {
@@ -508,7 +529,21 @@ fn render_grid_cursor(
     );
     let top = row_top(cursor.line, metrics, layout.grid_top);
     if is_drawing_mode(cursor_mode) {
-        render_hollow_drawing_cursor(canvas, cursor.column, top, &cell, metrics, &cell_resolved);
+        let drawing_cursor = resolve_derived_face(
+            &grid.default_face,
+            &state.theme.cursor_drawing,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        render_hollow_drawing_cursor(
+            canvas,
+            cursor.column,
+            top,
+            &cell,
+            metrics,
+            &cell_resolved,
+            &drawing_cursor,
+        );
         return;
     }
     match cursor_shape_for_mode(cursor_shape_config, cursor_mode) {
@@ -549,9 +584,10 @@ fn render_hollow_drawing_cursor(
     top: usize,
     cell: &CursorCell,
     metrics: &CellMetrics,
-    resolved: &ResolvedFace,
+    cell_resolved: &ResolvedFace,
+    cursor_resolved: &ResolvedFace,
 ) {
-    render_cursor_base_cell(canvas, column, top, cell, metrics, resolved);
+    render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
     let left = (PADDING + column * metrics.cell_width) as f32 + 1.0;
     let right = (PADDING + (column + 1) * metrics.cell_width) as f32 - 1.0;
@@ -560,7 +596,7 @@ fn render_hollow_drawing_cursor(
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
-        .set_color(DRAWING_CURSOR.to_color())
+        .set_color(cursor_resolved.fg.to_color())
         .set_stroke_width(DRAWING_CURSOR_STROKE_WIDTH);
     canvas.draw_line((left, top), (right, top), &paint);
     canvas.draw_line((left, bottom), (right, bottom), &paint);
@@ -1128,10 +1164,11 @@ pub fn resize_surface(
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{AppConfig, CursorMode, CursorShape};
+    use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::EditorState;
     use crate::model::Direction;
     use crate::toolbar::{MainMode, ToolbarAction};
+    use winit::keyboard::{Key, ModifiersState};
 
     use super::*;
 
@@ -1349,6 +1386,59 @@ mod tests {
             cursor_indicator_color(CursorShape::Underline, &resolved),
             resolved.bg
         );
+    }
+
+    #[test]
+    fn toolbar_selection_and_pending_prefix_use_theme_colors() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        let selected = state
+            .toolbar
+            .toolbar_spans(0)
+            .into_iter()
+            .find(|span| span.selected)
+            .unwrap();
+        assert_eq!(
+            toolbar_span_outline_color(&state, &selected),
+            Some(Rgba::rgb(0xff, 0x45, 0x00))
+        );
+
+        assert!(
+            state
+                .toolbar
+                .handle_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        let highlighted = state
+            .toolbar
+            .toolbar_spans(1)
+            .into_iter()
+            .find(|span| span.highlighted)
+            .unwrap();
+        assert_eq!(
+            toolbar_span_outline_color(&state, &highlighted),
+            Some(Rgba::rgb(0xff, 0xd7, 0x00))
+        );
+    }
+
+    #[test]
+    fn cursor_theme_faces_resolve_to_drawing_blue_and_reversed_block() {
+        let theme = ThemeConfig::default();
+        let drawing = resolve_derived_face(
+            &theme.default,
+            &theme.cursor_drawing,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        let block = resolve_derived_face(
+            &theme.default,
+            &theme.cursor_block,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        assert_eq!(drawing.fg, Rgba::rgb(0x00, 0x00, 0x8b));
+        assert_eq!(block.fg, Rgba::rgb(0xff, 0xff, 0xff));
+        assert_eq!(block.bg, Rgba::rgb(0x00, 0x00, 0x00));
+        assert!(block.reverse);
     }
 
     #[test]

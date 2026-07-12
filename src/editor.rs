@@ -21,6 +21,7 @@ pub struct GridState {
 #[derive(Debug, Clone)]
 pub struct EditorState {
     pub grid: GridState,
+    pub theme: ThemeConfig,
     pub window_title: String,
     pub cursor_mode: CursorMode,
     pub toolbar: ToolbarState,
@@ -58,8 +59,9 @@ impl EditorState {
                 lines: vec![Vec::new()],
                 cursor_pos: Coord::default(),
                 default_face: theme.default.clone(),
-                cursor_face: theme.cursor.clone(),
+                cursor_face: theme.cursor_block.clone(),
             },
+            theme: theme.clone(),
             window_title: window_title.into(),
             cursor_mode: CursorMode::MoveDraw,
             toolbar: ToolbarState::default(),
@@ -73,7 +75,8 @@ impl EditorState {
 
     pub fn apply_theme(&mut self, theme: &ThemeConfig) {
         self.grid.default_face = theme.default.clone();
-        self.grid.cursor_face = theme.cursor.clone();
+        self.grid.cursor_face = theme.cursor_block.clone();
+        self.theme = theme.clone();
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
@@ -1201,6 +1204,14 @@ mod tests {
         ));
 
         state.toggle_text_entry();
+        assert_eq!(state.toolbar.pending_shortcut(), None);
+        assert!(
+            state
+                .toolbar
+                .toolbar_spans(1)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
         state.toggle_text_entry();
         assert!(state.handle_toolbar_shortcut(
             &winit::keyboard::Key::Character("2".into()),

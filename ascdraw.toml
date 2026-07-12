@@ -10,14 +10,6 @@ underline-offset = 0.0
 # insert = "beam"
 # replace = "underline"
 
-[theme.default]
-fg = "black"
-bg = "white"
-
-[theme.cursor]
-fg = "white"
-bg = "black"
-
 [macos]
 color-space = "p3"
 

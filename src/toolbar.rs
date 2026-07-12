@@ -3,20 +3,18 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::drawing::{CornerStyle, LineEnding, LineStyle};
 
-pub const TOOLBAR_CONTENT_ROWS: usize = 7;
-pub const TOOLBAR_ROWS: usize = TOOLBAR_CONTENT_ROWS + 2;
 pub const TOOLBAR_ROW_GAP: usize = 0;
-pub const TOOLTIP_ROW: usize = TOOLBAR_CONTENT_ROWS - 1;
+pub const TOOLTIP_GAP_ROWS: usize = 1;
 
 const MAIN_LABEL_ROW: usize = 0;
 const MAIN_SHORTCUT_ROW: usize = 1;
 const MENU_FIRST_ROW: usize = 2;
-const MENU_LAST_ROW: usize = TOOLTIP_ROW - 1;
 const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
 
-pub fn toolbar_height(cell_height: usize) -> usize {
-    TOOLBAR_ROWS * cell_height + (TOOLBAR_ROWS - 1) * TOOLBAR_ROW_GAP
+pub fn toolbar_height(toolbar: &ToolbarState, cell_height: usize) -> usize {
+    let rows = toolbar.rows();
+    rows * cell_height + rows.saturating_sub(1) * TOOLBAR_ROW_GAP
 }
 
 pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
@@ -68,6 +66,8 @@ pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSp
             boxed.push(ToolbarSpan {
                 contents,
                 selected: span.selected,
+                highlighted: span.highlighted,
+                tooltip: span.tooltip,
                 action: span.action,
             });
             remaining -= used;
@@ -156,7 +156,7 @@ impl MainMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShortcutPrefix {
+pub enum PendingShortcut {
     Mode,
     Category(usize),
     Option { category: usize, page: usize },
@@ -175,13 +175,15 @@ pub struct ToolbarState {
     stamp_selected: [usize; STAMP_LABELS.len()],
     stamp_active_category: usize,
     shape_selected: [usize; SHAPE_LABELS.len()],
-    shortcut_prefix: Option<ShortcutPrefix>,
+    shortcut_prefix: Option<PendingShortcut>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolbarSpan {
     pub contents: String,
     pub selected: bool,
+    pub highlighted: bool,
+    pub tooltip: bool,
     pub action: Option<ToolbarAction>,
 }
 
@@ -218,15 +220,15 @@ impl ToolbarState {
         match self.shortcut_prefix.take() {
             None => {
                 self.shortcut_prefix = if digit == 1 {
-                    Some(ShortcutPrefix::Mode)
+                    Some(PendingShortcut::Mode)
                 } else {
                     digit
                         .checked_sub(2)
                         .filter(|category| *category < self.layout().labels.len())
-                        .map(ShortcutPrefix::Category)
+                        .map(PendingShortcut::Category)
                 };
             }
-            Some(ShortcutPrefix::Mode) => {
+            Some(PendingShortcut::Mode) => {
                 if let Some(mode) = digit
                     .checked_sub(1)
                     .and_then(|index| MainMode::ALL.get(index))
@@ -234,7 +236,7 @@ impl ToolbarState {
                     self.main_mode = *mode;
                 }
             }
-            Some(ShortcutPrefix::Category(category)) => {
+            Some(PendingShortcut::Category(category)) => {
                 let option_count = self
                     .layout()
                     .options
@@ -248,12 +250,12 @@ impl ToolbarState {
                         });
                     }
                     Some(CategoryShortcut::Page(page)) => {
-                        self.shortcut_prefix = Some(ShortcutPrefix::Option { category, page });
+                        self.shortcut_prefix = Some(PendingShortcut::Option { category, page });
                     }
                     None => {}
                 }
             }
-            Some(ShortcutPrefix::Option { category, page }) => {
+            Some(PendingShortcut::Option { category, page }) => {
                 let position = shortcut_position(digit);
                 let option = page * OPTIONS_PER_PAGE + position;
                 self.apply_action(ToolbarAction::SelectSubmenu {
@@ -277,20 +279,50 @@ impl ToolbarState {
         self.main_mode
     }
 
+    pub fn pending_shortcut(&self) -> Option<PendingShortcut> {
+        self.shortcut_prefix
+    }
+
+    pub fn menu_row_count(&self) -> usize {
+        self.layout()
+            .options
+            .iter()
+            .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE) * 2)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn tooltip_row(&self) -> usize {
+        MENU_FIRST_ROW + self.menu_row_count() + TOOLTIP_GAP_ROWS
+    }
+
+    pub fn content_rows(&self) -> usize {
+        self.tooltip_row() + 1
+    }
+
+    pub fn rows(&self) -> usize {
+        self.content_rows() + 2
+    }
+
     pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
         match row {
             MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
-            MENU_FIRST_ROW..=MENU_LAST_ROW => self.menu_spans(row),
+            MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
+                self.menu_spans(row)
+            }
             _ => Vec::new(),
         }
     }
 
     fn main_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let mut spans = vec![plain_span(if row == MAIN_LABEL_ROW {
+        let mut prefix = plain_span(if row == MAIN_LABEL_ROW {
             "Mode: ".to_string()
         } else {
             "1.    ".to_string()
-        })];
+        });
+        prefix.highlighted =
+            row == MAIN_SHORTCUT_ROW && self.pending_shortcut() == Some(PendingShortcut::Mode);
+        let mut spans = vec![prefix];
         for (index, mode) in MainMode::ALL.iter().enumerate() {
             if index > 0 {
                 spans.push(plain_span(" ".to_string()));
@@ -305,6 +337,8 @@ impl ToolbarState {
             spans.push(ToolbarSpan {
                 contents,
                 selected: row == MAIN_LABEL_ROW && *mode == self.main_mode,
+                highlighted: false,
+                tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
             });
         }
@@ -327,7 +361,7 @@ impl ToolbarState {
                 spans.push(plain_span(GAP.to_string()));
             }
             let prefix_width = UnicodeWidthStr::width(layout.labels[category]) + 2;
-            spans.push(plain_span(if label_row {
+            let mut prefix = plain_span(if label_row {
                 if page == 0 {
                     format!("{}: ", layout.labels[category])
                 } else {
@@ -340,7 +374,18 @@ impl ToolbarState {
                     format!("{}.{}.", category + 2, page + 1)
                 };
                 format!("{path:>width$} ", width = prefix_width - 1)
-            }));
+            });
+            prefix.highlighted = (matches!(
+                self.pending_shortcut(),
+                Some(PendingShortcut::Category(pending)) if pending == category
+            ) || matches!(
+                self.pending_shortcut(),
+                Some(PendingShortcut::Option {
+                    category: pending_category,
+                    page: pending_page,
+                }) if pending_category == category && pending_page == page
+            )) && !label_row;
+            spans.push(prefix);
 
             for (position, option) in options[page_start..]
                 .iter()
@@ -366,6 +411,8 @@ impl ToolbarState {
                         && layout
                             .exclusive_submenu
                             .is_none_or(|active| active == category),
+                    highlighted: false,
+                    tooltip: false,
                     action: Some(action),
                 });
             }
@@ -515,6 +562,8 @@ fn plain_span(contents: String) -> ToolbarSpan {
     ToolbarSpan {
         contents,
         selected: false,
+        highlighted: false,
+        tooltip: false,
         action: None,
     }
 }
@@ -631,11 +680,32 @@ mod tests {
     }
 
     #[test]
-    fn boxed_toolbar_height_reserves_both_border_rows() {
-        assert_eq!(TOOLBAR_ROWS, TOOLBAR_CONTENT_ROWS + 2);
+    fn boxed_toolbar_height_tracks_actual_menu_rows_and_compact_tooltip_gap() {
+        let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
-        assert_eq!(toolbar_content_row(TOOLTIP_ROW), TOOLBAR_ROWS - 2);
-        assert_eq!(toolbar_height(18), TOOLBAR_ROWS * 18);
+        assert_eq!(toolbar.menu_row_count(), 2);
+        assert_eq!(toolbar.tooltip_row(), 5);
+        assert_eq!(toolbar.rows(), 8);
+        assert_eq!(
+            toolbar_content_row(toolbar.tooltip_row()),
+            toolbar.rows() - 2
+        );
+        assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
+
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        assert_eq!(toolbar.menu_row_count(), 4);
+        assert_eq!(toolbar.tooltip_row(), 7);
+        assert_eq!(toolbar.rows(), 10);
+        assert_eq!(
+            toolbar.tooltip_row() - (MENU_FIRST_ROW + toolbar.menu_row_count() - 1) - 1,
+            TOOLTIP_GAP_ROWS
+        );
+
+        for mode in [MainMode::Shapes, MainMode::Utilities] {
+            toolbar.apply_action(ToolbarAction::SelectMain(mode));
+            assert_eq!(toolbar.menu_row_count(), 2);
+            assert_eq!(toolbar.rows(), 8);
+        }
     }
 
     #[test]
@@ -734,6 +804,37 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert_eq!(toolbar.main_mode(), MainMode::Line);
+    }
+
+    #[test]
+    fn pending_prefix_highlight_is_assigned_and_cleared() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "1");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
+        assert!(toolbar.toolbar_spans(MAIN_SHORTCUT_ROW)[0].highlighted);
+        press(&mut toolbar, "2");
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert!(
+            toolbar
+                .toolbar_spans(MAIN_SHORTCUT_ROW)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
+
+        press(&mut toolbar, "2");
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::Category(0))
+        );
+        assert!(toolbar.toolbar_spans(3).iter().any(|span| span.highlighted));
+        toolbar.cancel_shortcut();
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert!(
+            toolbar
+                .toolbar_spans(3)
+                .iter()
+                .all(|span| !span.highlighted)
+        );
     }
 
     #[test]

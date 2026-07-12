@@ -264,6 +264,10 @@ fn named_color(color: &str) -> Option<Rgba> {
         "magenta" => Rgba::rgb(0xcd, 0x00, 0xcd),
         "cyan" => Rgba::rgb(0x00, 0xcd, 0xcd),
         "white" => Rgba::rgb(0xff, 0xff, 0xff),
+        "orangered" => Rgba::rgb(0xff, 0x45, 0x00),
+        "gold" => Rgba::rgb(0xff, 0xd7, 0x00),
+        "darkblue" => Rgba::rgb(0x00, 0x00, 0x8b),
+        "grey" | "gray" => Rgba::rgb(0x80, 0x80, 0x80),
         "bright-black" => Rgba::rgb(0x7f, 0x7f, 0x7f),
         "bright-red" => Rgba::rgb(0xff, 0x00, 0x00),
         "bright-green" => Rgba::rgb(0x00, 0xff, 0x00),
@@ -437,6 +441,26 @@ mod tests {
 
         assert_eq!(resolved.fg, Rgba::rgb(0x7f, 0x7f, 0x7f));
         assert_eq!(resolved.bg, Rgba::rgb(0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn bundled_theme_named_colors_resolve_exactly() {
+        for (name, expected) in [
+            ("orangered", Rgba::rgb(0xff, 0x45, 0x00)),
+            ("gold", Rgba::rgb(0xff, 0xd7, 0x00)),
+            ("darkblue", Rgba::rgb(0x00, 0x00, 0x8b)),
+            ("grey", Rgba::rgb(0x80, 0x80, 0x80)),
+        ] {
+            assert_eq!(
+                resolve_root_face(
+                    &face(name, "default", "default", &[]),
+                    Rgba::rgb(1, 2, 3),
+                    Rgba::rgb(4, 5, 6),
+                )
+                .fg,
+                expected
+            );
+        }
     }
 
     #[test]
