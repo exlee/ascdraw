@@ -242,7 +242,13 @@ fn render_canvas_selection(
     metrics: &CellMetrics,
     grid_top: usize,
 ) {
-    let outline = canvas_selection_outline(state.selection_bounds(), metrics, grid_top);
+    let outline = canvas_selection_outline(
+        state
+            .move_lift_bounds()
+            .unwrap_or_else(|| state.selection_bounds()),
+        metrics,
+        grid_top,
+    );
     let color = resolve_derived_face(
         &state.grid.default_face,
         &state.theme.selection,
@@ -250,6 +256,17 @@ fn render_canvas_selection(
         FALLBACK_BG,
     )
     .fg;
+    if state.move_lift_active() {
+        let alternate = resolve_derived_face(
+            &state.grid.default_face,
+            &state.theme.selection_highlight,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        )
+        .fg;
+        render_marching_ants(canvas, outline, color, alternate, metrics);
+        return;
+    }
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
@@ -275,6 +292,93 @@ fn render_canvas_selection(
         (outline.right, outline.bottom),
         &paint,
     );
+}
+
+fn render_marching_ants(
+    canvas: &Canvas,
+    outline: CanvasSelectionOutline,
+    primary: Rgba,
+    alternate: Rgba,
+    metrics: &CellMetrics,
+) {
+    let segment = (metrics.cell_width.min(metrics.cell_height) / 3).max(2) as f32;
+    let phase = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as usize
+        / 125;
+    let mut paints = [Paint::default(), Paint::default()];
+    for (paint, color) in paints.iter_mut().zip([primary, alternate]) {
+        paint
+            .set_anti_alias(false)
+            .set_color(color.to_color())
+            .set_stroke_width(CANVAS_SELECTION_STROKE_WIDTH);
+    }
+    render_marching_edge(
+        canvas,
+        (outline.left, outline.top),
+        (outline.right, outline.top),
+        segment,
+        phase,
+        &paints,
+    );
+    render_marching_edge(
+        canvas,
+        (outline.right, outline.top),
+        (outline.right, outline.bottom),
+        segment,
+        phase,
+        &paints,
+    );
+    render_marching_edge(
+        canvas,
+        (outline.right, outline.bottom),
+        (outline.left, outline.bottom),
+        segment,
+        phase,
+        &paints,
+    );
+    render_marching_edge(
+        canvas,
+        (outline.left, outline.bottom),
+        (outline.left, outline.top),
+        segment,
+        phase,
+        &paints,
+    );
+}
+
+fn render_marching_edge(
+    canvas: &Canvas,
+    start: (f32, f32),
+    end: (f32, f32),
+    segment: f32,
+    phase: usize,
+    paints: &[Paint; 2],
+) {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let length = dx.abs() + dy.abs();
+    if length == 0.0 {
+        return;
+    }
+    let unit = (dx / length, dy / length);
+    let offset = (phase as f32 % segment) - segment;
+    let mut position = offset;
+    let mut index = phase / segment as usize;
+    while position < length {
+        let from = position.max(0.0);
+        let to = (position + segment).min(length);
+        if to > from {
+            canvas.draw_line(
+                (start.0 + unit.0 * from, start.1 + unit.1 * from),
+                (start.0 + unit.0 * to, start.1 + unit.1 * to),
+                &paints[index % paints.len()],
+            );
+        }
+        position += segment;
+        index += 1;
+    }
 }
 
 fn render_toolbar(

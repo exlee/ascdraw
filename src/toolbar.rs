@@ -190,7 +190,7 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &[" ", "░", "▒", "▓", "█"],
 ];
-const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull", "View"].as_slice()];
+const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull", "View", "Move"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
@@ -215,6 +215,7 @@ pub enum UtilityKind {
     Push,
     Pull,
     View,
+    Move,
 }
 
 impl MainMode {
@@ -250,6 +251,7 @@ pub enum Tooltip {
     UtilitiesPush,
     UtilitiesPull,
     UtilitiesView,
+    UtilitiesMove,
     Text,
     Replace,
     Export,
@@ -286,6 +288,9 @@ impl Tooltip {
                 "Pull: Shift-direction pulls"
             }
             Self::UtilitiesView => "View: directions pan the view; Space centers the drawing",
+            Self::UtilitiesMove => {
+                "Move: Space lifts selection; directions move; Space/Enter confirms; Esc cancels"
+            }
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
@@ -862,6 +867,7 @@ impl ToolbarState {
                 UtilityKind::Push => Tooltip::UtilitiesPush,
                 UtilityKind::Pull => Tooltip::UtilitiesPull,
                 UtilityKind::View => Tooltip::UtilitiesView,
+                UtilityKind::Move => Tooltip::UtilitiesMove,
             };
         }
         self.main_mode.tooltip()
@@ -915,6 +921,7 @@ impl ToolbarState {
             1 => UtilityKind::Push,
             2 => UtilityKind::Pull,
             3 => UtilityKind::View,
+            4 => UtilityKind::Move,
             _ => unreachable!("utility selection is always normalized"),
         }
     }
@@ -1891,8 +1898,8 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert_eq!(row(&toolbar, 2), "Select    Push    Pull    View");
-        assert_eq!(row(&toolbar, 3), "2         3       4       5   ");
+        assert_eq!(row(&toolbar, 2), "Select    Push    Pull    View    Move");
+        assert_eq!(row(&toolbar, 3), "2         3       4       5       6   ");
         assert!(!row(&toolbar, 2).contains("Tool"));
         for obsolete in ["2.1", "2.2", "2.3"] {
             assert!(!row(&toolbar, 3).contains(obsolete));
@@ -1940,6 +1947,21 @@ mod tests {
         }
         assert_eq!(toolbar.utility_kind(), UtilityKind::View);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesView);
+
+        let move_action = ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 4,
+        };
+        for row in [2, 3] {
+            let column = (0..80)
+                .find(|column| toolbar.action_at(row, *column, 80) == Some(move_action))
+                .expect("Move label and shortcut are visible and clickable");
+            assert!(
+                toolbar.apply_action(toolbar.action_at(row, column, 80).expect("Move hit tests"))
+            );
+        }
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Move);
+        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesMove);
     }
 
     #[test]
@@ -1954,6 +1976,7 @@ mod tests {
             ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
             ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
             ("5", UtilityKind::View, Tooltip::UtilitiesView),
+            ("6", UtilityKind::Move, Tooltip::UtilitiesMove),
         ] {
             press(&mut toolbar, key);
             assert_eq!(toolbar.utility_kind(), utility);
@@ -1968,7 +1991,7 @@ mod tests {
         }
 
         press(&mut toolbar, "9");
-        assert_eq!(toolbar.utility_kind(), UtilityKind::View);
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Move);
         assert_eq!(toolbar.pending_shortcut(), None);
         assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
     }

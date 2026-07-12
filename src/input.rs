@@ -39,6 +39,45 @@ pub enum ViewCommand {
     Center,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveSelectionCommand {
+    Begin,
+    Step(Direction),
+    Confirm,
+    Cancel,
+}
+
+/// Resolves the modal keyboard interaction for the Utilities Move tool.
+/// Clipboard/history shortcuts are routed before this command by the runtime.
+pub fn move_selection_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    mode: CursorMode,
+    utility: UtilityKind,
+    active: bool,
+) -> Option<MoveSelectionCommand> {
+    if mode != CursorMode::Utilities || utility != UtilityKind::Move {
+        return None;
+    }
+    if active {
+        if matches!(key, Key::Named(NamedKey::Escape))
+            || (modifiers == ModifiersState::CONTROL
+                && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("g")))
+        {
+            return Some(MoveSelectionCommand::Cancel);
+        }
+        if modifiers != ModifiersState::empty() {
+            return None;
+        }
+        if is_space_key(key) || matches!(key, Key::Named(NamedKey::Enter)) {
+            return Some(MoveSelectionCommand::Confirm);
+        }
+        return direction_for_key(key).map(MoveSelectionCommand::Step);
+    }
+    (modifiers == ModifiersState::empty() && is_space_key(key))
+        .then_some(MoveSelectionCommand::Begin)
+}
+
 /// Resolves viewport-only commands for the Utilities View tool. These are
 /// handled by the window runtime because they must never mutate the document.
 pub fn view_command(
@@ -1142,6 +1181,79 @@ mod tests {
                 ModifiersState::empty(),
                 CursorMode::Utilities,
                 UtilityKind::Pull,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn utilities_move_resolves_lift_navigation_confirmation_and_cancel_only() {
+        let mode = CursorMode::Utilities;
+        let utility = UtilityKind::Move;
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                mode,
+                utility,
+                false,
+            ),
+            Some(MoveSelectionCommand::Begin)
+        );
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::empty(),
+                mode,
+                utility,
+                true,
+            ),
+            Some(MoveSelectionCommand::Step(Direction::Right))
+        );
+        for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::Enter)] {
+            assert_eq!(
+                move_selection_command(&key, ModifiersState::empty(), mode, utility, true),
+                Some(MoveSelectionCommand::Confirm)
+            );
+        }
+        for (key, modifiers) in [
+            (Key::Named(NamedKey::Escape), ModifiersState::empty()),
+            (Key::Character("g".into()), ModifiersState::CONTROL),
+        ] {
+            assert_eq!(
+                move_selection_command(&key, modifiers, mode, utility, true),
+                Some(MoveSelectionCommand::Cancel)
+            );
+        }
+        assert_eq!(
+            move_selection_command(
+                &Key::Character("c".into()),
+                ModifiersState::CONTROL,
+                mode,
+                utility,
+                true,
+            ),
+            None,
+            "Ctrl-C remains available to the global clipboard route"
+        );
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::Enter),
+                ModifiersState::empty(),
+                mode,
+                utility,
+                false,
+            ),
+            None,
+            "Enter keeps its existing meaning until a lift is active"
+        );
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                mode,
+                UtilityKind::View,
+                false,
             ),
             None
         );

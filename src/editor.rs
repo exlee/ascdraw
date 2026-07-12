@@ -13,10 +13,12 @@ use crate::selection::{
     selected_text,
 };
 use crate::toolbar::{
-    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip,
+    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip, UtilityKind,
 };
 
+mod move_tool;
 mod utility;
+use move_tool::MoveLift;
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -38,6 +40,7 @@ pub struct EditorState {
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
     shape_preview: Option<ShapePreview>,
+    move_lift: Option<MoveLift>,
     single_replace_pending: bool,
     pending_prepend: (usize, usize),
 }
@@ -89,11 +92,21 @@ impl EditorState {
         self.shape_preview.is_some()
     }
     pub fn edit_snapshot(&self) -> EditSnapshot {
+        let (cursor_pos, cursor_index, selection) = self.move_lift.as_ref().map_or(
+            (self.grid.cursor_pos, self.cursor_index, self.selection),
+            |lift| {
+                (
+                    lift.source_cursor,
+                    lift.source_cursor_index,
+                    lift.source_selection,
+                )
+            },
+        );
         EditSnapshot {
             lines: self.grid.lines.clone(),
-            cursor_pos: self.grid.cursor_pos,
-            cursor_index: self.cursor_index,
-            selection: self.selection,
+            cursor_pos,
+            cursor_index,
+            selection,
             active_stroke: self.active_stroke.clone(),
             line_markers: self.line_markers.clone(),
         }
@@ -107,6 +120,7 @@ impl EditorState {
         self.active_stroke = snapshot.active_stroke;
         self.line_markers = snapshot.line_markers;
         self.shape_preview = None;
+        self.move_lift = None;
         self.pending_prepend = (0, 0);
     }
 
@@ -127,6 +141,7 @@ impl EditorState {
             active_stroke: None,
             line_markers: Vec::new(),
             shape_preview: None,
+            move_lift: None,
             single_replace_pending: false,
             pending_prepend: (0, 0),
         }
@@ -141,6 +156,7 @@ impl EditorState {
     pub fn restore_menu_selections(&mut self, selections: &DurableMenuSelections) {
         self.end_stroke();
         self.shape_preview = None;
+        self.move_lift = None;
         self.single_replace_pending = false;
         self.collapse_selection();
         self.toolbar.restore_durable_selections(selections);
@@ -150,6 +166,9 @@ impl EditorState {
     pub fn tooltip(&self) -> Tooltip {
         if self.toolbar.export_menu_open() {
             return Tooltip::Export;
+        }
+        if self.move_lift.is_some() {
+            return Tooltip::UtilitiesMove;
         }
         if !self.selection.is_collapsed() {
             return Tooltip::Selection;
@@ -168,6 +187,7 @@ impl EditorState {
         }
         let export_was_open = self.toolbar.export_menu_open();
         let old_mode = self.toolbar.main_mode();
+        let old_utility = self.toolbar.utility_kind();
         if !self.toolbar.handle_shortcut(key, modifiers) {
             return false;
         }
@@ -179,10 +199,21 @@ impl EditorState {
             self.shape_preview = None;
             self.sync_cursor_mode_with_toolbar();
         }
+        if self.move_lift.is_some()
+            && (self.toolbar.export_menu_open()
+                || self.toolbar.main_mode() != MainMode::Utilities
+                || self.toolbar.utility_kind() != old_utility
+                || self.toolbar.utility_kind() != UtilityKind::Move)
+        {
+            self.cancel_move_lift();
+        }
         true
     }
 
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
+        if self.move_lift.is_some() {
+            self.cancel_move_lift();
+        }
         if !self.toolbar.apply_action(action) {
             return false;
         }
@@ -194,6 +225,7 @@ impl EditorState {
         }
         self.end_stroke();
         self.shape_preview = None;
+        self.move_lift = None;
         self.sync_cursor_mode_with_toolbar();
         true
     }
@@ -240,6 +272,7 @@ impl EditorState {
         }
         self.end_stroke();
         self.shape_preview = None;
+        self.move_lift = None;
         self.collapse_selection();
         self.sync_cursor_mode_with_toolbar();
         true
@@ -375,6 +408,7 @@ impl EditorState {
     }
 
     pub fn move_to(&mut self, coord: Coord) -> bool {
+        self.cancel_move_lift();
         let old_line_count = self.grid.lines.len();
         let old_width = self
             .grid
@@ -397,6 +431,7 @@ impl EditorState {
     pub fn clamp_cursor_to_content(&mut self, coord: Coord) {
         self.end_stroke();
         self.shape_preview = None;
+        self.move_lift = None;
         self.grid.cursor_pos = coord;
         self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
         self.sync_cursor_column();
@@ -843,6 +878,7 @@ impl EditorState {
         self.active_stroke = None;
         self.line_markers.clear();
         self.shape_preview = None;
+        self.move_lift = None;
         self.single_replace_pending = false;
         self.pending_prepend = (0, 0);
         self.toolbar.cancel_shortcut();
@@ -865,6 +901,7 @@ impl EditorState {
         self.active_stroke = None;
         self.line_markers.clear();
         self.shape_preview = None;
+        self.move_lift = None;
         self.single_replace_pending = false;
         self.pending_prepend = (0, 0);
         self.sync_cursor_mode_with_toolbar();
@@ -896,6 +933,7 @@ impl EditorState {
         self.active_stroke = None;
         self.line_markers.clear();
         self.shape_preview = None;
+        self.move_lift = None;
         self.single_replace_pending = false;
         self.pending_prepend = (0, 0);
         self.toolbar.cancel_shortcut();
@@ -920,6 +958,9 @@ impl EditorState {
     }
 
     pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
+        if let Some(lines) = self.lines_with_move_lift_preview() {
+            return Some(lines);
+        }
         let preview = self.shape_preview?;
         let mut lines = self.grid.lines.clone();
         for (coord, contents) in self.shape_cells(preview) {
@@ -2933,6 +2974,100 @@ mod tests {
         assert_eq!((preview.anchor.column, preview.end.column), (2, 3));
     }
 
+    #[test]
+    fn move_lift_previews_without_mutation_then_overwrites_as_one_literal_rectangle() {
+        let mut state = utility_state(&["abXX", "cdYY"], UtilityKind::Move, Coord::default());
+        let configured_face = state.theme.tooltip.clone();
+        state.grid.lines[0][0].face = configured_face.clone();
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 1, column: 1 });
+        let before = state.edit_snapshot();
+
+        assert!(state.begin_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.move_lift(Direction::Right));
+        assert_eq!(state.edit_snapshot().lines, before.lines);
+        let preview = state
+            .lines_with_shape_preview()
+            .expect("lifted selection has a composited preview");
+        assert_eq!(contents(&preview[0]), "  ab");
+        assert_eq!(contents(&preview[1]), "  cd");
+        assert_eq!(preview[0][2].face, configured_face);
+
+        assert!(state.confirm_move_lift());
+        assert!(!state.move_lift_active());
+        assert_eq!(line_contents(&state), vec!["  ab", "  cd"]);
+        assert_eq!(state.grid.lines[0][2].face, state.theme.tooltip);
+        assert_eq!(
+            state.selection_bounds(),
+            SelectionBounds {
+                left: 2,
+                right: 3,
+                top: 0,
+                bottom: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn move_lift_cancel_restores_exact_cursor_selection_and_document() {
+        let mut state = utility_state(&["abc"], UtilityKind::Move, Coord { line: 0, column: 2 });
+        state
+            .selection
+            .select(Coord { line: 0, column: 2 }, Coord { line: 0, column: 1 });
+        let before = state.edit_snapshot();
+
+        assert!(state.begin_move_lift());
+        assert!(state.move_lift(Direction::Down));
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.cancel_move_lift());
+
+        assert_eq!(state.edit_snapshot(), before);
+        assert!(state.lines_with_shape_preview().is_none());
+    }
+
+    #[test]
+    fn move_lift_handles_overlap_wide_atoms_and_line_marker_metadata() {
+        let mut overlap = utility_state(&["abcd"], UtilityKind::Move, Coord { line: 0, column: 2 });
+        overlap
+            .selection
+            .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
+        assert!(overlap.begin_move_lift());
+        assert!(overlap.move_lift(Direction::Right));
+        assert!(overlap.confirm_move_lift());
+        assert_eq!(line_contents(&overlap), vec!["a bc"]);
+
+        let mut wide = utility_state(&["a界z"], UtilityKind::Move, Coord { line: 0, column: 1 });
+        wide.selection
+            .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
+        wide.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 1 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "界".into(),
+        });
+        assert!(wide.begin_move_lift());
+        assert!(wide.move_lift(Direction::Down));
+        assert!(wide.confirm_move_lift());
+        assert_eq!(line_contents(&wide), vec!["a  z", " 界"]);
+        assert_eq!(wide.line_markers.len(), 1);
+        assert_eq!(wide.line_markers[0].coord, Coord { line: 1, column: 1 });
+    }
+
+    #[test]
+    fn confirming_a_stationary_move_lift_is_an_exact_document_no_op() {
+        let mut state = utility_state(&["abc"], UtilityKind::Move, Coord { line: 0, column: 1 });
+        state
+            .selection
+            .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
+        let before = state.edit_snapshot();
+
+        assert!(state.begin_move_lift());
+        assert!(!state.confirm_move_lift());
+
+        assert_eq!(state.edit_snapshot(), before);
+    }
+
     fn utility_state(rows: &[&str], utility: UtilityKind, cursor: Coord) -> EditorState {
         let mut state = state();
         state.grid.lines = rows
@@ -2954,6 +3089,7 @@ mod tests {
                 UtilityKind::Push => 1,
                 UtilityKind::Pull => 2,
                 UtilityKind::View => 3,
+                UtilityKind::Move => 4,
             },
         });
         state.grid.cursor_pos = cursor;

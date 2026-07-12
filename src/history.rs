@@ -197,6 +197,47 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_move_lift_is_one_entry_and_stationary_confirmation_preserves_redo() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert("abcd");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 4,
+        });
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        assert!(state.begin_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.confirm_move_lift());
+        let after = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before.clone(), &after));
+        assert_eq!(history.lengths(), (1, 0));
+        assert_eq!(history.undo(after.clone()), Some(before.clone()));
+        assert_eq!(history.lengths(), (0, 1));
+
+        state.restore_edit_snapshot(before.edit.clone());
+        assert!(state.begin_move_lift());
+        assert!(!state.confirm_move_lift());
+        let stationary = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        assert!(!history.record_change(before.clone(), &stationary));
+        assert_eq!(history.lengths(), (0, 1));
+        assert_eq!(history.redo(before), Some(after));
+    }
+
+    #[test]
     fn clear_is_undoable_and_redoable_while_blank_clear_preserves_redo() {
         let mut blank_state = EditorState::new(&AppConfig::default().theme, "test");
         let blank = HistorySnapshot {

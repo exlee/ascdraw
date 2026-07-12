@@ -298,9 +298,9 @@ mod tests {
         source.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         source.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 4,
         });
-        assert_eq!(source.utility_kind(), UtilityKind::View);
+        assert_eq!(source.utility_kind(), UtilityKind::Move);
         let expected = source.durable_selections();
 
         source.handle_shortcut(&Key::Character("0".into()), ModifiersState::empty());

@@ -39,7 +39,7 @@ use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
 use input::{
     ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
-    history_command, ordered_direction_command, pointer_position_to_coord,
+    history_command, move_selection_command, ordered_direction_command, pointer_position_to_coord,
     pointer_position_to_toolbar_position, view_command,
 };
 use render::{render, resize_surface};
@@ -134,6 +134,11 @@ fn try_main() -> Result<ExitCode> {
                     poll_user_config_updates(watch, &mut config, &mut user_keys, &mut windows);
                 }
                 let now = Instant::now();
+                for editor in windows.values() {
+                    if editor.state.move_lift_active() {
+                        editor.request_redraw();
+                    }
+                }
                 if now.saturating_duration_since(last_autosave_check) >= Duration::from_secs(1) {
                     for editor in windows.values_mut() {
                         if let Err(error) = editor.autosave_if_idle(now) {
@@ -398,7 +403,9 @@ fn handle_clipboard_shortcut(
     modifiers: ModifiersState,
     platform: &mut impl export::ExportPlatform,
 ) -> Option<Result<bool>> {
-    Some(match clipboard_command(key, modifiers)? {
+    let command = clipboard_command(key, modifiers)?;
+    state.cancel_move_lift();
+    Some(match command {
         ClipboardCommand::Copy => export::copy_selection(state, platform).map(|()| false),
         ClipboardCommand::Cut => export::cut_selection(state, platform),
         ClipboardCommand::Paste => export::paste_selection(state, platform),
@@ -474,6 +481,30 @@ fn handle_editor_key_with_order(
     modifiers: ModifiersState,
     ordered_modifiers: &input::OrderedModifierTracker,
 ) -> Option<bool> {
+    if let Some(command) = move_selection_command(
+        key,
+        modifiers,
+        state.cursor_mode,
+        state.toolbar.utility_kind(),
+        state.move_lift_active(),
+    ) {
+        state.toolbar.cancel_shortcut();
+        return Some(match command {
+            input::MoveSelectionCommand::Begin => {
+                state.begin_move_lift();
+                false
+            }
+            input::MoveSelectionCommand::Step(direction) => {
+                state.move_lift(direction);
+                false
+            }
+            input::MoveSelectionCommand::Confirm => state.confirm_move_lift(),
+            input::MoveSelectionCommand::Cancel => {
+                state.cancel_move_lift();
+                false
+            }
+        });
+    }
     if let Some(command) =
         ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
     {
@@ -683,6 +714,93 @@ mod tests {
         ));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+    }
+
+    #[test]
+    fn utils_move_routes_space_arrows_enter_and_escape_without_stealing_other_enter_behavior() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        state.insert("abcd");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 4,
+        });
+        let unchanged = state.grid.lines.clone();
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::ArrowRight),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(state.grid.lines, unchanged);
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Escape),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert!(!state.move_lift_active());
+        assert_eq!(state.grid.lines, unchanged);
+
+        handle_editor_key(
+            &mut state,
+            &Key::Named(NamedKey::Space),
+            None,
+            false,
+            ModifiersState::empty(),
+        );
+        handle_editor_key(
+            &mut state,
+            &Key::Named(NamedKey::ArrowRight),
+            None,
+            false,
+            ModifiersState::empty(),
+        );
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Enter),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&state.grid.lines[0]), " abd");
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Enter),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(state.cursor_mode, app::CursorMode::Replace);
     }
 
     #[test]
