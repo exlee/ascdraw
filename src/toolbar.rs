@@ -608,9 +608,7 @@ impl ToolbarState {
             };
             spans.push(ToolbarSpan {
                 contents,
-                selected: row == MAIN_LABEL_ROW
-                    && *mode == self.main_mode
-                    && self.active_export_category.is_none(),
+                selected: row == MAIN_LABEL_ROW && *mode == self.main_mode && !self.export_open,
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
@@ -1181,6 +1179,16 @@ mod tests {
             .filter(|span| span.highlighted)
             .map(|span| span.contents.as_str())
             .collect()
+    }
+
+    fn selected_main_mode_count(toolbar: &ToolbarState) -> usize {
+        toolbar
+            .toolbar_spans(MAIN_LABEL_ROW)
+            .iter()
+            .filter(|span| {
+                span.selected && matches!(span.action, Some(ToolbarAction::SelectMain(_)))
+            })
+            .count()
     }
 
     fn option_start(spans: &[ToolbarSpan], category: usize, option: usize) -> usize {
@@ -2045,17 +2053,14 @@ mod tests {
     #[test]
     fn export_modes_are_peers_of_editor_mode_and_escape_restores_it() {
         let mut toolbar = ToolbarState::default();
-        assert_eq!(
-            toolbar
-                .toolbar_spans(MAIN_LABEL_ROW)
-                .iter()
-                .filter(|span| span.selected)
-                .count(),
-            1
-        );
+        assert_eq!(selected_main_mode_count(&toolbar), 1);
+        let durable = toolbar.durable_selections();
 
         press(&mut toolbar, "0");
         assert_eq!(toolbar.active_export_category, None);
+        assert_eq!(selected_main_mode_count(&toolbar), 0);
+        assert_eq!(toolbar.tooltip(), Tooltip::Export);
+        assert_eq!(toolbar.durable_selections(), durable);
         assert!(
             toolbar
                 .toolbar_spans(MENU_FIRST_ROW)
@@ -2088,14 +2093,48 @@ mod tests {
         assert!(!toolbar.export_menu_open());
         assert_eq!(toolbar.active_export_category, None);
         assert_eq!(toolbar.main_mode(), MainMode::Line);
-        assert_eq!(
-            toolbar
-                .toolbar_spans(MAIN_LABEL_ROW)
-                .iter()
-                .filter(|span| span.selected)
-                .count(),
-            1
-        );
+        assert_eq!(selected_main_mode_count(&toolbar), 1);
+        assert_eq!(toolbar.durable_selections(), durable);
+    }
+
+    #[test]
+    fn export_open_and_close_preserve_every_editor_mode_and_tool_selection() {
+        for mode in MainMode::ALL {
+            let mut toolbar = ToolbarState::default();
+            assert!(toolbar.apply_action(ToolbarAction::SelectMain(mode)));
+            let action = match mode {
+                MainMode::Line => ToolbarAction::SelectSubmenu {
+                    submenu: 2,
+                    option: 1,
+                },
+                MainMode::Stamp => ToolbarAction::SelectSubmenu {
+                    submenu: 1,
+                    option: 3,
+                },
+                MainMode::Shapes => ToolbarAction::SelectSubmenu {
+                    submenu: 0,
+                    option: 1,
+                },
+                MainMode::Utilities => ToolbarAction::SelectSubmenu {
+                    submenu: 0,
+                    option: 2,
+                },
+            };
+            assert!(toolbar.apply_action(action));
+            let durable = toolbar.durable_selections();
+
+            assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+            assert!(toolbar.export_menu_open());
+            assert_eq!(toolbar.active_export_category, None);
+            assert_eq!(selected_main_mode_count(&toolbar), 0);
+            assert_eq!(toolbar.durable_selections(), durable);
+
+            assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+            assert!(!toolbar.export_menu_open());
+            assert_eq!(selected_main_mode_count(&toolbar), 1);
+            assert_eq!(toolbar.main_mode(), mode);
+            assert_eq!(toolbar.durable_selections(), durable);
+        }
     }
 
     #[test]
@@ -2139,6 +2178,8 @@ mod tests {
     fn mouse_category_selection_matches_keyboard_state_and_action() {
         let mut toolbar = ToolbarState::default();
         assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+        assert_eq!(selected_main_mode_count(&toolbar), 0);
+        assert_eq!(toolbar.active_export_category, None);
         let width = 100;
         let category_column = span_starts(&boxed_toolbar_spans(
             &toolbar.toolbar_spans(MENU_FIRST_ROW),

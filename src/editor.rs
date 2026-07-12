@@ -2333,6 +2333,42 @@ mod tests {
     }
 
     #[test]
+    fn export_activation_is_transient_and_does_not_mutate_editor_state() {
+        let mut state = state();
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 2,
+        }));
+        state.insert("canvas");
+        let edit = state.edit_snapshot();
+        let cursor_mode = state.cursor_mode;
+        let durable = state.toolbar.durable_selections();
+
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Character("0".into()), ModifiersState::empty(),)
+        );
+        assert!(state.toolbar.export_menu_open());
+        assert_eq!(state.edit_snapshot(), edit);
+        assert_eq!(state.cursor_mode, cursor_mode);
+        assert_eq!(state.toolbar.durable_selections(), durable);
+
+        assert!(
+            state.handle_toolbar_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty(),)
+        );
+        assert!(!state.toolbar.export_menu_open());
+        assert_eq!(state.edit_snapshot(), edit);
+        assert_eq!(state.cursor_mode, cursor_mode);
+        assert_eq!(state.toolbar.durable_selections(), durable);
+
+        assert!(state.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
+        assert!(state.toolbar.export_menu_open());
+        assert_eq!(state.edit_snapshot(), edit);
+        assert_eq!(state.cursor_mode, cursor_mode);
+        assert_eq!(state.toolbar.durable_selections(), durable);
+    }
+
+    #[test]
     fn toolbar_shortcuts_are_bypassed_in_every_text_accepting_mode() {
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
             let mut state = state();
