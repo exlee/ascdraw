@@ -192,6 +192,9 @@ fn edit_command_for_key(
     }
 
     if matches!(key, Key::Named(NamedKey::Enter)) {
+        if mode == CursorMode::Shapes {
+            return Some(EditCommand::StartOrConfirmShape);
+        }
         return Some(if modifiers.shift_key() {
             EditCommand::ToggleTextEntry
         } else {
@@ -1017,7 +1020,6 @@ mod tests {
             CursorMode::MoveDraw,
             CursorMode::Text,
             CursorMode::Stamp,
-            CursorMode::Shapes,
             CursorMode::Utilities,
         ] {
             assert_eq!(
