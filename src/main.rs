@@ -461,12 +461,8 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.place_stamp();
             true
         }
-        EditCommand::ConfirmShape => {
-            state.confirm_shape();
-            true
-        }
-        EditCommand::EscapeCanvas => {
-            state.cancel_canvas_transients();
+        EditCommand::StartOrConfirmShape => {
+            state.start_shape_or_confirm();
             false
         }
         EditCommand::Home => {
@@ -534,7 +530,7 @@ mod tests {
         let mut state = EditorState::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
 
-        assert!(!apply_edit_command(&mut state, EditCommand::EscapeCanvas));
+        assert!(!apply_edit_command(&mut state, EditCommand::StartOrConfirmShape));
         for command in [
             EditCommand::Move(Direction::Right),
             EditCommand::Move(Direction::Right),
@@ -549,7 +545,7 @@ mod tests {
             .lines_with_shape_preview()
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
-        assert!(apply_edit_command(&mut state, EditCommand::ConfirmShape));
+        assert!(!apply_edit_command(&mut state, EditCommand::StartOrConfirmShape));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
     }

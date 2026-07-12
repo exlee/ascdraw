@@ -155,7 +155,7 @@ impl EditorState {
             return false;
         }
         if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open {
-            self.cancel_canvas_transients();
+            self.collapse_selection();
         }
         if self.toolbar.main_mode() != old_mode {
             self.end_stroke();
@@ -737,13 +737,24 @@ impl EditorState {
         };
     }
 
-    pub fn cancel_canvas_transients(&mut self) {
-        let had_preview = self.shape_preview.take().is_some();
+    pub fn start_shape_or_confirm(&mut self) {
+        let preview = self.shape_preview.take();
+        let had_preview = preview.is_some();
         let had_selection = !self.selection.is_collapsed();
         self.end_stroke();
         self.toolbar.cancel_shortcut();
         self.collapse_selection();
-        if !had_preview && !had_selection && self.cursor_mode == CursorMode::Shapes {
+
+        if self.cursor_mode != CursorMode::Shapes {
+            return;
+        }
+
+        if had_preview {
+            self.shape_preview = preview;
+            self.confirm_shape();
+            return;
+        }
+        if !had_preview && !had_selection {
             self.toggle_shape_preview();
         }
     }
@@ -801,6 +812,7 @@ impl EditorState {
 
     pub fn confirm_shape(&mut self) {
         let Some(preview) = self.shape_preview.take() else {
+            dbg!("No preview");
             return;
         };
         for (coord, contents) in self.shape_cells(preview) {
@@ -833,7 +845,6 @@ impl EditorState {
         match self.toolbar.shape_kind() {
             ShapeKind::Rect => rectangle_cells(left, right, top, bottom, style, false, fill),
             ShapeKind::RoundedRect => rectangle_cells(left, right, top, bottom, style, true, fill),
-            ShapeKind::Ellipse => ellipse_cells(left, right, top, bottom, style, fill),
         }
     }
 
@@ -1086,62 +1097,6 @@ fn rectangle_cells(
                     Some(fill) => fill.chars().next().unwrap_or(' '),
                     None => continue,
                 },
-            };
-            cells.push((Coord { line, column }, glyph.to_string()));
-        }
-    }
-    cells
-}
-
-fn ellipse_cells(
-    left: usize,
-    right: usize,
-    top: usize,
-    bottom: usize,
-    style: LineStyle,
-    fill: Option<&str>,
-) -> Vec<(Coord, String)> {
-    if right.saturating_sub(left) < 3 || bottom.saturating_sub(top) < 2 {
-        return rectangle_cells(left, right, top, bottom, style, true, fill);
-    }
-    let cx = (left + right) as f64 / 2.0;
-    let cy = (top + bottom) as f64 / 2.0;
-    let rx = (right - left) as f64 / 2.0;
-    let ry = (bottom - top) as f64 / 2.0;
-    let inside = |line: isize, column: isize| {
-        let dx = (column as f64 - cx) / rx;
-        let dy = (line as f64 - cy) / ry;
-        dx * dx + dy * dy <= 1.0
-    };
-    let mut cells = Vec::new();
-    for line in top..=bottom {
-        for column in left..=right {
-            if !inside(line as isize, column as isize) {
-                continue;
-            }
-            let boundary = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-                .into_iter()
-                .any(|(dy, dx)| !inside(line as isize + dy, column as isize + dx));
-            let glyph = if boundary {
-                let nx = (column as f64 - cx) / rx;
-                let ny = (line as f64 - cy) / ry;
-                if (nx.abs() - ny.abs()).abs() < 0.35 {
-                    let directions = match (ny.is_sign_negative(), nx.is_sign_negative()) {
-                        (true, true) => [Direction::Right, Direction::Down],
-                        (true, false) => [Direction::Down, Direction::Left],
-                        (false, true) => [Direction::Up, Direction::Right],
-                        (false, false) => [Direction::Up, Direction::Left],
-                    };
-                    line_glyph(&directions, style, true)
-                } else if nx.abs() > ny.abs() {
-                    line_glyph(&[Direction::Up, Direction::Down], style, true)
-                } else {
-                    line_glyph(&[Direction::Left, Direction::Right], style, true)
-                }
-            } else if let Some(fill) = fill {
-                fill.chars().next().unwrap_or(' ')
-            } else {
-                continue;
             };
             cells.push((Coord { line, column }, glyph.to_string()));
         }
@@ -1578,7 +1533,7 @@ mod tests {
     fn escape_and_text_cancellation_collapse_expanded_selection() {
         let mut state = state();
         state.extend_selection(Direction::Right);
-        state.cancel_canvas_transients();
+        state.start_shape_or_confirm();
         assert!(state.selection.is_collapsed());
 
         state.extend_selection(Direction::Right);
@@ -2119,32 +2074,6 @@ mod tests {
         assert_eq!(contents(&preview[0]), "╭──╮");
         assert_eq!(contents(&preview[1]), "│░░│");
         assert_eq!(contents(&preview[2]), "╰──╯");
-    }
-
-    #[test]
-    fn ellipse_preview_uses_the_selected_shape() {
-        let mut state = state();
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
-        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 2,
-        });
-        state.toggle_shape_preview();
-        for _ in 0..6 {
-            state.move_cursor(Direction::Right);
-        }
-        for _ in 0..4 {
-            state.move_cursor(Direction::Down);
-        }
-
-        let preview = state.lines_with_shape_preview().unwrap();
-        let non_blank = preview
-            .iter()
-            .flatten()
-            .filter(|atom| atom.contents != " ")
-            .count();
-        assert!(non_blank >= 8);
-        assert!(non_blank < 7 * 5);
     }
 
     #[test]

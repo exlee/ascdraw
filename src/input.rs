@@ -21,8 +21,7 @@ pub enum EditCommand {
     BeginSingleReplace,
     CancelTextEntry,
     PlaceStamp,
-    ConfirmShape,
-    EscapeCanvas,
+    StartOrConfirmShape,
     Home,
     End,
     Backspace,
@@ -92,10 +91,6 @@ fn edit_command_for_key(
                 && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("g"))))
     {
         return Some(EditCommand::CancelTextEntry);
-    }
-
-    if matches!(key, Key::Named(NamedKey::Escape)) {
-        return Some(EditCommand::EscapeCanvas);
     }
 
     if matches!(key, Key::Named(NamedKey::Enter)) {
@@ -182,7 +177,7 @@ fn edit_command_for_key(
 
     if mode == CursorMode::Shapes {
         return match key {
-            _ if is_space_key(key) => Some(EditCommand::ConfirmShape),
+            _ if is_space_key(key) => Some(EditCommand::StartOrConfirmShape),
             _ => direction_for_key(key).map(EditCommand::Move),
         };
     }
@@ -605,19 +600,11 @@ mod tests {
     fn canvas_escape_cancels_transients_and_shape_space_confirms() {
         assert_eq!(
             edit_command_for_key(
-                &Key::Named(NamedKey::Escape),
-                ModifiersState::empty(),
-                CursorMode::Shapes,
-            ),
-            Some(EditCommand::EscapeCanvas)
-        );
-        assert_eq!(
-            edit_command_for_key(
                 &Key::Named(NamedKey::Space),
                 ModifiersState::empty(),
                 CursorMode::Shapes,
             ),
-            Some(EditCommand::ConfirmShape)
+            Some(EditCommand::StartOrConfirmShape)
         );
     }
 

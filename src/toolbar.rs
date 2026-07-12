@@ -200,7 +200,6 @@ pub enum ShapeKind {
     #[default]
     Rect,
     RoundedRect,
-    Ellipse,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -747,7 +746,6 @@ impl ToolbarState {
         match self.shape_selected[0] {
             0 => ShapeKind::Rect,
             1 => ShapeKind::RoundedRect,
-            2 => ShapeKind::Ellipse,
             _ => unreachable!("shape selection is always normalized"),
         }
     }
