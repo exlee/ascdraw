@@ -91,6 +91,7 @@ fn try_main() -> Result<ExitCode> {
 
     let mut windows: HashMap<WindowId, EditorWindow> = HashMap::new();
     let mut last_autosave_check = Instant::now();
+    let mut last_tooltip_redraw = Instant::now();
     #[cfg(target_os = "macos")]
     let mut installed_macos_menus = false;
     #[cfg(target_os = "macos")]
@@ -135,10 +136,21 @@ fn try_main() -> Result<ExitCode> {
                     poll_user_config_updates(watch, &mut config, &mut user_keys, &mut windows);
                 }
                 let now = Instant::now();
-                for editor in windows.values() {
+                for editor in windows.values_mut() {
                     if editor.state.move_lift_active() {
                         editor.request_redraw();
                     }
+                    #[cfg(target_os = "macos")]
+                    editor.hide_cursor_if_idle(now);
+                    editor.clear_export_success_if_elapsed(now);
+                }
+                if now.saturating_duration_since(last_tooltip_redraw)
+                    >= toolbar::TOOLTIP_ROTATION_INTERVAL
+                {
+                    for editor in windows.values() {
+                        editor.request_redraw();
+                    }
+                    last_tooltip_redraw = now;
                 }
                 if now.saturating_duration_since(last_autosave_check) >= Duration::from_secs(1) {
                     for editor in windows.values_mut() {
@@ -357,6 +369,8 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
+                            #[cfg(target_os = "macos")]
+                            editor.note_cursor_activity(Instant::now());
                             editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
                                 position.x,
                                 position.y,
@@ -490,8 +504,10 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
             }
         }
         Ok(ExportOutcome::Unchanged) => {}
+        Ok(ExportOutcome::Cancelled) => return,
         Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
     }
+    editor.show_export_success(action, Instant::now());
 }
 
 fn perform_export_action(
@@ -979,7 +995,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 4,
+            option: 0,
         });
         let unchanged = state.grid.lines.clone();
 
@@ -1658,10 +1674,12 @@ mod tests {
             assert_eq!(state.toolbar.durable_selections(), durable);
             assert_eq!(
                 outcome,
-                if action == export::ExportAction::Clear {
-                    ExportOutcome::CanvasCleared
-                } else {
-                    ExportOutcome::Unchanged
+                match action {
+                    export::ExportAction::Clear => ExportOutcome::CanvasCleared,
+                    export::ExportAction::ClipboardTxt | export::ExportAction::ClipboardPng => {
+                        ExportOutcome::Unchanged
+                    }
+                    _ => ExportOutcome::Cancelled,
                 }
             );
         }

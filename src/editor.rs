@@ -3140,11 +3140,10 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: match utility {
-                UtilityKind::Select => 0,
+                UtilityKind::Move => 0,
                 UtilityKind::Push => 1,
                 UtilityKind::Pull => 2,
                 UtilityKind::View => 3,
-                UtilityKind::Move => 4,
             },
         });
         state.grid.cursor_pos = cursor;

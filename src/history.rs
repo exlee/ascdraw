@@ -367,7 +367,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 4,
+            option: 0,
         });
         let before = HistorySnapshot {
             edit: state.edit_snapshot(),

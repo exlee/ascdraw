@@ -35,6 +35,7 @@ pub enum ExportAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportOutcome {
     Unchanged,
+    Cancelled,
     DocumentLoaded,
     ProjectLoaded,
     CanvasCleared,
@@ -204,7 +205,7 @@ pub fn perform(
         }
         ExportAction::SaveTxt => {
             let Some(path) = platform.choose_save_path(FileKind::Txt) else {
-                return Ok(ExportOutcome::Unchanged);
+                return Ok(ExportOutcome::Cancelled);
             };
             fs::write(&path, text_export(state, visible_canvas))
                 .with_context(|| format!("failed to write {}", path.display()))?;
@@ -212,7 +213,7 @@ pub fn perform(
         }
         ExportAction::SaveJson => {
             let Some(path) = platform.choose_save_path(FileKind::Json) else {
-                return Ok(ExportOutcome::Unchanged);
+                return Ok(ExportOutcome::Cancelled);
             };
             save_project_json(&path, state, *viewport)?;
             Ok(ExportOutcome::Unchanged)
@@ -225,7 +226,7 @@ pub fn perform(
         }
         ExportAction::SavePng => {
             let Some(path) = platform.choose_save_path(FileKind::Png) else {
-                return Ok(ExportOutcome::Unchanged);
+                return Ok(ExportOutcome::Cancelled);
             };
             let lines = canvas_atoms_for_export(state, visible_canvas);
             let image = platform.render_canvas_image(&lines, &state.grid.default_face)?;
@@ -235,7 +236,7 @@ pub fn perform(
         }
         ExportAction::LoadTxt => {
             let Some(path) = platform.choose_open_path(FileKind::Txt) else {
-                return Ok(ExportOutcome::Unchanged);
+                return Ok(ExportOutcome::Cancelled);
             };
             let text = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
@@ -244,7 +245,7 @@ pub fn perform(
         }
         ExportAction::LoadJson => {
             let Some(path) = platform.choose_open_path(FileKind::Json) else {
-                return Ok(ExportOutcome::Unchanged);
+                return Ok(ExportOutcome::Cancelled);
             };
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
@@ -886,7 +887,7 @@ mod tests {
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 4,
+            option: 0,
         }));
         assert!(lifted.begin_move_lift());
         assert!(lifted.move_lift(crate::model::Direction::Right));
@@ -916,7 +917,7 @@ mod tests {
 
         assert_eq!(
             perform_action(ExportAction::SavePng, &mut state, &mut platform).unwrap(),
-            ExportOutcome::Unchanged
+            ExportOutcome::Cancelled
         );
         assert!(platform.rendered_lines.is_none());
         assert_eq!(state.edit_snapshot(), before);
@@ -1107,7 +1108,7 @@ mod tests {
         let mut platform = MockPlatform::default();
         assert_eq!(
             perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
-            ExportOutcome::Unchanged
+            ExportOutcome::Cancelled
         );
         assert_eq!(state.grid.lines, before);
     }

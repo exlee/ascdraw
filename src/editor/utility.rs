@@ -5,11 +5,10 @@ use crate::toolbar::UtilityKind;
 impl EditorState {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
         match self.toolbar.utility_kind() {
-            UtilityKind::Select => false,
+            UtilityKind::Move => false,
             UtilityKind::Push => self.push_blank(direction),
             UtilityKind::Pull => self.pull_all(direction),
             UtilityKind::View => false,
-            UtilityKind::Move => false,
         }
     }
 

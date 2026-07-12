@@ -27,6 +27,10 @@ use crate::render::{Renderer, load_renderer, resize_surface};
 use crate::title_policy::window_attributes;
 use crate::user_keys::FontSizeAction;
 
+#[cfg(target_os = "macos")]
+const CURSOR_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
+
 pub struct EditorWindow {
     pub window: Rc<Window>,
     pub surface: Surface<Rc<Window>, Rc<Window>>,
@@ -43,6 +47,11 @@ pub struct EditorWindow {
     document_dirty: bool,
     menu_selections_dirty: bool,
     last_keypress: Instant,
+    export_success_deadline: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    last_cursor_activity: Instant,
+    #[cfg(target_os = "macos")]
+    cursor_hidden: bool,
 }
 
 impl EditorWindow {
@@ -92,6 +101,42 @@ impl EditorWindow {
 
     pub fn note_keypress(&mut self, now: Instant) {
         self.last_keypress = now;
+    }
+
+    pub fn show_export_success(&mut self, action: crate::export::ExportAction, now: Instant) {
+        self.state.toolbar.mark_export_successful(action);
+        self.export_success_deadline = Some(now + EXPORT_SUCCESS_HIGHLIGHT_DURATION);
+    }
+
+    pub fn clear_export_success_if_elapsed(&mut self, now: Instant) {
+        if self
+            .export_success_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.export_success_deadline = None;
+            if self.state.toolbar.clear_export_success() {
+                self.request_redraw();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn note_cursor_activity(&mut self, now: Instant) {
+        self.last_cursor_activity = now;
+        if self.cursor_hidden {
+            self.window.set_cursor_visible(true);
+            self.cursor_hidden = false;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn hide_cursor_if_idle(&mut self, now: Instant) {
+        if !self.cursor_hidden
+            && now.saturating_duration_since(self.last_cursor_activity) >= CURSOR_IDLE_TIMEOUT
+        {
+            self.window.set_cursor_visible(false);
+            self.cursor_hidden = true;
+        }
     }
 
     pub fn mark_document_dirty(&mut self) {
@@ -575,6 +620,11 @@ pub fn create_editor_window(
         document_dirty: false,
         menu_selections_dirty: false,
         last_keypress: Instant::now(),
+        export_success_deadline: None,
+        #[cfg(target_os = "macos")]
+        last_cursor_activity: Instant::now(),
+        #[cfg(target_os = "macos")]
+        cursor_hidden: false,
     };
     editor.ensure_cursor_in_viewport();
     editor.request_redraw();
@@ -1846,7 +1896,7 @@ mod tests {
                 if use_keyboard {
                     apply_keyboard_toolbar_transition(
                         &mut state,
-                        Key::Character("5".into()),
+                        Key::Character("9".into()),
                         &mut viewport,
                         &config,
                         toolbar_cell_height,

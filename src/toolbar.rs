@@ -20,6 +20,7 @@ const MAIN_SHORTCUT_ROW: usize = 1;
 const MENU_FIRST_ROW: usize = 2;
 const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
+pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub fn toolbar_height(toolbar: &ToolbarState, cell_height: usize) -> usize {
     let rows = toolbar.rows();
@@ -173,12 +174,12 @@ const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø
 const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
 #[cfg(test)]
 const ARROW_ROTATIONS: [[&str; 4]; 6] = [
-    ["△", "▷", "▽", "◁"],
-    ["▲", "▶", "▼", "◀"],
-    ["↑", "→", "↓", "←"],
-    ["▵", "▹", "▿", "◃"],
-    ["▴", "▸", "▾", "◂"],
-    ["↕", "↔", "↕", "↔"],
+    ["△", "▽", "◁", "▷"],
+    ["▲", "▼", "◀", "▶"],
+    ["↑", "↓", "←", "→"],
+    ["▵", "▿", "◃", "▹"],
+    ["▴", "▾", "◂", "▸"],
+    ["↕", "↕", "↔", "↔"],
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
 const QUADRANT_BLOCKS: [&str; 15] = [
@@ -193,7 +194,7 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &[" ", "░", "▒", "▓", "█"],
 ];
-const UTILITY_OPTIONS: [&[&str]; 1] = [["Select", "Push", "Pull", "View", "Move"].as_slice()];
+const UTILITY_OPTIONS: [&[&str]; 1] = [["Move", "Push", "Pull", "View"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
@@ -214,11 +215,10 @@ pub enum ShapeKind {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UtilityKind {
     #[default]
-    Select,
+    Move,
     Push,
     Pull,
     View,
-    Move,
 }
 
 impl MainMode {
@@ -238,7 +238,7 @@ impl MainMode {
             Self::Line => Tooltip::Line,
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
-            Self::Utilities => Tooltip::UtilitiesSelect,
+            Self::Utilities => Tooltip::UtilitiesMove,
         }
     }
 }
@@ -250,7 +250,6 @@ pub enum Tooltip {
     Line,
     Stamp,
     Shapes,
-    UtilitiesSelect,
     UtilitiesPush,
     UtilitiesPull,
     UtilitiesView,
@@ -275,7 +274,7 @@ impl Tooltip {
             .unwrap()
             .as_secs() as usize;
 
-        let selector = (timestamp % 35) / 7;
+        let selector = (timestamp / TOOLTIP_ROTATION_INTERVAL.as_secs() as usize) % MISC_TIP.len();
         let misc = MISC_TIP[selector];
 
         let primary = match self {
@@ -285,7 +284,6 @@ impl Tooltip {
             }
             Self::Stamp => "<Space> to put a stamp, Shift-<direction> for continuous drawing",
             Self::Shapes => "<Space> to start drawing, <Space> to confirm",
-            Self::UtilitiesSelect => "",
             Self::UtilitiesPush => "Push: Shift-hjkl/arrows inserts a blank row or column",
             Self::UtilitiesPull => {
                 "Pull: Shift-direction pulls"
@@ -335,6 +333,7 @@ pub struct ToolbarState {
     export_open: bool,
     active_export_category: Option<usize>,
     pending_export_action: Option<ExportAction>,
+    successful_export_action: Option<ExportAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +358,7 @@ pub enum ToolbarAction {
 
 const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
 const EXPORT_MODE_OFFSET: usize = 2;
+const EXPORT_CLEAR_DIGIT: usize = 9;
 const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
         ("TXT", ExportAction::ClipboardTxt),
@@ -366,8 +366,8 @@ const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     ],
     &[
         ("TXT", ExportAction::SaveTxt),
-        ("JSON", ExportAction::SaveJson),
         ("PNG", ExportAction::SavePng),
+        ("JSON", ExportAction::SaveJson),
     ],
     &[
         ("TXT", ExportAction::LoadTxt),
@@ -497,6 +497,7 @@ impl ToolbarState {
         self.export_open = false;
         self.active_export_category = None;
         self.shortcut_prefix = None;
+        self.successful_export_action = None;
     }
 
     pub fn export_menu_open(&self) -> bool {
@@ -513,6 +514,7 @@ impl ToolbarState {
     }
 
     pub fn keep_export_active(&mut self, action: ExportAction) {
+        self.successful_export_action = None;
         let category = EXPORT_OPTIONS
             .iter()
             .position(|options| options.iter().any(|(_, candidate)| *candidate == action))
@@ -524,6 +526,15 @@ impl ToolbarState {
         } else {
             PendingShortcut::ExportOption(category)
         });
+    }
+
+    pub fn mark_export_successful(&mut self, action: ExportAction) {
+        self.keep_export_active(action);
+        self.successful_export_action = Some(action);
+    }
+
+    pub fn clear_export_success(&mut self) -> bool {
+        self.successful_export_action.take().is_some()
     }
 
     fn toggle_export_menu(&mut self) {
@@ -542,10 +553,14 @@ impl ToolbarState {
             self.shortcut_prefix = Some(PendingShortcut::Mode);
             return;
         }
-        let Some(category) = digit
+        let category = if digit == EXPORT_CLEAR_DIGIT {
+            EXPORT_LABELS.len() - 1
+        } else if let Some(category) = digit
             .checked_sub(EXPORT_MODE_OFFSET)
-            .filter(|category| *category < EXPORT_LABELS.len())
-        else {
+            .filter(|category| *category < EXPORT_LABELS.len() - 1)
+        {
+            category
+        } else {
             return;
         };
         self.select_export_category(category);
@@ -625,23 +640,29 @@ impl ToolbarState {
         } else {
             let mut prefix = bold_span("1.".to_string());
             prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Mode);
-            vec![prefix, plain_span("    ".to_string())]
+            vec![
+                plain_span("   ".to_string()),
+                prefix,
+                plain_span(" ".to_string()),
+            ]
         };
         for (index, mode) in MainMode::ALL.iter().enumerate() {
             if index > 0 {
                 spans.push(plain_span(" ".to_string()));
             }
             let contents = if row == MAIN_LABEL_ROW {
-                mode.label().to_string()
-            } else if index + 1 == MainMode::ALL.len() {
-                (index + 1).to_string()
+                if index + 1 == MainMode::ALL.len() {
+                    (index + 1).to_string()
+                } else {
+                    aligned_shortcut(index + 1, mode.label())
+                }
             } else {
-                aligned_shortcut(index + 1, mode.label())
+                mode.label().to_string()
             };
             spans.push(ToolbarSpan {
                 contents,
                 bold_prefix: 0,
-                selected: row == MAIN_LABEL_ROW && *mode == self.main_mode && !self.export_open,
+                selected: row == MAIN_SHORTCUT_ROW && *mode == self.main_mode && !self.export_open,
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
@@ -663,56 +684,36 @@ impl ToolbarState {
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let label_row = row == MENU_FIRST_ROW;
+        let header_row = row == MENU_FIRST_ROW;
         let mut spans = Vec::new();
-        for (category, label) in EXPORT_LABELS.iter().enumerate() {
+        for (category, label) in EXPORT_LABELS.iter().take(3).enumerate() {
             if category > 0 {
                 spans.push(plain_span(GAP.to_string()));
             }
             let cell_start = spans_width(&spans);
             let mode_number = category + EXPORT_MODE_OFFSET;
-            let flattened = EXPORT_OPTIONS[category].len() == 1;
-            let path = if flattened {
-                mode_number.to_string()
-            } else {
-                format!("{mode_number}.")
-            };
+            let path = format!("{mode_number}.");
             let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
-            let options_width = if flattened {
-                0
-            } else {
-                EXPORT_OPTIONS[category]
-                    .iter()
-                    .map(|(option, _)| UnicodeWidthStr::width(*option))
-                    .sum::<usize>()
-                    + EXPORT_OPTIONS[category].len().saturating_sub(1)
-            };
+            let options_width = EXPORT_OPTIONS[category]
+                .iter()
+                .map(|(option, _)| UnicodeWidthStr::width(*option))
+                .sum::<usize>()
+                + EXPORT_OPTIONS[category].len().saturating_sub(1);
             let cell_width = prefix_width + options_width;
-            if label_row {
-                let label_contents = if flattened {
-                    (*label).to_string()
-                } else {
-                    format!("{label}:")
-                };
+            if header_row {
+                let label_contents = format!("{label}:");
                 spans.push(ToolbarSpan {
                     bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
                     contents: pad_right_to_width(label_contents, prefix_width),
                     selected: self.active_export_category == Some(category),
                     highlighted: false,
                     tooltip: false,
-                    action: Some(if flattened {
-                        ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1)
-                    } else {
-                        ToolbarAction::SelectExportCategory(category)
-                    }),
+                    action: Some(ToolbarAction::SelectExportCategory(category)),
                     right_aligned: false,
                 });
             } else {
                 let highlighted_prefix = match self.pending_shortcut() {
                     Some(PendingShortcut::ExportOption(pending)) if pending == category => {
-                        Some(path.clone())
-                    }
-                    Some(PendingShortcut::ExportFlat(pending)) if pending == category => {
                         Some(path.clone())
                     }
                     _ => None,
@@ -724,22 +725,18 @@ impl ToolbarState {
                     highlighted_prefix.as_deref(),
                 );
             }
-            if flattened {
-                pad_spans_to_width(&mut spans, cell_start + cell_width);
-                continue;
-            }
             for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
                 if position > 0 {
                     spans.push(plain_span(" ".to_string()));
                 }
                 spans.push(ToolbarSpan {
-                    contents: if label_row {
-                        (*option).to_string()
-                    } else {
+                    contents: if header_row {
                         aligned_shortcut(position + 1, option)
+                    } else {
+                        (*option).to_string()
                     },
                     bold_prefix: 0,
-                    selected: false,
+                    selected: !header_row && self.successful_export_action == Some(*action),
                     highlighted: false,
                     tooltip: false,
                     action: Some(ToolbarAction::RunExport(*action)),
@@ -747,6 +744,17 @@ impl ToolbarState {
                 });
             }
             pad_spans_to_width(&mut spans, cell_start + cell_width);
+        }
+        if !header_row {
+            spans.push(ToolbarSpan {
+                contents: format!("{EXPORT_CLEAR_DIGIT}. Clear"),
+                bold_prefix: UnicodeWidthStr::width("9."),
+                selected: self.successful_export_action == Some(ExportAction::Clear),
+                highlighted: false,
+                tooltip: false,
+                action: Some(ToolbarAction::RunExport(ExportAction::Clear)),
+                right_aligned: true,
+            });
         }
         spans
     }
@@ -786,11 +794,10 @@ impl ToolbarState {
         }
         if self.main_mode == MainMode::Utilities {
             return match self.utility_kind() {
-                UtilityKind::Select => Tooltip::UtilitiesSelect,
+                UtilityKind::Move => Tooltip::UtilitiesMove,
                 UtilityKind::Push => Tooltip::UtilitiesPush,
                 UtilityKind::Pull => Tooltip::UtilitiesPull,
                 UtilityKind::View => Tooltip::UtilitiesView,
-                UtilityKind::Move => Tooltip::UtilitiesMove,
             };
         }
         self.main_mode.tooltip()
@@ -840,11 +847,10 @@ impl ToolbarState {
 
     pub fn utility_kind(&self) -> UtilityKind {
         match self.utility_selected {
-            0 => UtilityKind::Select,
+            0 => UtilityKind::Move,
             1 => UtilityKind::Push,
             2 => UtilityKind::Pull,
             3 => UtilityKind::View,
-            4 => UtilityKind::Move,
             _ => unreachable!("utility selection is always normalized"),
         }
     }
@@ -910,12 +916,19 @@ impl ToolbarState {
 
     fn layout(&self) -> Option<MenuLayout<'_>> {
         match self.main_mode {
-            MainMode::Line => Some(MenuLayout {
-                labels: &LINE_LABELS,
-                options: &LINE_OPTIONS,
-                selected: &self.line_selected,
-                exclusive_submenu: None,
-            }),
+            MainMode::Line => {
+                let category_count = if self.line_style() == LineStyle::Thin {
+                    4
+                } else {
+                    3
+                };
+                Some(MenuLayout {
+                    labels: &LINE_LABELS[..category_count],
+                    options: &LINE_OPTIONS[..category_count],
+                    selected: &self.line_selected[..category_count],
+                    exclusive_submenu: None,
+                })
+            }
             MainMode::Stamp => Some(MenuLayout {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
@@ -1239,14 +1252,17 @@ mod tests {
 
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
-            ["Clipboard:", "Save:", "Load:", "Clear"]
+            ["Clipboard:", "Save:", "Load:"]
         );
         let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
-        assert_eq!(bold_contents(&shortcuts), ["2.", "3.", "4.", "5"]);
+        assert_eq!(bold_contents(&shortcuts), ["2.", "3.", "4.", "9."]);
         assert!(
             shortcuts
                 .iter()
-                .filter(|span| span.action.is_some())
+                .filter(|span| {
+                    span.action.is_some()
+                        && span.action != Some(ToolbarAction::RunExport(ExportAction::Clear))
+                })
                 .all(|span| span.bold_prefix == 0)
         );
     }
@@ -1276,7 +1292,7 @@ mod tests {
 
     fn selected_main_mode_count(toolbar: &ToolbarState) -> usize {
         toolbar
-            .toolbar_spans(MAIN_LABEL_ROW)
+            .toolbar_spans(MAIN_SHORTCUT_ROW)
             .iter()
             .filter(|span| {
                 span.selected && matches!(span.action, Some(ToolbarAction::SelectMain(_)))
@@ -1367,11 +1383,11 @@ mod tests {
         press(&mut toolbar, "3");
         assert_eq!(toolbar.main_mode(), MainMode::Shapes);
 
-        assert_eq!(row(&toolbar, 0), "Mode: Stamp Line Shape Utils");
-        assert_eq!(row(&toolbar, 1), "1.    1     2    3     4");
+        assert_eq!(row(&toolbar, 0), "Mode: 1     2    3     4");
+        assert_eq!(row(&toolbar, 1), "   1. Stamp Line Shape Utils");
         assert_eq!(
             toolbar
-                .toolbar_spans(0)
+                .toolbar_spans(1)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
@@ -1380,18 +1396,24 @@ mod tests {
     }
 
     #[test]
-    fn two_key_line_width_and_corner_paths_select_without_cycling() {
+    fn corner_is_available_only_for_thin_lines() {
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
+
         for key in ["4", "3"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.line_style(), LineStyle::Double);
+        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
-        for key in ["5", "2"] {
-            press(&mut toolbar, key);
-        }
-        assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
+        assert_eq!(toolbar.line_corner(), CornerStyle::Smooth);
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 0,
+        }));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
         assert!(row(&toolbar, 2).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, 3).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
@@ -1550,11 +1572,11 @@ mod tests {
         assert!(row(&toolbar, 2).contains("Fills: 1 2 3 4"));
         assert!(row(&toolbar, 2).contains("Blocks: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, 3).contains("2.1. □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
-        assert!(row(&toolbar, 3).contains("3.1. △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"));
+        assert!(row(&toolbar, 3).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
         assert!(row(&toolbar, 3).contains("4. ░ ▒ ▓ █"));
         assert!(row(&toolbar, 3).contains("5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
         assert!(row(&toolbar, 4).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
-        assert!(row(&toolbar, 4).contains("3.2. ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"));
+        assert!(row(&toolbar, 4).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
         assert!(row(&toolbar, 4).contains("5.2. ▜ ▄ ▙ ▟ █"));
         assert!(row(&toolbar, 5).contains("3.3. ↕ ↔"));
     }
@@ -1569,11 +1591,11 @@ mod tests {
         );
         assert_eq!(
             category_cell_text(&toolbar, MENU_FIRST_ROW + 1, 1).trim_end(),
-            "   3.1. △ ▷ ▽ ◁ ▲ ▶ ▼ ◀ ↑ →"
+            "   3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"
         );
         assert_eq!(
             category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 1).trim_end(),
-            "   3.2. ↓ ← ▵ ▹ ▿ ◃ ▴ ▸ ▾ ◂"
+            "   3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"
         );
         assert_eq!(
             category_cell_text(&toolbar, MENU_FIRST_ROW + 3, 1).trim_end(),
@@ -1719,18 +1741,9 @@ mod tests {
         let labels = toolbar.toolbar_spans(MENU_FIRST_ROW);
         let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
 
-        for (category, label) in EXPORT_LABELS.iter().enumerate() {
-            let flattened = EXPORT_OPTIONS[category].len() == 1;
-            let path = if flattened {
-                (category + EXPORT_MODE_OFFSET).to_string()
-            } else {
-                format!("{}.", category + EXPORT_MODE_OFFSET)
-            };
-            let rendered_label = if flattened {
-                (*label).to_string()
-            } else {
-                format!("{label}:")
-            };
+        for (category, label) in EXPORT_LABELS.iter().take(3).enumerate() {
+            let path = format!("{}.", category + EXPORT_MODE_OFFSET);
+            let rendered_label = format!("{label}:");
             assert_eq!(
                 prefix_start(&labels, &rendered_label),
                 path_cell_start(
@@ -1739,19 +1752,14 @@ mod tests {
                     menu_prefix_width(label, std::iter::once(path.as_str())),
                 )
             );
-            if flattened {
-                continue;
-            }
             let action = ToolbarAction::RunExport(EXPORT_OPTIONS[category][0].1);
-            let label_option = span_starts(&labels)
+            let header_option = prefix_start(&labels, &rendered_label)
+                + menu_prefix_width(label, std::iter::once(path.as_str()));
+            let value_option = span_starts(&shortcuts)
                 .into_iter()
                 .find_map(|(start, span)| (span.action == Some(action)).then_some(start))
                 .unwrap();
-            let shortcut_option = span_starts(&shortcuts)
-                .into_iter()
-                .find_map(|(start, span)| (span.action == Some(action)).then_some(start))
-                .unwrap();
-            assert_eq!(label_option, shortcut_option);
+            assert_eq!(header_option, value_option);
         }
     }
 
@@ -1778,7 +1786,12 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, "1");
         assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
-        assert!(toolbar.toolbar_spans(MAIN_SHORTCUT_ROW)[0].highlighted);
+        assert!(
+            toolbar
+                .toolbar_spans(MAIN_SHORTCUT_ROW)
+                .iter()
+                .any(|span| span.highlighted)
+        );
         press(&mut toolbar, "2");
         assert_eq!(toolbar.pending_shortcut(), None);
         assert!(
@@ -2005,8 +2018,8 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert_eq!(row(&toolbar, 2), "Select    Push    Pull    View    Move");
-        assert_eq!(row(&toolbar, 3), "2         3       4       5       6   ");
+        assert_eq!(row(&toolbar, 2), "Move    Push    Pull    View");
+        assert_eq!(row(&toolbar, 3), "2       3       4       5   ");
         assert!(!row(&toolbar, 2).contains("Tool"));
         for obsolete in ["2.1", "2.2", "2.3"] {
             assert!(!row(&toolbar, 3).contains(obsolete));
@@ -2057,7 +2070,7 @@ mod tests {
 
         let move_action = ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 4,
+            option: 0,
         };
         for row in [2, 3] {
             let column = (0..80)
@@ -2079,11 +2092,10 @@ mod tests {
         }
 
         for (key, utility, tooltip) in [
-            ("2", UtilityKind::Select, Tooltip::UtilitiesSelect),
+            ("2", UtilityKind::Move, Tooltip::UtilitiesMove),
             ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
             ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
             ("5", UtilityKind::View, Tooltip::UtilitiesView),
-            ("6", UtilityKind::Move, Tooltip::UtilitiesMove),
         ] {
             press(&mut toolbar, key);
             assert_eq!(toolbar.utility_kind(), utility);
@@ -2098,7 +2110,7 @@ mod tests {
         }
 
         press(&mut toolbar, "9");
-        assert_eq!(toolbar.utility_kind(), UtilityKind::Move);
+        assert_eq!(toolbar.utility_kind(), UtilityKind::View);
         assert_eq!(toolbar.pending_shortcut(), None);
         assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
     }
@@ -2178,7 +2190,7 @@ mod tests {
         let toolbar = ToolbarState::default();
         let wide = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 60));
         assert!(wide.ends_with("0. Save/Load/Export │"));
-        assert!(wide.starts_with("│ Mode: Stamp"));
+        assert!(wide.starts_with("│ Mode: 1"));
         for width in 0..32 {
             let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
             assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
@@ -2231,7 +2243,7 @@ mod tests {
         assert_eq!(toolbar.active_export_category, Some(1));
         assert!(
             toolbar
-                .toolbar_spans(MAIN_LABEL_ROW)
+                .toolbar_spans(MAIN_SHORTCUT_ROW)
                 .iter()
                 .filter(|span| matches!(span.action, Some(ToolbarAction::SelectMain(_))))
                 .all(|span| !span.selected)
@@ -2300,9 +2312,9 @@ mod tests {
     fn export_keyboard_paths_use_peer_mode_numbers() {
         for (keys, expected) in [
             (&["0", "2", "2"][..], ExportAction::ClipboardPng),
-            (&["0", "3", "2"][..], ExportAction::SaveJson),
+            (&["0", "3", "2"][..], ExportAction::SavePng),
             (&["0", "4", "1"][..], ExportAction::LoadTxt),
-            (&["0", "5"][..], ExportAction::Clear),
+            (&["0", "9"][..], ExportAction::Clear),
         ] {
             let mut toolbar = ToolbarState::default();
             for key in keys {
@@ -2350,12 +2362,36 @@ mod tests {
     }
 
     #[test]
+    fn successful_export_highlights_only_its_value_until_cleared() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        toolbar.mark_export_successful(ExportAction::SavePng);
+
+        let selected: Vec<_> = toolbar
+            .toolbar_spans(MENU_FIRST_ROW + 1)
+            .into_iter()
+            .filter(|span| span.selected)
+            .map(|span| span.contents)
+            .collect();
+        assert_eq!(selected, ["PNG"]);
+
+        assert!(toolbar.clear_export_success());
+        assert!(
+            toolbar
+                .toolbar_spans(MENU_FIRST_ROW + 1)
+                .iter()
+                .all(|span| !span.selected)
+        );
+        assert!(!toolbar.clear_export_success());
+    }
+
+    #[test]
     fn completed_export_keeps_exact_prefix_highlight_and_zero_toggles_closed() {
         let mut toolbar = ToolbarState::default();
         for key in ["0", "3", "2"] {
             press(&mut toolbar, key);
         }
-        assert_eq!(toolbar.take_export_action(), Some(ExportAction::SaveJson));
+        assert_eq!(toolbar.take_export_action(), Some(ExportAction::SavePng));
         assert_eq!(
             highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
             vec!["3."]
@@ -2372,15 +2408,11 @@ mod tests {
         assert_eq!(toolbar.active_export_category, None);
         assert_eq!(selected_main_mode_count(&toolbar), 1);
 
-        for key in ["0", "5"] {
+        for key in ["0", "9"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
-        assert_eq!(
-            highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)),
-            vec!["5"]
-        );
-        press(&mut toolbar, "5");
+        press(&mut toolbar, "9");
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
     }
 
@@ -2442,7 +2474,7 @@ mod tests {
     #[test]
     fn clear_is_keyboard_selectable_as_its_own_export_category() {
         let mut toolbar = ToolbarState::default();
-        for key in ["0", "5"] {
+        for key in ["0", "9"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
@@ -2460,9 +2492,16 @@ mod tests {
         press(&mut toolbar, "0");
         assert!(highlighted_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)).is_empty());
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Load:"));
-        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Clear"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains('5'));
+        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Clear"));
+        assert!(spans_text(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1)).contains("9. Clear"));
         assert!(!row(&toolbar, MENU_FIRST_ROW + 1).contains("0."));
+        assert_eq!(
+            EXPORT_OPTIONS[1]
+                .iter()
+                .map(|(label, _)| *label)
+                .collect::<Vec<_>>(),
+            ["TXT", "PNG", "JSON"]
+        );
         assert_eq!(EXPORT_OPTIONS[2].len(), 2);
         assert_eq!(EXPORT_OPTIONS[3], &[("Clear", ExportAction::Clear)]);
         for width in 0..48 {
@@ -2482,7 +2521,7 @@ mod tests {
         assert_eq!(toggle, ToolbarAction::ToggleExportMenu);
         assert!(toolbar.apply_action(toggle));
 
-        let clipboard_txt = boxed_toolbar_spans(&toolbar.toolbar_spans(2), width)
+        let clipboard_txt = boxed_toolbar_spans(&toolbar.toolbar_spans(3), width)
             .iter()
             .scan(0, |column, span| {
                 let start = *column;
@@ -2494,7 +2533,7 @@ mod tests {
                     .then_some(column)
             })
             .expect("Clipboard TXT is visible");
-        let action = toolbar.action_at(2, clipboard_txt, width).unwrap();
+        let action = toolbar.action_at(3, clipboard_txt, width).unwrap();
         assert!(toolbar.apply_action(action));
         assert_eq!(
             toolbar.take_export_action(),
@@ -2507,8 +2546,15 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         let width = 80;
         assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+        assert!(
+            spans_text(&boxed_toolbar_spans(
+                &toolbar.toolbar_spans(MENU_FIRST_ROW + 1),
+                width,
+            ))
+            .ends_with("9. Clear │")
+        );
 
-        let clear_column = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width)
+        let clear_column = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width)
             .iter()
             .scan(0, |column, span| {
                 let start = *column;
@@ -2520,7 +2566,7 @@ mod tests {
             })
             .expect("Clear is visible");
         let action = toolbar
-            .action_at(MENU_FIRST_ROW, clear_column, width)
+            .action_at(MENU_FIRST_ROW + 1, clear_column, width)
             .unwrap();
         assert!(toolbar.apply_action(action));
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
@@ -2533,7 +2579,7 @@ mod tests {
             Tooltip::Stamp,
             Tooltip::Line,
             Tooltip::Shapes,
-            Tooltip::UtilitiesSelect,
+            Tooltip::UtilitiesMove,
         ];
         for (mode, tooltip) in MainMode::ALL.into_iter().zip(expected) {
             assert_eq!(mode.tooltip(), tooltip);
@@ -2543,7 +2589,7 @@ mod tests {
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
         assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
-        assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesSelect.text());
+        assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesMove.text());
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
         assert_eq!(toolbar.tooltip(), Tooltip::Export);
@@ -2586,7 +2632,7 @@ mod tests {
         assert_eq!(ARROWS.len(), 22);
         assert_eq!(
             ARROWS.iter().copied().collect::<String>(),
-            "△▷▽◁▲▶▼◀↑→↓←▵▹▿◃▴▸▾◂↕↔"
+            "△▽◁▷▲▼◀▶↑↓←→▵▿◃▹▴▾◂▸↕↔"
         );
         assert_eq!(GREY_SHADING.iter().copied().collect::<String>(), "░▒▓█");
         assert_eq!(
@@ -2612,16 +2658,16 @@ mod tests {
     }
 
     #[test]
-    fn arrow_styles_preserve_uniline_up_right_down_left_rotation_order() {
+    fn arrow_styles_use_opposing_direction_pairs() {
         assert_eq!(
             ARROW_ROTATIONS,
             [
-                ["△", "▷", "▽", "◁"],
-                ["▲", "▶", "▼", "◀"],
-                ["↑", "→", "↓", "←"],
-                ["▵", "▹", "▿", "◃"],
-                ["▴", "▸", "▾", "◂"],
-                ["↕", "↔", "↕", "↔"],
+                ["△", "▽", "◁", "▷"],
+                ["▲", "▼", "◀", "▶"],
+                ["↑", "↓", "←", "→"],
+                ["▵", "▿", "◃", "▹"],
+                ["▴", "▾", "◂", "▸"],
+                ["↕", "↕", "↔", "↔"],
             ]
         );
     }

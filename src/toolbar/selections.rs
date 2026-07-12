@@ -298,7 +298,7 @@ mod tests {
         source.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         source.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 4,
+            option: 0,
         });
         assert_eq!(source.utility_kind(), UtilityKind::Move);
         let expected = source.durable_selections();

@@ -1743,7 +1743,7 @@ mod tests {
         let mut state = EditorState::new(&config.theme, "test");
         let selected = state
             .toolbar
-            .toolbar_spans(0)
+            .toolbar_spans(1)
             .into_iter()
             .find(|span| span.selected)
             .unwrap();
@@ -1763,11 +1763,11 @@ mod tests {
     fn structural_toolbar_atoms_resolve_bold_without_changing_theme_colors() {
         let config = AppConfig::default();
         let mut state = EditorState::new(&config.theme, "test");
-        let atoms = toolbar_atoms(&state.toolbar.toolbar_spans(0), &state);
+        let atoms = toolbar_atoms(&state.toolbar.toolbar_spans(1), &state);
         let mode_label = atoms
             .iter()
-            .find(|atom| atom.contents == "Mode:")
-            .expect("structural mode label atom");
+            .find(|atom| atom.contents == "1.")
+            .expect("structural mode path atom");
         let mode_value = atoms
             .iter()
             .find(|atom| atom.contents == "Stamp")
