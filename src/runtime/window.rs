@@ -20,7 +20,7 @@ use crate::layout::{
 };
 #[cfg(target_os = "macos")]
 use crate::macos;
-use crate::model::Coord;
+use crate::model::{Atom, Coord};
 use crate::render::{Renderer, load_renderer, resize_surface};
 use crate::title_policy::window_attributes;
 use crate::user_keys::FontSizeAction;
@@ -230,13 +230,61 @@ impl EditorWindow {
     }
 
     pub fn save_document(&mut self) -> Result<bool> {
-        if !self.document_dirty {
-            return Ok(false);
-        }
-        document::save(&self.document_path, &self.state.grid.lines)?;
-        self.document_dirty = false;
-        Ok(true)
+        save_document_if_dirty(
+            &mut self.document_dirty,
+            &self.document_path,
+            &self.state.grid.lines,
+            document::save,
+        )
     }
+}
+
+fn save_document_if_dirty(
+    dirty: &mut bool,
+    path: &Path,
+    lines: &[Vec<Atom>],
+    save: impl FnOnce(&Path, &[Vec<Atom>]) -> Result<()>,
+) -> Result<bool> {
+    if !*dirty {
+        return Ok(false);
+    }
+    save(path, lines)?;
+    *dirty = false;
+    Ok(true)
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct ShutdownSaveSummary {
+    saved: usize,
+    failed: usize,
+}
+
+fn save_on_shutdown<'a, T: 'a>(
+    documents: impl IntoIterator<Item = &'a mut T>,
+    mut save: impl FnMut(&mut T) -> Result<bool>,
+    mut report_failure: impl FnMut(anyhow::Error),
+) -> ShutdownSaveSummary {
+    let mut summary = ShutdownSaveSummary::default();
+    for document in documents {
+        match save(document) {
+            Ok(true) => summary.saved += 1,
+            Ok(false) => {}
+            Err(error) => {
+                summary.failed += 1;
+                report_failure(error);
+            }
+        }
+    }
+    summary
+}
+
+fn save_editor_documents<'a>(
+    editors: impl IntoIterator<Item = &'a mut EditorWindow>,
+    lifecycle: &str,
+) -> ShutdownSaveSummary {
+    save_on_shutdown(editors, EditorWindow::save_document, |error| {
+        log_error(format!("document save on {lifecycle} failed: {error:#}"));
+    })
 }
 
 fn resolve_navigation_origin(
@@ -307,14 +355,16 @@ pub fn close_window(
     window_id: WindowId,
     elwt: &ActiveEventLoop,
 ) {
-    if let Some(mut editor) = windows.remove(&window_id)
-        && let Err(error) = editor.save_document()
-    {
-        log_error(format!("document save on close failed: {error:#}"));
+    if let Some(mut editor) = windows.remove(&window_id) {
+        save_editor_documents(std::iter::once(&mut editor), "close");
     }
     if windows.is_empty() {
         elwt.exit();
     }
+}
+
+pub fn save_windows_on_exit(windows: &mut HashMap<WindowId, EditorWindow>) {
+    save_editor_documents(windows.values_mut(), "application exit");
 }
 
 fn should_autosave(dirty: bool, last_keypress: Instant, now: Instant) -> bool {
@@ -429,6 +479,132 @@ mod tests {
             keypress,
             keypress + Duration::from_secs(10)
         ));
+    }
+
+    #[test]
+    fn dirty_shutdown_save_writes_latest_document_without_waiting_for_idle() {
+        let mut dirty = true;
+        let path = Path::new("latest-document.toml");
+        let lines = vec![vec![Atom {
+            face: Face::default(),
+            contents: "latest".into(),
+        }]];
+        let mut writes = 0;
+
+        assert!(
+            save_document_if_dirty(&mut dirty, path, &lines, |saved_path, saved_lines| {
+                writes += 1;
+                assert_eq!(saved_path, path);
+                assert_eq!(saved_lines, lines);
+                Ok(())
+            })
+            .unwrap()
+        );
+
+        assert_eq!(writes, 1);
+        assert!(!dirty);
+    }
+
+    #[test]
+    fn clean_shutdown_save_does_not_write() {
+        let mut dirty = false;
+
+        assert!(
+            !save_document_if_dirty(
+                &mut dirty,
+                Path::new("clean-document.toml"),
+                &[],
+                |_, _| panic!("clean documents must not be written"),
+            )
+            .unwrap()
+        );
+        assert!(!dirty);
+    }
+
+    #[test]
+    fn failed_shutdown_save_keeps_document_dirty() {
+        let mut dirty = true;
+        let error = save_document_if_dirty(
+            &mut dirty,
+            Path::new("failed-document.toml"),
+            &[],
+            |_, _| Err(anyhow!("disk full")),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "disk full");
+        assert!(dirty);
+    }
+
+    #[test]
+    fn shutdown_saves_each_dirty_document_and_continues_after_failures() {
+        struct FakeDocument {
+            path: &'static str,
+            contents: &'static str,
+            dirty: bool,
+        }
+
+        let mut documents = [
+            FakeDocument {
+                path: "first.toml",
+                contents: "first latest",
+                dirty: true,
+            },
+            FakeDocument {
+                path: "clean.toml",
+                contents: "unchanged",
+                dirty: false,
+            },
+            FakeDocument {
+                path: "failed.toml",
+                contents: "failed latest",
+                dirty: true,
+            },
+            FakeDocument {
+                path: "last.toml",
+                contents: "last latest",
+                dirty: true,
+            },
+        ];
+        let mut writes = Vec::new();
+        let mut failures = Vec::new();
+
+        let summary = save_on_shutdown(
+            documents.iter_mut(),
+            |document| {
+                if !document.dirty {
+                    return Ok(false);
+                }
+                writes.push((document.path, document.contents));
+                if document.path == "failed.toml" {
+                    return Err(anyhow!("failed.toml is read-only"));
+                }
+                document.dirty = false;
+                Ok(true)
+            },
+            |error| failures.push(error.to_string()),
+        );
+
+        assert_eq!(
+            writes,
+            vec![
+                ("first.toml", "first latest"),
+                ("failed.toml", "failed latest"),
+                ("last.toml", "last latest"),
+            ]
+        );
+        assert_eq!(failures, vec!["failed.toml is read-only"]);
+        assert_eq!(
+            summary,
+            ShutdownSaveSummary {
+                saved: 2,
+                failed: 1,
+            }
+        );
+        assert!(!documents[0].dirty);
+        assert!(!documents[1].dirty);
+        assert!(documents[2].dirty);
+        assert!(!documents[3].dirty);
     }
 
     #[test]

@@ -43,7 +43,9 @@ use input::{
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
-use runtime::window::{EditorWindow, close_window, create_editor_window, handle_command};
+use runtime::window::{
+    EditorWindow, close_window, create_editor_window, handle_command, save_windows_on_exit,
+};
 use user_keys::{FontSizeAction, UserAction, UserKeys};
 
 fn main() -> ExitCode {
@@ -351,6 +353,7 @@ fn try_main() -> Result<ExitCode> {
                     close_window(&mut windows, window_id, elwt);
                 }
             }
+            Event::LoopExiting => save_windows_on_exit(&mut windows),
             _ => {}
         }
     })?;
