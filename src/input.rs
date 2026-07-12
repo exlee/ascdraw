@@ -183,6 +183,13 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
+    if !mode.accepts_text()
+        && modifiers.shift_key()
+        && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("r"))
+    {
+        return Some(EditCommand::ToggleReplaceMode);
+    }
+
     if matches!(key, Key::Named(NamedKey::Enter)) {
         return Some(if modifiers.shift_key() {
             EditCommand::ToggleReplaceMode
@@ -307,6 +314,11 @@ fn is_space_key(key: &Key) -> bool {
 
 fn direction_for_key(key: &Key) -> Option<Direction> {
     arrow_direction_for_key(key).or_else(|| match key {
+        Key::Character(text) if text.eq_ignore_ascii_case("ķ") => Some(Direction::Left),
+        Key::Character(text) if text.eq_ignore_ascii_case("∆") => Some(Direction::Down),
+        Key::Character(text) if text.eq_ignore_ascii_case("Ż") => Some(Direction::Up),
+        Key::Character(text) if text.eq_ignore_ascii_case("ł") => Some(Direction::Right),
+
         Key::Character(text) if text.eq_ignore_ascii_case("h") => Some(Direction::Left),
         Key::Character(text) if text.eq_ignore_ascii_case("j") => Some(Direction::Down),
         Key::Character(text) if text.eq_ignore_ascii_case("k") => Some(Direction::Up),
@@ -579,10 +591,7 @@ mod tests {
                 Some(EditCommand::Clear)
             );
         }
-        for mode in [
-            CursorMode::Text,
-            CursorMode::Insert,
-        ] {
+        for mode in [CursorMode::Text, CursorMode::Insert] {
             assert_eq!(
                 edit_command_for_key(
                     &Key::Named(NamedKey::Backspace),
@@ -980,10 +989,18 @@ mod tests {
     }
 
     #[test]
-    fn shift_return_toggles_replace_mode() {
+    fn entering_replace_mode() {
         assert_eq!(
             edit_command_for_key(
                 &Key::Named(NamedKey::Enter),
+                ModifiersState::SHIFT,
+                CursorMode::MoveDraw,
+            ),
+            Some(EditCommand::ToggleReplaceMode)
+        );
+        assert_eq!(
+            edit_command_for_key(
+                &Key::Character("r".into()),
                 ModifiersState::SHIFT,
                 CursorMode::MoveDraw,
             ),

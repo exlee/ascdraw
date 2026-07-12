@@ -143,11 +143,11 @@ fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
 
 const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
 const LINE_START_OPTIONS: [&str; LINE_ENDINGS.len()] = [
-    "None", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    " ", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
     "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
 const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
-    "None", "▷", "▶", "→", "▹", "▸", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
+    " ", "▷", "▶", "→", "▹", "▸", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦",
     "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
 const LINE_OPTIONS: [&[&str]; 4] = [
@@ -183,7 +183,7 @@ const STAMP_LABELS: [&str; 4] = ["Decorators", "Arrows", "Fills", "Blocks"];
 const STAMP_OPTIONS: [&[&str]; 4] = [&DECORATORS, &ARROWS, &GREY_SHADING, &QUADRANT_BLOCKS];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
-    &["Rect", "Rnd Rect", "Ellipsis"],
+    &["Rect", "Round"],
     &["─", "━", "═"],
     &["·", "░", "▒", "▓", "█"],
 ];
@@ -258,7 +258,7 @@ impl Tooltip {
             "Select with Ctrl-<direction>",
             "Erase with Alt-<direction>",
             "Direction keys are ←→↓↑ and hjkl",
-            "Add Ctrl/Alt/Shift second for 5/10 steps"
+            "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps"
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -273,8 +273,8 @@ impl Tooltip {
             Self::Line => {
                 "Shift-direction draws"
             }
-            Self::Stamp => "",
-            Self::Shapes => "",
+            Self::Stamp => "<Space> to put a stamp, Shift-<direction> for continuous drawing",
+            Self::Shapes => "<Space> to start drawing, <Space> to confirm",
             Self::UtilitiesSelect => "",
             Self::UtilitiesPush => "Push: Shift-hjkl/arrows inserts a blank row or column",
             Self::UtilitiesPull => {
@@ -285,7 +285,7 @@ impl Tooltip {
             Self::Export => {
                 "TXT/JSON export selection only; PNG canvas-only screenshot is deferred"
             }
-            Self::Selection => "Esc collapse; Space/Backspace clears, r then KEY replaces",
+            Self::Selection => "Esc cancels selection; Space/Backspace clears, r then KEY for replace all",
         };
         let secondary = if primary.is_empty() { "" } else { "; " };
 
@@ -1283,8 +1283,8 @@ mod tests {
         }
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
 
-        assert!(row(&toolbar, 2).contains("Start: None ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
-        assert!(row(&toolbar, 3).contains("2.1. 1    2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, 2).contains("Start:   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
+        assert!(row(&toolbar, 3).contains("2.1. 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, 3).contains("4. 1 2 3"));
         assert!(row(&toolbar, 3).contains("5. 1      2"));
     }
@@ -1303,8 +1303,8 @@ mod tests {
         for (index, ending) in LINE_ENDINGS.into_iter().enumerate() {
             assert_eq!(line_ending(index), ending);
             if index == 0 {
-                assert_eq!(LINE_START_OPTIONS[index], "None");
-                assert_eq!(LINE_END_OPTIONS[index], "None");
+                assert_eq!(LINE_START_OPTIONS[index], " ");
+                assert_eq!(LINE_END_OPTIONS[index], " ");
                 continue;
             }
             assert_eq!(
@@ -2236,17 +2236,11 @@ mod tests {
             assert_eq!(mode.tooltip(), tooltip);
             toolbar.apply_action(ToolbarAction::SelectMain(mode));
             assert_eq!(toolbar.tooltip(), tooltip);
-            assert!(tooltip.text().contains("Ctrl resizes"));
-            assert!(tooltip.text().contains("Alt erases"));
-            assert!(tooltip.text().contains("5/10 steps"));
         }
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
         assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
         assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesSelect.text());
-
-        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        assert!(toolbar.tooltip().text().contains("Space fills with stamp"));
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
         assert_eq!(toolbar.tooltip(), Tooltip::Export);

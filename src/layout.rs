@@ -402,9 +402,9 @@ mod tests {
     fn bottom_tooltip_reserves_its_row_and_gap_from_the_grid() {
         let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(400, 128, 18, 18);
         assert!(visible);
-        assert_eq!(tooltip_top, 382);
+        assert_eq!(tooltip_top, 382 - TOOLTIP_BOTTOM_PAD);
         assert_eq!(grid_bottom, tooltip_top - TOOLTIP_GRID_GAP);
-        assert_eq!(rows, 13);
+        assert_eq!(rows, 12);
         assert!(grid_top_and_rows_fit_before(128, rows, 18, grid_bottom));
     }
 
@@ -412,7 +412,7 @@ mod tests {
     fn short_viewport_geometry_saturates_and_hides_overlapping_tooltip() {
         let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(40, 128, 18, 18);
         assert!(!visible);
-        assert_eq!(tooltip_top, 22);
+        assert_eq!(tooltip_top, 7);
         assert_eq!(grid_bottom, 20);
         assert_eq!(rows, 1);
     }

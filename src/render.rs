@@ -1308,6 +1308,7 @@ pub fn resize_surface(
 mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::EditorState;
+    use crate::layout::TOOLTIP_BOTTOM_PAD;
     use crate::model::Direction;
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
@@ -1729,7 +1730,7 @@ mod tests {
         );
 
         assert!(layout.tooltip_visible);
-        assert_eq!(layout.tooltip_top, height - metrics.cell_height);
+        assert_eq!(layout.tooltip_top, height - metrics.cell_height - TOOLTIP_BOTTOM_PAD);
         let spans = crate::toolbar::tooltip_spans(state.tooltip(), 12);
         assert_eq!(UnicodeWidthStr::width(spans[0].contents.as_str()), 12);
         let atoms = toolbar_atoms(&spans, &state);
