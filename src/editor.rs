@@ -83,6 +83,9 @@ impl EditSnapshot {
 }
 
 impl EditorState {
+    pub fn has_shape_preview(&self) -> bool {
+        self.shape_preview.is_some()
+    }
     pub fn edit_snapshot(&self) -> EditSnapshot {
         EditSnapshot {
             lines: self.grid.lines.clone(),

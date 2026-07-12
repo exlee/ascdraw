@@ -516,6 +516,22 @@ fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
             state.toggle_replace_mode();
             false
         }
+        EditCommand::ConfirmOrTextEntry => {
+            if state.has_shape_preview() {
+                state.start_shape_or_confirm();
+            } else {
+                state.toggle_text_entry();
+            }
+            false
+        },
+        EditCommand::ConfirmOrReplace => {
+            if state.has_shape_preview() {
+                state.start_shape_or_confirm();
+            } else {
+                state.toggle_replace_mode();
+            }
+            false
+        },
         EditCommand::BeginSingleReplace => {
             state.begin_single_replace();
             false
