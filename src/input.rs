@@ -63,6 +63,7 @@ pub fn view_command(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardCommand {
     Copy,
+    Cut,
     Paste,
 }
 
@@ -181,6 +182,7 @@ pub fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<Clipboa
     }
     match key {
         Key::Character(text) if text.eq_ignore_ascii_case("c") => Some(ClipboardCommand::Copy),
+        Key::Character(text) if text.eq_ignore_ascii_case("x") => Some(ClipboardCommand::Cut),
         Key::Character(text) if text.eq_ignore_ascii_case("v") => Some(ClipboardCommand::Paste),
         _ => None,
     }
@@ -1220,6 +1222,14 @@ mod tests {
                 Some(ClipboardCommand::Copy)
             );
             assert_eq!(
+                clipboard_command(&Key::Character("x".into()), modifiers),
+                Some(ClipboardCommand::Cut)
+            );
+            assert_eq!(
+                clipboard_command(&Key::Character("X".into()), modifiers),
+                Some(ClipboardCommand::Cut)
+            );
+            assert_eq!(
                 clipboard_command(&Key::Character("v".into()), modifiers),
                 Some(ClipboardCommand::Paste)
             );
@@ -1232,6 +1242,13 @@ mod tests {
             clipboard_command(
                 &Key::Character("c".into()),
                 ModifiersState::CONTROL | ModifiersState::ALT
+            ),
+            None
+        );
+        assert_eq!(
+            clipboard_command(
+                &Key::Character("x".into()),
+                ModifiersState::SUPER | ModifiersState::ALT
             ),
             None
         );

@@ -400,6 +400,7 @@ fn handle_clipboard_shortcut(
 ) -> Option<Result<bool>> {
     Some(match clipboard_command(key, modifiers)? {
         ClipboardCommand::Copy => export::copy_selection(state, platform).map(|()| false),
+        ClipboardCommand::Cut => export::cut_selection(state, platform),
         ClipboardCommand::Paste => export::paste_selection(state, platform),
     })
 }
@@ -1080,6 +1081,62 @@ mod tests {
         assert_eq!(platform.text, "copy");
         assert_eq!(copy.grid.lines, before.grid.lines);
         assert_eq!(copy.selection, before.selection);
+    }
+
+    #[test]
+    fn cut_shortcuts_precede_every_mode_and_single_replace() {
+        let config = AppConfig::default();
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
+        ] {
+            for (key, modifiers) in [
+                (Key::Character("x".into()), ModifiersState::CONTROL),
+                (Key::Character("X".into()), ModifiersState::SUPER),
+            ] {
+                let mut state = EditorState::new(&config.theme, "test");
+                state.insert("cut");
+                state.move_to(Coord::default());
+                state.extend_selection(Direction::Right);
+                state.extend_selection(Direction::Right);
+                state.cursor_mode = mode;
+                let mut platform = ClipboardPlatform::default();
+
+                assert!(
+                    handle_clipboard_shortcut(&mut state, &key, modifiers, &mut platform)
+                        .unwrap()
+                        .unwrap(),
+                    "mode={mode:?}"
+                );
+                assert_eq!(platform.text, "cut", "mode={mode:?}");
+                assert_eq!(state.selected_text(), "   ", "mode={mode:?}");
+                assert_eq!(state.cursor_mode, mode, "mode={mode:?}");
+            }
+        }
+
+        let mut one_shot = EditorState::new(&config.theme, "test");
+        one_shot.insert("x");
+        one_shot.move_to(Coord::default());
+        assert!(one_shot.begin_single_replace());
+        let mut platform = ClipboardPlatform::default();
+        assert!(
+            handle_clipboard_shortcut(
+                &mut one_shot,
+                &Key::Character("x".into()),
+                ModifiersState::CONTROL,
+                &mut platform,
+            )
+            .unwrap()
+            .unwrap()
+        );
+        assert_eq!(platform.text, "x");
+        assert_eq!(one_shot.selected_text(), " ");
+        assert_eq!(one_shot.cursor_mode, CursorMode::Replace);
     }
 
     #[test]

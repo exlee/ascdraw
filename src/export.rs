@@ -93,6 +93,15 @@ pub fn copy_selection(state: &EditorState, platform: &mut impl ExportPlatform) -
     platform.set_clipboard_text(&state.selected_text())
 }
 
+/// Copies the normalized selection before clearing it. Keeping the clipboard
+/// write first makes a failed external operation an editor-state no-op.
+pub fn cut_selection(state: &mut EditorState, platform: &mut impl ExportPlatform) -> Result<bool> {
+    platform.set_clipboard_text(&state.selected_text())?;
+    let before = state.edit_snapshot();
+    state.clear_selection();
+    Ok(!before.same_document(&state.edit_snapshot()))
+}
+
 pub fn paste_selection(
     state: &mut EditorState,
     platform: &mut impl ExportPlatform,
@@ -445,6 +454,11 @@ fn blank_atom() -> Atom {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::{EditHistory, HistorySnapshot};
+
+    fn contents(line: &[Atom]) -> String {
+        line.iter().map(|atom| atom.contents.as_str()).collect()
+    }
     use crate::app::{CursorMode, ThemeConfig};
     use crate::model::Coord;
     use crate::toolbar::{MainMode, ToolbarAction};
@@ -534,6 +548,111 @@ mod tests {
         assert_eq!(state.grid.lines, before.grid.lines);
         assert_eq!(state.selection, before.selection);
         assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
+    }
+
+    #[test]
+    fn cut_copies_exact_ragged_rectangle_then_clears_only_that_rectangle() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("A│Z\nB\nC界Q");
+        state.move_to(Coord { line: 0, column: 1 });
+        state.extend_selection(crate::model::Direction::Right);
+        state.extend_selection(crate::model::Direction::Down);
+        state.extend_selection(crate::model::Direction::Down);
+        let mut platform = MockPlatform::default();
+
+        assert!(cut_selection(&mut state, &mut platform).unwrap());
+
+        assert_eq!(platform.clipboard.as_deref(), Some("│Z\n  \n界"));
+        assert_eq!(state.selected_text(), "  \n  \n  ");
+        assert_eq!(contents(&state.grid.lines[0]), "A   ");
+        assert_eq!(contents(&state.grid.lines[1]), "B   ");
+        assert_eq!(contents(&state.grid.lines[2]), "C  Q");
+        assert_eq!(state.selection.bounds().left, 1);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 2 });
+    }
+
+    #[test]
+    fn cut_failure_and_blank_cut_are_document_no_ops() {
+        let mut state = state_with_selection();
+        let before = state.clone();
+        let mut failure = MockPlatform {
+            fail_clipboard_write: true,
+            ..MockPlatform::default()
+        };
+        assert!(cut_selection(&mut state, &mut failure).is_err());
+        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.selection, before.selection);
+        assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
+
+        let mut blank = EditorState::new(&ThemeConfig::default(), "test");
+        blank.extend_selection(crate::model::Direction::Right);
+        blank.extend_selection(crate::model::Direction::Down);
+        let blank_before = blank.clone();
+        let mut platform = MockPlatform::default();
+        assert!(!cut_selection(&mut blank, &mut platform).unwrap());
+        assert_eq!(platform.clipboard.as_deref(), Some("  \n  "));
+        assert_eq!(blank.grid.lines, blank_before.grid.lines);
+        assert_eq!(blank.selection, blank_before.selection);
+    }
+
+    #[test]
+    fn cut_does_not_smart_break_neighboring_lines() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("│\n│\n│");
+        state.move_to(Coord { line: 1, column: 0 });
+        let outside_faces = [
+            state.grid.lines[0][0].face.clone(),
+            state.grid.lines[2][0].face.clone(),
+        ];
+        let mut platform = MockPlatform::default();
+
+        assert!(cut_selection(&mut state, &mut platform).unwrap());
+
+        assert_eq!(platform.clipboard.as_deref(), Some("│"));
+        assert_eq!(contents(&state.grid.lines[0]), "│");
+        assert_eq!(contents(&state.grid.lines[1]), " ");
+        assert_eq!(contents(&state.grid.lines[2]), "│");
+        assert_eq!(state.grid.lines[0][0].face, outside_faces[0]);
+        assert_eq!(state.grid.lines[2][0].face, outside_faces[1]);
+    }
+
+    #[test]
+    fn real_cut_is_one_undoable_edit_and_blank_cut_preserves_redo() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("wide\ntext");
+        state.move_to(Coord::default());
+        state.extend_selection(crate::model::Direction::Right);
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset { x: 3, y: -2 },
+        };
+        let mut platform = MockPlatform::default();
+        assert!(cut_selection(&mut state, &mut platform).unwrap());
+        let cut = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: before.viewport,
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before.clone(), &cut));
+        assert_eq!(history.undo(cut.clone()), Some(before.clone()));
+        assert_eq!(history.redo(before.clone()), Some(cut.clone()));
+
+        let restored = history.undo(cut.clone()).expect("real cut undo entry");
+        state.restore_edit_snapshot(restored.edit.clone());
+        state.move_to(Coord { line: 1, column: 4 });
+        let before_blank = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: restored.viewport,
+        };
+        let mut blank_platform = MockPlatform::default();
+        assert!(!cut_selection(&mut state, &mut blank_platform).unwrap());
+        assert_eq!(blank_platform.clipboard.as_deref(), Some(" "));
+        let after_blank = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: before_blank.viewport,
+        };
+        assert!(!history.record_change(before_blank, &after_blank));
+        assert_eq!(history.redo(after_blank), Some(cut));
     }
 
     #[test]
