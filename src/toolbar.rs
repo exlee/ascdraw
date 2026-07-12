@@ -100,6 +100,7 @@ pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
     let (contents, _) = clipped_to_width(tooltip.text().as_str(), width);
     vec![ToolbarSpan {
         contents,
+        bold_prefix: 0,
         selected: false,
         highlighted: false,
         tooltip: true,
@@ -122,6 +123,7 @@ fn push_clipped_spans(
         if used > 0 {
             target.push(ToolbarSpan {
                 contents,
+                bold_prefix: span.bold_prefix.min(used),
                 ..span.clone()
             });
             remaining -= used;
@@ -337,6 +339,7 @@ pub struct ToolbarState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolbarSpan {
     pub contents: String,
+    pub bold_prefix: usize,
     pub selected: bool,
     pub highlighted: bool,
     pub tooltip: bool,
@@ -617,9 +620,9 @@ impl ToolbarState {
 
     fn main_spans(&self, row: usize) -> Vec<ToolbarSpan> {
         let mut spans = if row == MAIN_LABEL_ROW {
-            vec![plain_span("Mode: ".to_string())]
+            vec![bold_prefix_span("Mode: ".to_string(), "Mode:")]
         } else {
-            let mut prefix = plain_span("1.".to_string());
+            let mut prefix = bold_span("1.".to_string());
             prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Mode);
             vec![prefix, plain_span("    ".to_string())]
         };
@@ -636,6 +639,7 @@ impl ToolbarState {
             };
             spans.push(ToolbarSpan {
                 contents,
+                bold_prefix: 0,
                 selected: row == MAIN_LABEL_ROW && *mode == self.main_mode && !self.export_open,
                 highlighted: false,
                 tooltip: false,
@@ -646,6 +650,7 @@ impl ToolbarState {
         if row == MAIN_LABEL_ROW {
             spans.push(ToolbarSpan {
                 contents: "0. Save/Load/Export".to_string(),
+                bold_prefix: UnicodeWidthStr::width("0."),
                 selected: self.export_open,
                 highlighted: false,
                 tooltip: false,
@@ -683,15 +688,14 @@ impl ToolbarState {
             };
             let cell_width = prefix_width + options_width;
             if label_row {
+                let label_contents = if flattened {
+                    (*label).to_string()
+                } else {
+                    format!("{label}:")
+                };
                 spans.push(ToolbarSpan {
-                    contents: pad_right_to_width(
-                        if flattened {
-                            (*label).to_string()
-                        } else {
-                            format!("{label}:")
-                        },
-                        prefix_width,
-                    ),
+                    bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
+                    contents: pad_right_to_width(label_contents, prefix_width),
                     selected: self.active_export_category == Some(category),
                     highlighted: false,
                     tooltip: false,
@@ -733,6 +737,7 @@ impl ToolbarState {
                     } else {
                         aligned_shortcut(position + 1, option)
                     },
+                    bold_prefix: 0,
                     selected: false,
                     highlighted: false,
                     tooltip: false,
@@ -769,10 +774,11 @@ impl ToolbarState {
             }
             if label_row {
                 if page == 0 {
-                    spans.push(plain_span(pad_right_to_width(
-                        format!("{}:", layout.labels[category]),
-                        prefix_width,
-                    )));
+                    let label = format!("{}:", layout.labels[category]);
+                    spans.push(bold_prefix_span(
+                        pad_right_to_width(label.clone(), prefix_width),
+                        &label,
+                    ));
                 } else {
                     spans.push(plain_span(" ".repeat(prefix_width)));
                 }
@@ -817,6 +823,7 @@ impl ToolbarState {
                     } else {
                         aligned_shortcut((position + 1) % 10, option)
                     },
+                    bold_prefix: 0,
                     selected: label_row
                         && option_index == layout.selected[category]
                         && layout
@@ -847,6 +854,7 @@ impl ToolbarState {
                 } else {
                     aligned_shortcut(option + 2, label)
                 },
+                bold_prefix: 0,
                 selected: label_row && option == self.utility_selected,
                 highlighted: false,
                 tooltip: false,
@@ -1013,11 +1021,27 @@ impl ToolbarState {
 fn plain_span(contents: String) -> ToolbarSpan {
     ToolbarSpan {
         contents,
+        bold_prefix: 0,
         selected: false,
         highlighted: false,
         tooltip: false,
         action: None,
         right_aligned: false,
+    }
+}
+
+fn bold_span(contents: String) -> ToolbarSpan {
+    let bold_prefix = UnicodeWidthStr::width(contents.as_str());
+    ToolbarSpan {
+        bold_prefix,
+        ..plain_span(contents)
+    }
+}
+
+fn bold_prefix_span(contents: String, prefix: &str) -> ToolbarSpan {
+    ToolbarSpan {
+        bold_prefix: UnicodeWidthStr::width(prefix),
+        ..plain_span(contents)
     }
 }
 
@@ -1053,16 +1077,16 @@ fn push_shortcut_path(
     }
 
     if let Some(highlighted) = highlighted_prefix.filter(|prefix| path.starts_with(prefix)) {
-        let mut span = plain_span(highlighted.to_string());
+        let mut span = bold_span(highlighted.to_string());
         span.highlighted = true;
         spans.push(span);
         if let Some(remainder) = path.strip_prefix(highlighted)
             && !remainder.is_empty()
         {
-            spans.push(plain_span(remainder.to_string()));
+            spans.push(bold_span(remainder.to_string()));
         }
     } else {
-        spans.push(plain_span(path.to_string()));
+        spans.push(bold_span(path.to_string()));
     }
     spans.push(plain_span(" ".to_string()));
 }
@@ -1212,6 +1236,105 @@ mod tests {
             .filter(|span| span.highlighted)
             .map(|span| span.contents.as_str())
             .collect()
+    }
+
+    fn bold_contents(spans: &[ToolbarSpan]) -> Vec<String> {
+        spans
+            .iter()
+            .filter(|span| span.bold_prefix > 0)
+            .map(|span| clipped_to_width(&span.contents, span.bold_prefix).0)
+            .collect()
+    }
+
+    #[test]
+    fn only_structural_labels_and_numeric_paths_are_bold() {
+        let mut toolbar = ToolbarState::default();
+        let main_labels = toolbar.toolbar_spans(MAIN_LABEL_ROW);
+        assert_eq!(bold_contents(&main_labels), ["Mode:", "0."]);
+        assert!(main_labels.iter().any(|span| {
+            span.contents.contains("Save/Load/Export")
+                && span.bold_prefix == UnicodeWidthStr::width("0.")
+        }));
+        assert_eq!(
+            bold_contents(&toolbar.toolbar_spans(MAIN_SHORTCUT_ROW)),
+            ["1."]
+        );
+
+        for (mode, expected_labels) in [
+            (MainMode::Line, LINE_LABELS.as_slice()),
+            (MainMode::Stamp, STAMP_LABELS.as_slice()),
+            (MainMode::Shapes, SHAPE_LABELS.as_slice()),
+        ] {
+            toolbar.apply_action(ToolbarAction::SelectMain(mode));
+            assert_eq!(
+                bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
+                expected_labels
+                    .iter()
+                    .map(|label| format!("{label}:"))
+                    .collect::<Vec<_>>()
+            );
+            let shortcut_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
+            assert!(bold_contents(&shortcut_spans).iter().all(|prefix| {
+                prefix.ends_with('.') && prefix.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+            }));
+            assert!(
+                shortcut_spans
+                    .iter()
+                    .filter(|span| span.action.is_some())
+                    .all(|span| { span.bold_prefix == 0 })
+            );
+        }
+
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        assert!(
+            toolbar
+                .toolbar_spans(MENU_FIRST_ROW)
+                .iter()
+                .chain(toolbar.toolbar_spans(MENU_FIRST_ROW + 1).iter())
+                .all(|span| span.bold_prefix == 0)
+        );
+    }
+
+    #[test]
+    fn export_categories_and_paths_are_bold_but_values_remain_normal() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+
+        assert_eq!(
+            bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
+            ["Clipboard:", "Save:", "Load:", "Clear"]
+        );
+        let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
+        assert_eq!(bold_contents(&shortcuts), ["2.", "3.", "4.", "5"]);
+        assert!(
+            shortcuts
+                .iter()
+                .filter(|span| span.action.is_some())
+                .all(|span| span.bold_prefix == 0)
+        );
+    }
+
+    #[test]
+    fn highlighted_and_clipped_prefixes_keep_bold_width_without_geometry_changes() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        assert!(toolbar.handle_shortcut(&Key::Character("3".into()), ModifiersState::empty(),));
+        let spans = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
+        let path_spans: Vec<_> = spans.iter().filter(|span| span.bold_prefix > 0).collect();
+        assert!(path_spans.iter().any(|span| span.highlighted));
+        assert!(
+            path_spans
+                .iter()
+                .all(|span| { span.bold_prefix == UnicodeWidthStr::width(span.contents.as_str()) })
+        );
+
+        for width in 1..=spans_width(&spans) {
+            let clipped = boxed_toolbar_spans(&spans, width);
+            assert_eq!(spans_width(&clipped), width);
+            assert!(clipped.iter().all(|span| {
+                span.bold_prefix <= UnicodeWidthStr::width(span.contents.as_str())
+            }));
+        }
     }
 
     fn selected_main_mode_count(toolbar: &ToolbarState) -> usize {

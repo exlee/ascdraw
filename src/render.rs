@@ -10,7 +10,7 @@ use skia_safe::{
 };
 use softbuffer::Surface;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::window::Window;
 
 use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
@@ -466,17 +466,54 @@ fn render_toolbar_span_contents(
 }
 
 fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &EditorState) -> Vec<Atom> {
-    spans
-        .iter()
-        .map(|span| Atom {
-            face: if span.tooltip {
-                state.theme.tooltip.clone()
-            } else {
-                Face::default()
-            },
-            contents: span.contents.clone(),
-        })
-        .collect()
+    let mut atoms = Vec::new();
+    for span in spans {
+        let split = display_width_byte_index(&span.contents, span.bold_prefix);
+        let (bold, normal) = span.contents.split_at(split);
+        if !bold.is_empty() {
+            let mut face = toolbar_span_face(span, state);
+            face.attributes.push("bold".to_string());
+            atoms.push(Atom {
+                face,
+                contents: bold.to_string(),
+            });
+        }
+        if !normal.is_empty() {
+            atoms.push(Atom {
+                face: toolbar_span_face(span, state),
+                contents: normal.to_string(),
+            });
+        }
+    }
+    atoms
+}
+
+fn toolbar_span_face(span: &crate::toolbar::ToolbarSpan, state: &EditorState) -> Face {
+    if span.tooltip {
+        state.theme.tooltip.clone()
+    } else {
+        Face::default()
+    }
+}
+
+fn display_width_byte_index(contents: &str, requested_width: usize) -> usize {
+    if requested_width == 0 {
+        return 0;
+    }
+    let mut width = 0;
+    let mut end = 0;
+    for (index, character) in contents.char_indices() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > requested_width {
+            break;
+        }
+        width += character_width;
+        end = index + character.len_utf8();
+        if width == requested_width {
+            break;
+        }
+    }
+    end
 }
 
 fn render_toolbar_span_outlines(
@@ -1716,6 +1753,63 @@ mod tests {
             state
                 .toolbar
                 .handle_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+    }
+
+    #[test]
+    fn structural_toolbar_atoms_resolve_bold_without_changing_theme_colors() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        let atoms = toolbar_atoms(&state.toolbar.toolbar_spans(0), &state);
+        let mode_label = atoms
+            .iter()
+            .find(|atom| atom.contents == "Mode:")
+            .expect("structural mode label atom");
+        let mode_value = atoms
+            .iter()
+            .find(|atom| atom.contents == "Stamp")
+            .expect("ordinary mode value atom");
+        let base = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+        let label = resolve_derived_face(
+            &state.grid.default_face,
+            &mode_label.face,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        let value = resolve_derived_face(
+            &state.grid.default_face,
+            &mode_value.face,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+
+        assert!(label.bold);
+        assert_eq!((label.fg, label.bg), (base.fg, base.bg));
+        assert_eq!(value.bold, base.bold);
+        assert_eq!((value.fg, value.bg), (base.fg, base.bg));
+
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        assert!(font_for_face(&metrics, &label).is_embolden());
+        assert_eq!(font_for_face(&metrics, &value).is_embolden(), base.bold);
+
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        let menu_atoms = toolbar_atoms(&state.toolbar.toolbar_spans(2), &state);
+        assert!(menu_atoms.iter().any(|atom| {
+            atom.contents == "Decorators:" && atom.face.attributes.iter().any(|attr| attr == "bold")
+        }));
+        assert!(
+            menu_atoms
+                .iter()
+                .filter(|atom| atom.contents == "◆")
+                .all(|atom| { !atom.face.attributes.iter().any(|attr| attr == "bold") })
         );
     }
 
