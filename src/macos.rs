@@ -263,7 +263,7 @@ fn send_command(command: AppCommand) {
     });
 }
 
-fn color_space_for_config(color_space: MacosColorSpace) -> Retained<NSColorSpace> {
+pub(crate) fn color_space_for_config(color_space: MacosColorSpace) -> Retained<NSColorSpace> {
     match color_space {
         MacosColorSpace::P3 => NSColorSpace::displayP3ColorSpace(),
         MacosColorSpace::Srgb => NSColorSpace::sRGBColorSpace(),

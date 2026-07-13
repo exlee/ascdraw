@@ -24,7 +24,11 @@ use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
 
 mod export_png;
+#[cfg(target_os = "macos")]
+mod metal;
+mod window_surface;
 pub use export_png::{CanvasImage, render_canvas_image};
+pub use window_surface::WindowSurface;
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
@@ -282,6 +286,9 @@ fn render_canvas_selection(
     metrics: &CellMetrics,
     grid_top: usize,
 ) {
+    if !canvas_selection_is_visible(state) {
+        return;
+    }
     let outline = canvas_selection_outline(
         state
             .move_lift_bounds()
@@ -332,6 +339,10 @@ fn render_canvas_selection(
         (outline.right, outline.bottom),
         &paint,
     );
+}
+
+fn canvas_selection_is_visible(state: &EditorState) -> bool {
+    state.move_lift_active() || !state.selection.is_collapsed()
 }
 
 fn render_marching_ants(
@@ -971,8 +982,10 @@ fn drawing_cursor_outline(
     CanvasSelectionOutline {
         left: (PADDING + column * metrics.cell_width) as f32 + DRAWING_CURSOR_INSET,
         top: top as f32 + DRAWING_CURSOR_INSET,
-        right: (PADDING + (column + 1) * metrics.cell_width) as f32 - DRAWING_CURSOR_INSET,
-        bottom: top as f32 + metrics.cell_height as f32 - DRAWING_CURSOR_INSET,
+        right: (PADDING + (column + 1) * metrics.cell_width).saturating_sub(1) as f32
+            - DRAWING_CURSOR_INSET,
+        bottom: top.saturating_add(metrics.cell_height).saturating_sub(1) as f32
+            - DRAWING_CURSOR_INSET,
     }
 }
 
@@ -1800,10 +1813,23 @@ mod tests {
         let cursor_top = row_top(2, &metrics, 50);
         let cursor = drawing_cursor_outline(2, cursor_top, &metrics);
 
-        assert!(cursor.left > PADDING as f32 + 2.0 * metrics.cell_width as f32);
-        assert!(cursor.right < selection.right);
-        assert!(cursor.bottom < selection.bottom);
-        assert!(cursor.top > row_top(2, &metrics, 50) as f32);
+        let cell_left = (PADDING + 2 * metrics.cell_width) as f32;
+        let cell_top = row_top(2, &metrics, 50) as f32;
+        assert_eq!(cursor.left - cell_left, DRAWING_CURSOR_INSET);
+        assert_eq!(cursor.top - cell_top, DRAWING_CURSOR_INSET);
+        assert_eq!(selection.right - cursor.right, DRAWING_CURSOR_INSET);
+        assert_eq!(selection.bottom - cursor.bottom, DRAWING_CURSOR_INSET);
+    }
+
+    #[test]
+    fn collapsed_selection_is_hidden_behind_the_grid_cursor() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        assert!(!canvas_selection_is_visible(&state));
+
+        state
+            .selection
+            .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
+        assert!(canvas_selection_is_visible(&state));
     }
 
     #[test]

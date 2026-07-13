@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
-use softbuffer::{Context as SoftContext, Surface};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::anyhow;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -24,7 +25,7 @@ use crate::layout::{
 use crate::macos;
 use crate::model::{Atom, Coord, Direction};
 use crate::perf::{FrameTiming, PerfDiagnostics};
-use crate::render::{Renderer, load_renderer, resize_surface};
+use crate::render::{Renderer, WindowSurface, load_renderer};
 use crate::title_policy::window_attributes;
 use crate::user_keys::FontSizeAction;
 
@@ -34,7 +35,7 @@ const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 
 pub struct EditorWindow {
     pub window: Rc<Window>,
-    pub surface: Surface<Rc<Window>, Rc<Window>>,
+    pub surface: WindowSurface,
     pub modifiers: ModifiersState,
     pub ordered_modifiers: OrderedModifierTracker,
     pub mouse_cell: Option<Coord>,
@@ -98,6 +99,9 @@ impl EditorWindow {
         #[cfg(target_os = "macos")]
         if let Err(error) = macos::apply_window_color_space(self.window.as_ref(), &config.macos) {
             log_error(format!("macOS color space setup failed: {error:#}"));
+        }
+        if let Err(error) = self.surface.apply_config(config) {
+            log_error(format!("renderer configuration failed: {error:#}"));
         }
         self.request_redraw();
     }
@@ -663,10 +667,7 @@ pub fn create_editor_window(
     document_path: &Path,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
-    let context = SoftContext::new(window.clone()).map_err(|error| anyhow!(error.to_string()))?;
-    let mut surface =
-        Surface::new(&context, window.clone()).map_err(|error| anyhow!(error.to_string()))?;
-    resize_surface(&mut surface, window.inner_size())?;
+    let surface = WindowSurface::new(&window, config)?;
 
     #[cfg(target_os = "macos")]
     {

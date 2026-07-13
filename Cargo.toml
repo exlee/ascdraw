@@ -28,5 +28,9 @@ winit = "=0.30.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSColorSpace", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow", "std"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSColorSpace", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow", "objc2-core-graphics", "objc2-quartz-core", "std"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSArray", "NSData", "NSString", "std"] }
+objc2-metal = { version = "=0.3.2", default-features = false, features = ["MTLCommandBuffer", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLPixelFormat", "MTLTexture"] }
+objc2-quartz-core = { version = "=0.3.2", default-features = false, features = ["CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal", "std"] }
+skia-safe = { version = "=0.97.2", features = ["metal", "textlayout"] }

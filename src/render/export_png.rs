@@ -127,7 +127,7 @@ fn display_width(line: &[Atom]) -> usize {
         .sum()
 }
 
-fn skia_color_space(color_space: MacosColorSpace) -> Result<ColorSpace> {
+pub(super) fn skia_color_space(color_space: MacosColorSpace) -> Result<ColorSpace> {
     match color_space {
         MacosColorSpace::Srgb => Ok(ColorSpace::new_srgb()),
         MacosColorSpace::P3 => ColorSpace::new_cicp(

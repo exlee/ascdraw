@@ -44,7 +44,6 @@ use input::{
     history_command, line_preview_command, move_selection_command, ordered_direction_command,
     pointer_position_to_coord, pointer_position_to_toolbar_position, view_command,
 };
-use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 #[cfg(test)]
 use runtime::input_dispatch::history_group_for_key;
@@ -172,7 +171,7 @@ fn try_main() -> Result<ExitCode> {
                     match event {
                         WindowEvent::CloseRequested => should_close = true,
                         WindowEvent::Resized(size) => {
-                            if let Err(error) = resize_surface(&mut editor.surface, size) {
+                            if let Err(error) = editor.surface.resize(&editor.window, size) {
                                 log_error(format!("surface resize failed: {error:#}"));
                                 should_close = true;
                             }
@@ -180,9 +179,8 @@ fn try_main() -> Result<ExitCode> {
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
-                            match render(
+                            match editor.surface.render(
                                 &editor.window,
-                                &mut editor.surface,
                                 &editor.state,
                                 &editor.renderer,
                                 &config,
@@ -460,6 +458,13 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::ScaleFactorChanged { .. } => {
+                            if let Err(error) = editor
+                                .surface
+                                .resize(&editor.window, editor.window.inner_size())
+                            {
+                                log_error(format!("surface scale update failed: {error:#}"));
+                                should_close = true;
+                            }
                             editor.ensure_cursor_in_viewport();
                             editor.request_redraw();
                         }
