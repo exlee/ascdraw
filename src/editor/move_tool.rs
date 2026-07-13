@@ -27,8 +27,21 @@ impl EditorState {
     pub fn begin_move_lift(&mut self) -> bool {
         if self.cursor_mode != CursorMode::Utilities
             || self.toolbar.utility_kind() != UtilityKind::Move
-            || self.move_lift.is_some()
         {
+            return false;
+        }
+        self.begin_move_lift_inner()
+    }
+
+    pub fn begin_selected_move_lift(&mut self) -> bool {
+        if self.selection.is_collapsed() {
+            return false;
+        }
+        self.begin_move_lift_inner()
+    }
+
+    fn begin_move_lift_inner(&mut self) -> bool {
+        if self.move_lift.is_some() {
             return false;
         }
         self.end_stroke();

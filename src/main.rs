@@ -563,11 +563,17 @@ fn handle_editor_key_with_order(
         state.cursor_mode,
         state.toolbar.utility_kind(),
         state.move_lift_active(),
+        !state.selection.is_collapsed(),
     ) {
         state.toolbar.cancel_shortcut();
         return Some(match command {
             input::MoveSelectionCommand::Begin => {
                 state.begin_move_lift();
+                false
+            }
+            input::MoveSelectionCommand::BeginAndStep(direction) => {
+                state.begin_selected_move_lift();
+                state.move_lift(direction);
                 false
             }
             input::MoveSelectionCommand::Step(direction) => {
@@ -584,6 +590,7 @@ fn handle_editor_key_with_order(
     if let Some(command) =
         ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
     {
+        state.cancel_move_lift();
         state.toolbar.cancel_shortcut();
         let mut document_changed = false;
         for _ in 0..command.steps {
@@ -597,6 +604,7 @@ fn handle_editor_key_with_order(
     if let Some(command @ (EditCommand::ExtendSelection(_) | EditCommand::Erase(_))) =
         edit_command(key, repeat, modifiers, state.cursor_mode)
     {
+        state.cancel_move_lift();
         state.toolbar.cancel_shortcut();
         return Some(apply_edit_command(state, command));
     }
@@ -604,6 +612,7 @@ fn handle_editor_key_with_order(
         return Some(false);
     }
     if let Some(command) = edit_command(key, repeat, modifiers, state.cursor_mode) {
+        state.cancel_move_lift();
         return Some(apply_edit_command(state, command));
     }
     if !modifiers.control_key()
@@ -613,6 +622,7 @@ fn handle_editor_key_with_order(
         && let Some(text) = text
         && !text.chars().all(char::is_control)
     {
+        state.cancel_move_lift();
         state.write_text(text);
         return Some(true);
     }
@@ -1070,6 +1080,75 @@ mod tests {
             Some(false)
         );
         assert_eq!(state.cursor_mode, app::CursorMode::Replace);
+    }
+
+    #[test]
+    fn alt_direction_lifts_an_expanded_selection_in_every_mode() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+        ] {
+            let mut state = EditorState::new(&AppConfig::default().theme, "test");
+            state.insert("abcd");
+            state.move_home();
+            state.extend_selection(Direction::Right);
+            state.cursor_mode = mode;
+            let unchanged = state.grid.lines.clone();
+
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::ALT,
+                ),
+                Some(false),
+                "mode={mode:?}"
+            );
+            assert!(state.move_lift_active(), "mode={mode:?}");
+            assert_eq!(state.selection_bounds().left, 1, "mode={mode:?}");
+            assert_eq!(state.grid.lines, unchanged, "mode={mode:?}");
+
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::ALT,
+                ),
+                Some(false),
+                "mode={mode:?}"
+            );
+            assert_eq!(state.selection_bounds().left, 2, "mode={mode:?}");
+        }
+    }
+
+    #[test]
+    fn changing_selection_ends_an_active_lift() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert("abcd");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Right));
+
+        state.extend_selection(Direction::Right);
+        assert!(!state.move_lift_active());
+        assert_eq!(state.selection_bounds().left, 0);
+        assert_eq!(state.selection_bounds().right, 2);
+
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        state.move_to(model::Coord::default());
+        assert!(!state.move_lift_active());
+        assert!(state.selection.is_collapsed());
     }
 
     #[test]

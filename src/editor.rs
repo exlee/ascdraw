@@ -495,6 +495,7 @@ impl EditorState {
     }
 
     pub fn extend_selection(&mut self, direction: Direction) -> bool {
+        self.cancel_move_lift();
         let prepended = self.prepare_adjacent(direction);
         let to = adjacent_coord(self.grid.cursor_pos, direction)
             .expect("canvas edge was structurally extended");
@@ -509,6 +510,7 @@ impl EditorState {
     /// lose only that edge; every other non-blank atom is replaced by
     /// display-width-preserving blank cells.
     pub fn erase(&mut self, direction: Direction) -> bool {
+        self.cancel_move_lift();
         self.prepare_adjacent(direction);
         self.end_stroke();
         self.shape_preview = None;
@@ -1001,6 +1003,7 @@ impl EditorState {
     }
 
     fn collapse_selection(&mut self) {
+        self.cancel_move_lift();
         self.selection.collapse(self.grid.cursor_pos);
     }
 

@@ -42,6 +42,7 @@ pub enum ViewCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveSelectionCommand {
     Begin,
+    BeginAndStep(Direction),
     Step(Direction),
     Confirm,
     Cancel,
@@ -55,10 +56,8 @@ pub fn move_selection_command(
     mode: CursorMode,
     utility: UtilityKind,
     active: bool,
+    selection_expanded: bool,
 ) -> Option<MoveSelectionCommand> {
-    if mode != CursorMode::Utilities || utility != UtilityKind::Move {
-        return None;
-    }
     if active {
         if matches!(key, Key::Named(NamedKey::Escape))
             || (modifiers == ModifiersState::CONTROL
@@ -66,13 +65,19 @@ pub fn move_selection_command(
         {
             return Some(MoveSelectionCommand::Cancel);
         }
-        if modifiers != ModifiersState::empty() {
-            return None;
-        }
         if is_space_key(key) || matches!(key, Key::Named(NamedKey::Enter)) {
-            return Some(MoveSelectionCommand::Confirm);
+            return (modifiers == ModifiersState::empty()).then_some(MoveSelectionCommand::Confirm);
         }
-        return direction_for_key(key).map(MoveSelectionCommand::Step);
+        return (modifiers == ModifiersState::empty() || modifiers == ModifiersState::ALT)
+            .then(|| direction_for_key(key))
+            .flatten()
+            .map(MoveSelectionCommand::Step);
+    }
+    if selection_expanded && modifiers == ModifiersState::ALT {
+        return direction_for_key(key).map(MoveSelectionCommand::BeginAndStep);
+    }
+    if mode != CursorMode::Utilities || utility != UtilityKind::Move {
+        return None;
     }
     (modifiers == ModifiersState::empty() && is_space_key(key))
         .then_some(MoveSelectionCommand::Begin)
@@ -1210,6 +1215,7 @@ mod tests {
                 mode,
                 utility,
                 false,
+                false,
             ),
             Some(MoveSelectionCommand::Begin)
         );
@@ -1220,12 +1226,13 @@ mod tests {
                 mode,
                 utility,
                 true,
+                false,
             ),
             Some(MoveSelectionCommand::Step(Direction::Right))
         );
         for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::Enter)] {
             assert_eq!(
-                move_selection_command(&key, ModifiersState::empty(), mode, utility, true),
+                move_selection_command(&key, ModifiersState::empty(), mode, utility, true, false),
                 Some(MoveSelectionCommand::Confirm)
             );
         }
@@ -1234,7 +1241,7 @@ mod tests {
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             assert_eq!(
-                move_selection_command(&key, modifiers, mode, utility, true),
+                move_selection_command(&key, modifiers, mode, utility, true, false),
                 Some(MoveSelectionCommand::Cancel)
             );
         }
@@ -1245,6 +1252,7 @@ mod tests {
                 mode,
                 utility,
                 true,
+                false,
             ),
             None,
             "Ctrl-C remains available to the global clipboard route"
@@ -1256,6 +1264,7 @@ mod tests {
                 mode,
                 utility,
                 false,
+                false,
             ),
             None,
             "Enter keeps its existing meaning until a lift is active"
@@ -1266,6 +1275,56 @@ mod tests {
                 ModifiersState::empty(),
                 mode,
                 UtilityKind::View,
+                false,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn alt_direction_starts_and_continues_selection_move_in_every_mode() {
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Text,
+            CursorMode::Replace,
+        ] {
+            assert_eq!(
+                move_selection_command(
+                    &Key::Named(NamedKey::ArrowDown),
+                    ModifiersState::ALT,
+                    mode,
+                    UtilityKind::View,
+                    false,
+                    true,
+                ),
+                Some(MoveSelectionCommand::BeginAndStep(Direction::Down)),
+                "mode={mode:?}"
+            );
+            assert_eq!(
+                move_selection_command(
+                    &Key::Named(NamedKey::ArrowDown),
+                    ModifiersState::ALT,
+                    mode,
+                    UtilityKind::View,
+                    true,
+                    true,
+                ),
+                Some(MoveSelectionCommand::Step(Direction::Down)),
+                "mode={mode:?}"
+            );
+        }
+
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::ArrowDown),
+                ModifiersState::ALT,
+                CursorMode::Stamp,
+                UtilityKind::View,
+                false,
                 false,
             ),
             None
