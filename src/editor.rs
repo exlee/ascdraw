@@ -168,7 +168,11 @@ impl EditorState {
             return Tooltip::Export;
         }
         if self.move_lift.is_some() {
-            return Tooltip::MoveLift;
+            return if self.move_lift_plain_direction_confirms() {
+                Tooltip::SelectionMoveLift
+            } else {
+                Tooltip::MoveLift
+            };
         }
         if self.shape_preview.is_some() {
             return Tooltip::ShapePreview;
@@ -2420,8 +2424,19 @@ mod tests {
         );
 
         assert!(state.begin_selected_move_lift());
+        assert_eq!(state.tooltip(), Tooltip::SelectionMoveLift);
+        assert!(
+            state
+                .tooltip()
+                .text()
+                .contains("direction confirms and moves")
+        );
+        assert!(state.cancel_move_lift());
+
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        assert!(state.begin_move_lift());
         assert_eq!(state.tooltip(), Tooltip::MoveLift);
-        assert!(state.tooltip().text().contains("Space/Enter confirms"));
+        assert!(state.tooltip().text().contains("directions reposition"));
         assert!(state.cancel_move_lift());
 
         state.move_to(Coord::default());

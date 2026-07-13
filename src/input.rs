@@ -44,6 +44,7 @@ pub enum MoveSelectionCommand {
     Begin,
     BeginAndStep(Direction),
     Step(Direction),
+    ConfirmAndMove(Direction),
     Confirm,
     Cancel,
 }
@@ -56,6 +57,7 @@ pub fn move_selection_command(
     mode: CursorMode,
     utility: UtilityKind,
     active: bool,
+    plain_direction_confirms: bool,
     selection_expanded: bool,
 ) -> Option<MoveSelectionCommand> {
     if active {
@@ -68,10 +70,17 @@ pub fn move_selection_command(
         if is_space_key(key) || matches!(key, Key::Named(NamedKey::Enter)) {
             return (modifiers == ModifiersState::empty()).then_some(MoveSelectionCommand::Confirm);
         }
-        return (modifiers == ModifiersState::empty() || modifiers == ModifiersState::ALT)
-            .then(|| direction_for_key(key))
-            .flatten()
-            .map(MoveSelectionCommand::Step);
+        let direction = direction_for_key(key)?;
+        return match modifiers {
+            _ if modifiers == ModifiersState::ALT => Some(MoveSelectionCommand::Step(direction)),
+            _ if modifiers == ModifiersState::empty() && plain_direction_confirms => {
+                Some(MoveSelectionCommand::ConfirmAndMove(direction))
+            }
+            _ if modifiers == ModifiersState::empty() => {
+                Some(MoveSelectionCommand::Step(direction))
+            }
+            _ => None,
+        };
     }
     if selection_expanded && modifiers == ModifiersState::ALT {
         return direction_for_key(key).map(MoveSelectionCommand::BeginAndStep);
@@ -1220,6 +1229,7 @@ mod tests {
                 utility,
                 false,
                 false,
+                false,
             ),
             Some(MoveSelectionCommand::Begin)
         );
@@ -1231,12 +1241,21 @@ mod tests {
                 utility,
                 true,
                 false,
+                false,
             ),
             Some(MoveSelectionCommand::Step(Direction::Right))
         );
         for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::Enter)] {
             assert_eq!(
-                move_selection_command(&key, ModifiersState::empty(), mode, utility, true, false),
+                move_selection_command(
+                    &key,
+                    ModifiersState::empty(),
+                    mode,
+                    utility,
+                    true,
+                    false,
+                    false,
+                ),
                 Some(MoveSelectionCommand::Confirm)
             );
         }
@@ -1245,7 +1264,7 @@ mod tests {
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             assert_eq!(
-                move_selection_command(&key, modifiers, mode, utility, true, false),
+                move_selection_command(&key, modifiers, mode, utility, true, false, false),
                 Some(MoveSelectionCommand::Cancel)
             );
         }
@@ -1256,6 +1275,7 @@ mod tests {
                 mode,
                 utility,
                 true,
+                false,
                 false,
             ),
             None,
@@ -1269,6 +1289,7 @@ mod tests {
                 utility,
                 false,
                 false,
+                false,
             ),
             None,
             "Enter keeps its existing meaning until a lift is active"
@@ -1279,6 +1300,7 @@ mod tests {
                 ModifiersState::empty(),
                 mode,
                 UtilityKind::View,
+                false,
                 false,
                 false,
             ),
@@ -1303,6 +1325,7 @@ mod tests {
                     mode,
                     UtilityKind::View,
                     false,
+                    false,
                     true,
                 ),
                 Some(MoveSelectionCommand::BeginAndStep(Direction::Down)),
@@ -1314,6 +1337,7 @@ mod tests {
                     ModifiersState::ALT,
                     mode,
                     UtilityKind::View,
+                    true,
                     true,
                     true,
                 ),
@@ -1330,8 +1354,22 @@ mod tests {
                 UtilityKind::View,
                 false,
                 false,
+                false,
             ),
             None
+        );
+
+        assert_eq!(
+            move_selection_command(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::empty(),
+                CursorMode::Stamp,
+                UtilityKind::View,
+                true,
+                true,
+                true,
+            ),
+            Some(MoveSelectionCommand::ConfirmAndMove(Direction::Right))
         );
     }
 

@@ -565,6 +565,7 @@ fn handle_editor_key_with_order(
         state.cursor_mode,
         state.toolbar.utility_kind(),
         state.move_lift_active(),
+        state.move_lift_plain_direction_confirms(),
         !state.selection.is_collapsed(),
     ) {
         state.toolbar.cancel_shortcut();
@@ -581,6 +582,10 @@ fn handle_editor_key_with_order(
             input::MoveSelectionCommand::Step(direction) => {
                 state.move_lift(direction);
                 false
+            }
+            input::MoveSelectionCommand::ConfirmAndMove(direction) => {
+                let changed = state.confirm_move_lift();
+                changed | state.move_cursor(direction)
             }
             input::MoveSelectionCommand::Confirm => state.confirm_move_lift(),
             input::MoveSelectionCommand::Cancel => {
@@ -1059,6 +1064,8 @@ mod tests {
             false,
             ModifiersState::empty(),
         );
+        assert!(state.move_lift_active());
+        assert!(!state.selection.is_collapsed());
         assert_eq!(
             handle_editor_key(
                 &mut state,
@@ -1129,6 +1136,22 @@ mod tests {
                 "mode={mode:?}"
             );
             assert_eq!(state.selection_bounds().left, 2, "mode={mode:?}");
+
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowLeft),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(true),
+                "mode={mode:?}"
+            );
+            assert!(!state.move_lift_active(), "mode={mode:?}");
+            assert!(state.selection.is_collapsed(), "mode={mode:?}");
+            assert_eq!(state.grid.cursor_pos.column, 2, "mode={mode:?}");
+            assert_eq!(line_contents(&state.grid.lines[0]), "  ab", "mode={mode:?}");
         }
     }
 

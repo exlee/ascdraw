@@ -17,6 +17,7 @@ pub(super) struct MoveLift {
     origin: Coord,
     rectangle: TextRectangle,
     markers: Vec<PlacedLineMarker>,
+    plain_direction_confirms: bool,
 }
 
 impl EditorState {
@@ -30,17 +31,17 @@ impl EditorState {
         {
             return false;
         }
-        self.begin_move_lift_inner()
+        self.begin_move_lift_inner(false)
     }
 
     pub fn begin_selected_move_lift(&mut self) -> bool {
         if self.selection.is_collapsed() {
             return false;
         }
-        self.begin_move_lift_inner()
+        self.begin_move_lift_inner(true)
     }
 
-    fn begin_move_lift_inner(&mut self) -> bool {
+    fn begin_move_lift_inner(&mut self, plain_direction_confirms: bool) -> bool {
         if self.move_lift.is_some() {
             return false;
         }
@@ -75,8 +76,15 @@ impl EditorState {
             },
             rectangle,
             markers,
+            plain_direction_confirms,
         });
         true
+    }
+
+    pub fn move_lift_plain_direction_confirms(&self) -> bool {
+        self.move_lift
+            .as_ref()
+            .is_some_and(|lift| lift.plain_direction_confirms)
     }
 
     pub fn move_lift(&mut self, direction: Direction) -> bool {

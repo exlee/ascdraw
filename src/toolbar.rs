@@ -255,6 +255,7 @@ pub enum Tooltip {
     UtilitiesView,
     UtilitiesMove,
     MoveLift,
+    SelectionMoveLift,
     ShapePreview,
     SingleReplace,
     LineStroke,
@@ -298,8 +299,9 @@ impl Tooltip {
             Self::UtilitiesMove => {
                 "Move: Space lifts the current cell; Alt-direction erases; Ctrl-direction selects"
             }
-            Self::MoveLift => {
-                "Move: directions or Alt-direction move; Space/Enter confirms; Esc cancels"
+            Self::MoveLift => "Move: directions reposition; Space/Enter confirms; Esc cancels",
+            Self::SelectionMoveLift => {
+                "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms; Esc cancels"
             }
             Self::ShapePreview => "Shape preview: directions resize; Space confirms; Esc cancels",
             Self::SingleReplace => "Replace selection: type one character; Esc cancels",
@@ -316,6 +318,7 @@ impl Tooltip {
         if matches!(
             self,
             Self::MoveLift
+                | Self::SelectionMoveLift
                 | Self::ShapePreview
                 | Self::SingleReplace
                 | Self::LineStroke
