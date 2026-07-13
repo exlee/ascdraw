@@ -1,82 +1,201 @@
 # ascdraw
 
-ascdraw is a native editor for drawing diagrams with Unicode text and line characters. It is inspired by Monodraw and Emacs Uniline and is currently under active development.
+<p align="center">
+  <img src="assets/ascdraw.png" alt="ascdraw app icon" width="160">
+</p>
+
+<p align="center">
+  <strong>Native, keyboard-first diagramming for people who think in text.</strong>
+</p>
+
+ascdraw turns an effectively infinite text canvas into a fast diagram editor. Draw connected
+Unicode lines, place symbols, build shapes, edit text, move rectangular regions, and export the
+result without leaving the keyboard.
+
+![A workflow diagram open in ascdraw](assets/ascdraw-line-clean.jpg)
+
+ascdraw is currently at **0.1.0**. The core editor is ready to use, while interfaces and the native
+document format should still be considered evolving.
+
+## Why ascdraw?
+
+- **Connected lines, not loose characters.** Strokes automatically become corners, tees, and
+  crossings, with optional start and end markers.
+- **Keyboard speed with visual feedback.** Arrow keys and `h` `j` `k` `l` drive every core editing
+  operation; the toolbar doubles as a discoverable key map.
+- **Text-native output.** Copy or save a diagram as TXT, export a crisp PNG, or preserve the full
+  project as JSON.
+- **Rectangular editing.** Select, clear, replace, copy, cut, paste, lift, and move regions without
+  losing their layout.
+- **Unicode-aware.** The grid is grapheme-aware and keeps wide characters intact.
+- **A real desktop app.** Native windows, file dialogs, clipboard integration, multiple windows,
+  autosave, live configuration reloads, and native macOS menus are built in.
+
+![A rectangular diagram selection in ascdraw](assets/ascdraw-selection.jpg)
+
+## Build and run
+
+The Rust toolchain for this repository is managed by
+[mise](https://mise.jdx.dev/). Build the release binary with:
+
+```sh
+mise exec -- cargo build --release --locked
+./target/release/ascdraw
+```
+
+Or install it locally from the checkout:
+
+```sh
+mise exec -- cargo install --path . --locked
+```
+
+Pass a native ascdraw document when you want a separate document instead of the normal autosave:
+
+```sh
+./target/release/ascdraw ./drawing.toml
+```
+
+Run `ascdraw --show-config` to print the merged configuration and every checked config path.
 
 ## Quick start
 
-The editor opens in **Line** mode.
+ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equivalent: `h`, `j`,
+`k`, or `l`.
 
-| Action | Keys |
+| Action | Key |
 | --- | --- |
-| Move the cursor | Arrow keys or `h` `j` `k` `l` |
-| Draw/apply the active tool | Shift + direction (add Ctrl for 5 steps, Alt for 10) |
-| Resize the canvas selection | Ctrl + direction (add Alt for 5 steps, Shift for 10) |
-| Erase | Alt + direction (add Ctrl for 5 steps, Shift for 10) |
-| Collapse the selection to 1x1 | Escape |
-| Clear the selected rectangle | Backspace |
-| Preview an orthogonal line | Space in Line mode |
-| Replace the selected rectangle | `r`, then a character |
-| Enter or leave text entry | Return |
-| Choose a tool directly | `1`, then its displayed number |
-| Choose an option directly | Its displayed three-digit path |
+| Move the cursor | direction |
+| Draw or apply the active Line/Stamp/Utils operation | Shift + direction |
+| Place the active stamp | Space |
+| Grow the rectangular selection | Ctrl + direction |
+| Erase while moving | Alt + direction |
+| Collapse the selection to one cell | Escape |
+| Clear selected cells | Backspace |
+| Replace selected cells once | `r`, then one grapheme |
+| Enter or leave Text mode | `i` or Shift + Return |
+| Enter or leave continuous Replace mode | Return or Shift + `R` |
+| Copy / cut / paste | Ctrl/Cmd + `C` / `X` / `V` |
+| Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
 | Open Save/Load/Export | `0` |
 
-Lines connect automatically into corners, tees, and crossings. Starting a stroke on an existing line extends that connection; starting on an endpoint marker moves the marker to the new endpoint.
+The first key of a toolbar path selects its group. Press `1`, then a mode number:
 
-## Toolbar
+| Path | Mode |
+| --- | --- |
+| `1 1` | Stamp |
+| `1 2` | Line |
+| `1 3` | Shape |
+| `1 4` | Utils |
 
-The first two rows select a tool directly: press `1`, then the number under **Line**, **Stamp**, **Shape**, or **Utils**. A blank row separates the mode selector from its submenu. Hierarchical option rows show paths such as `2.1.3`: press the category number, page number, and option number in sequence. Direct submenus keep each label and shortcut together, as in `Move: 2  Push: 3  Pull: 4  View: 5`. On each page, `1` through `9` select the first nine options and `0` selects the tenth.
+The toolbar displays every remaining path. Short groups use `group option`; long groups add a page,
+as in `2 1 3`. On a page, `1` through `9` choose the first nine entries and `0` chooses the tenth.
+Pending prefixes are highlighted, and Escape cancels an unfinished path.
+
+### Faster movement and editing
+
+The first held modifier chooses an operation. The second chooses how far it travels:
+
+| First modifier | Operation | Add for 5 cells | Add for 10 cells |
+| --- | --- | --- | --- |
+| Shift | Draw or apply the active tool | Ctrl | Alt |
+| Alt | Erase | Ctrl | Shift |
+| Ctrl | Grow the selection | Alt | Shift |
+
+## Drawing modes
+
+### Stamp
+
+Space fills the current selection with the active stamp. Shift + direction stamps continuously
+while moving. The bundled inventory includes decorators, directional arrows, grey fills, and
+quadrant blocks.
 
 ### Line
 
-Line mode is fully usable. Its options control:
+Shift + direction draws connected lines immediately. Starting on an existing segment extends the
+connection; corners, tees, and crossings update automatically.
 
-- **Line Start** — none, six rotatable arrow styles, or any decorator
-- **Line End** — none, six rotatable arrow styles, or any decorator
-- **Line Width** — thin, heavy, or double; **Corner** is shown only for thin lines
+Space starts an orthogonal preview. Move to size the current segment, then:
 
-Press Space to start an orthogonal line preview. Move horizontally or vertically to set the current segment, then press Space to anchor it without changing the document. Press Space again without moving to commit the complete line. Backspace removes the most recently anchored segment, and Escape cancels the preview. Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw directly. Move without Shift to navigate when no preview is active.
+- press Space to anchor another segment;
+- press Space again without moving to commit;
+- press Backspace to remove the latest anchor;
+- press Escape to cancel.
 
-### Text entry
+Line options control the start marker, end marker, width (thin, heavy, or double), and thin-line
+corner style.
 
-Text entry is independent of the selected toolbar tool. Press Return to enter it and Return again to return to the selected tool. Type to insert text; the arrow keys or `h` `j` `k` `l` move freely over the canvas. Delete edits text, Backspace clears the selected rectangle, and Tab inserts four spaces.
+### Shape
 
-### Selection, Stamp, Shape, and Utils
+Space starts a live shape preview. Move to size it and press Space again to place it. Shapes can be
+rectangular or rounded, use thin, heavy, or double outlines, and have empty, shaded, or solid fills.
 
-Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. With a collapsed selection, Alt + a direction moves while erasing the traversed canvas content. With an expanded selection in any mode, Alt + a direction lifts and moves the selected rectangle; keep using Alt + directions to reposition it, or use a plain direction to confirm, collapse the selection, and move the cursor. Space or Enter also confirms, and Escape cancels. Expanding or collapsing the selection ends the lift. The first held modifier selects the operation; a second modifier selects 5 or 10 stepwise cells: Shift then Ctrl is 5 and Shift then Alt is 10, Alt then Ctrl is 5 and Alt then Shift is 10, Ctrl then Alt is 5 and Ctrl then Shift is 10. With all three held, the first modifier remains the operation and the next modifier pressed selects the step size. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
+### Utils
 
-Ctrl/Cmd-C copies the exact selected rectangle, Ctrl/Cmd-X copies and clears it, and Ctrl/Cmd-V pastes clipboard text as a rectangular overwrite at the selection's top-left corner.
-Ctrl/Cmd-Z undoes and Ctrl/Cmd-R redoes document edits independently in each window.
+Utils keeps its operations on direct keys:
 
-Stamp symbols follow Uniline's active standalone inventory: decorators, six directional-arrow styles, grey fills, and quadrant blocks. Connected box-drawing lines are generated by Line mode rather than duplicated as stamps.
+| Key | Tool | Behavior |
+| --- | --- | --- |
+| `2` | Move | Lift the current cell or selection, reposition it, then confirm or cancel |
+| `3` | Push | Insert a blank neighboring row or column |
+| `4` | Pull | Remove and pull a neighboring row or column |
+| `5` | View | Pan the viewport or center it on the drawing |
 
-Utils are ordered **Move**, **Push**, **Pull**, **View**. **View** hides the cursor while it pans or centers the viewport, then restores it at the same on-screen position when View ends. **Move** keeps the cursor visible and lifts the current rectangle with an animated border: use directions to position it, Space or Enter to place it, and Escape to cancel without changing the canvas.
+Operations that would split a wide grapheme are rejected.
 
-## Configuration
+## Text, selection, and clipboard
 
-Bundled application defaults live in [`ascdraw.toml`](ascdraw.toml), while the bundled stylesheet lives in [`theme.toml`](theme.toml). Put personal overrides in:
+Text mode is independent of the selected drawing tool. Type to insert graphemes; arrows move freely
+over the canvas, Backspace removes the preceding grapheme, Delete removes the following grapheme,
+and Tab inserts four spaces. Escape or Ctrl + `G` returns to the active toolbar mode.
 
-```text
-~/.config/ascdraw/config.toml
-```
+Continuous Replace overwrites cells and extends rows when needed. In any drawing mode, `r` waits for
+one grapheme, replaces the selected rectangle, and immediately returns to the active tool.
 
-If `XDG_CONFIG_HOME` is set, ascdraw reads `$XDG_CONFIG_HOME/ascdraw/config.toml` instead. Run `ascdraw --show-config` to print the merged configuration.
+Ctrl + direction expands the selection from its anchor. With an expanded selection, Alt + direction
+lifts and moves the rectangle; a plain direction, Space, or Return confirms it, while Escape cancels.
+Clipboard paste overwrites a rectangle from the selection's top-left corner, preserves ragged rows
+and trailing blanks, and selects the pasted result.
 
-Default application shortcuts:
+Undo and redo histories are independent per window. Document edits include the viewport state;
+navigation and menu-only changes do not create history entries.
 
-| Action | macOS shortcut |
+## Save, load, and export
+
+Press `0` to open the top-right Save/Load/Export menu:
+
+| Sequence | Action |
 | --- | --- |
-| Increase font size | Command + `=` |
-| Decrease font size | Command + `-` |
-| Reset font size | Command + `0` |
-| New window | Command + `N` |
-| Close window | Command + `W` |
+| `0 2 1` | Copy TXT |
+| `0 2 2` | Copy PNG |
+| `0 3 1` | Save TXT |
+| `0 3 2` | Save PNG |
+| `0 3 3` | Save JSON project |
+| `0 4 1` | Load TXT |
+| `0 4 2` | Load JSON project |
+| `0 9` | Clear the canvas |
 
-All shortcuts can be changed in the `[keys]` section of the configuration file.
+TXT and PNG use the expanded selection when one exists; otherwise they use the visible canvas
+viewport. PNG export contains only the canvas—no cursor, selection border, preview, toolbar, title,
+or tooltip. JSON stores the whole project, including cursor, selection, viewport translation, and
+durable menu choices.
 
-Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `selection`, `selection-highlight` (a pending menu prefix), `cursor-drawing`, `cursor-block`, and `tooltip`. Explicit colors are hexadecimal `#RRGGBB` or `#RRGGBBAA` strings; named colors are not supported. Unspecified colors use `"default"` and inherit from the default face.
+## Autosave and configuration
 
-The bottom tooltip reacts to the current interaction state, including expanded selections, lifted moves, shape previews, pending replacement, and active line strokes. Idle canvas tooltips show the available Alt-direction erase and Ctrl-direction selection controls.
+The canvas and durable menu choices are saved after five idle seconds, when a window closes, and
+when the app exits. Without an explicit document path, the autosave lives at:
+
+- macOS: `~/Library/Application Support/ascdraw/document.toml`
+- Windows: `%APPDATA%/ascdraw/document.toml`
+- Unix with `XDG_DATA_HOME`: `$XDG_DATA_HOME/ascdraw/document.toml`
+- other Unix: `~/.local/share/ascdraw/document.toml`
+
+Bundled application defaults live in [`ascdraw.toml`](ascdraw.toml), and bundled face defaults live
+in [`theme.toml`](theme.toml). Put personal overrides in
+`$XDG_CONFIG_HOME/ascdraw/config.toml`, or in `~/.config/ascdraw/config.toml` when
+`XDG_CONFIG_HOME` is not set. The app watches this file and applies changes while running.
+
+Theme faces include `default`, `selection`, `selection-highlight`, `cursor-drawing`,
+`cursor-block`, and `tooltip`:
 
 ```toml
 [theme.selection]
@@ -84,8 +203,18 @@ fg = "#ff0000"
 bg = "default"
 ```
 
-## Current scope
+Colors are hexadecimal `#RRGGBB` or `#RRGGBBAA`. The value `"default"` inherits from the default
+face. macOS builds also support configurable P3 or sRGB rendering.
 
-The top-right **0. Save/Load/Export** menu copies TXT or PNG, saves in TXT, PNG, JSON order, and loads TXT or JSON through native file dialogs. **9. Clear** is the right-aligned canvas reset action. Successful actions flash briefly in the menu. TXT and PNG use the expanded rectangular selection when present; otherwise they use the visible canvas viewport. PNG rendering is canvas-only, excluding the cursor, selection border, previews, menus, title, and tooltip. JSON defaults to `ascdraw.json`; PNG defaults to `ascdraw.png`.
+## Development
 
-ascdraw currently provides an editable grapheme-aware cell grid, connected Unicode line drawing, text entry, font fallback, configurable themes and cursor shapes, live font scaling, multiple native windows, and macOS menu integration. Further Stamp, Shape, and Utils operations are still to come.
+Run the full local checks through mise:
+
+```sh
+mise exec -- cargo fmt --all -- --check
+mise exec -- cargo test --locked
+mise exec -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+This repository uses Jujutsu as its version-control frontend. See [`AGENTS.md`](AGENTS.md) for the
+project's change, test, symbol, and file-size conventions.
