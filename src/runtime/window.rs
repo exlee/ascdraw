@@ -18,7 +18,7 @@ use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
     LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
-    content_top_padding, cursor_is_visible, layout_metrics, navigation_origin,
+    content_top_padding, cursor_is_visible, cursor_origin, layout_metrics, navigation_origin,
     normalized_cursor_and_origin,
 };
 #[cfg(target_os = "macos")]
@@ -37,6 +37,12 @@ const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 struct ViewCursorAnchor {
     x: i64,
     y: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StateChangeViewportPolicy {
+    CursorAndContent,
+    CursorOnly,
 }
 
 impl ViewCursorAnchor {
@@ -318,7 +324,27 @@ impl EditorWindow {
         previous_viewport: ViewportOffset,
         document_changed: bool,
     ) -> bool {
-        self.finish_state_change_in_group(previous_state, previous_viewport, document_changed, None)
+        self.finish_state_change_in_group(
+            previous_state,
+            previous_viewport,
+            document_changed,
+            None,
+            StateChangeViewportPolicy::CursorAndContent,
+        )
+    }
+
+    pub fn finish_selection_clear(
+        &mut self,
+        previous_state: EditorState,
+        previous_viewport: ViewportOffset,
+    ) -> bool {
+        self.finish_state_change_in_group(
+            previous_state,
+            previous_viewport,
+            true,
+            None,
+            StateChangeViewportPolicy::CursorOnly,
+        )
     }
 
     pub fn finish_grouped_state_change(
@@ -333,6 +359,7 @@ impl EditorWindow {
             previous_viewport,
             document_changed,
             Some(group),
+            StateChangeViewportPolicy::CursorAndContent,
         )
     }
 
@@ -342,6 +369,7 @@ impl EditorWindow {
         previous_viewport: ViewportOffset,
         document_changed: bool,
         group: Option<HistoryGroup>,
+        viewport_policy: StateChangeViewportPolicy,
     ) -> bool {
         let previous = HistorySnapshot {
             edit: previous_state.edit_snapshot(),
@@ -401,7 +429,8 @@ impl EditorWindow {
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let content = self.content_index.cells(&self.state.grid.lines).to_vec();
 
-        if let Some(origin) = resolve_navigation_origin(
+        if let Some(origin) = resolve_state_change_origin(
+            viewport_policy,
             current,
             self.state.grid.cursor_pos,
             viewport_cells,
@@ -417,7 +446,8 @@ impl EditorWindow {
                 viewport_cells
             ));
             debug_assert!(
-                content.is_empty()
+                viewport_policy == StateChangeViewportPolicy::CursorOnly
+                    || content.is_empty()
                     || content_intersects_inner_screen(origin, viewport_cells, &content)
             );
             if !document_changed {
@@ -742,6 +772,24 @@ fn resolve_navigation_origin(
     content: &[Coord],
 ) -> Option<(i64, i64)> {
     navigation_origin(current, cursor, viewport, content)
+}
+
+fn resolve_state_change_origin(
+    policy: StateChangeViewportPolicy,
+    current: (i64, i64),
+    cursor: Coord,
+    viewport: (usize, usize),
+    content: &[Coord],
+) -> Option<(i64, i64)> {
+    match policy {
+        StateChangeViewportPolicy::CursorAndContent => {
+            resolve_navigation_origin(current, cursor, viewport, content)
+        }
+        StateChangeViewportPolicy::CursorOnly => Some((
+            cursor_origin(current.0, cursor.column, viewport.0),
+            cursor_origin(current.1, cursor.line, viewport.1),
+        )),
+    }
 }
 
 pub fn create_editor_window(
@@ -1698,6 +1746,38 @@ mod tests {
         state = previous.clone();
         assert_eq!(state.selection, previous.selection);
         assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
+    }
+
+    #[test]
+    fn selection_clear_keeps_the_cursor_visible_without_requiring_remaining_content() {
+        let current = (2, 2);
+        let cursor = Coord {
+            line: 12,
+            column: 12,
+        };
+        let viewport = (10, 10);
+        let content = [Coord { line: 5, column: 5 }];
+
+        assert_eq!(
+            resolve_state_change_origin(
+                StateChangeViewportPolicy::CursorAndContent,
+                current,
+                cursor,
+                viewport,
+                &content,
+            ),
+            None
+        );
+        let origin = resolve_state_change_origin(
+            StateChangeViewportPolicy::CursorOnly,
+            current,
+            cursor,
+            viewport,
+            &content,
+        )
+        .expect("selection clearing always has a cursor-visible origin");
+        assert!(cursor_is_visible(origin, cursor, viewport));
+        assert!(!content_intersects_inner_screen(origin, viewport, &content));
     }
 
     #[test]

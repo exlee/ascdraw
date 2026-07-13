@@ -261,8 +261,8 @@ fn try_main() -> Result<ExitCode> {
                                         editor.redo();
                                     }
                                 }
-                            } else if clipboard_command(&event.logical_key, editor.modifiers)
-                                .is_some()
+                            } else if let Some(clipboard_command) =
+                                clipboard_command(&event.logical_key, editor.modifiers)
                             {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
@@ -278,11 +278,20 @@ fn try_main() -> Result<ExitCode> {
                                 .expect("clipboard shortcut was already recognized");
                                 match result {
                                     Ok(true) => {
-                                        if editor.finish_state_change(
-                                            previous_state,
-                                            previous_viewport,
-                                            true,
-                                        ) {
+                                        let changed = if clipboard_command == ClipboardCommand::Cut
+                                        {
+                                            editor.finish_selection_clear(
+                                                previous_state,
+                                                previous_viewport,
+                                            )
+                                        } else {
+                                            editor.finish_state_change(
+                                                previous_state,
+                                                previous_viewport,
+                                                true,
+                                            )
+                                        };
+                                        if changed {
                                             editor.mark_document_dirty();
                                         }
                                     }
@@ -361,6 +370,15 @@ fn try_main() -> Result<ExitCode> {
                                     };
                                     let previous_state = editor.state.clone();
                                     let previous_viewport = editor.viewport;
+                                    let clears_selection = matches!(
+                                        edit_command(
+                                            &event.logical_key,
+                                            event.repeat,
+                                            editor.modifiers,
+                                            editor.state.cursor_mode,
+                                        ),
+                                        Some(EditCommand::Clear | EditCommand::ClearAndBack)
+                                    );
                                     let handled = handle_editor_key_with_order(
                                         &mut editor.state,
                                         &event.logical_key,
@@ -380,6 +398,11 @@ fn try_main() -> Result<ExitCode> {
                                                 document_changed,
                                                 group,
                                             ),
+                                            None if document_changed && clears_selection => editor
+                                                .finish_selection_clear(
+                                                    previous_state,
+                                                    previous_viewport,
+                                                ),
                                             None => editor.finish_state_change(
                                                 previous_state,
                                                 previous_viewport,
