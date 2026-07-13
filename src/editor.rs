@@ -168,10 +168,19 @@ impl EditorState {
             return Tooltip::Export;
         }
         if self.move_lift.is_some() {
-            return Tooltip::UtilitiesMove;
+            return Tooltip::MoveLift;
+        }
+        if self.shape_preview.is_some() {
+            return Tooltip::ShapePreview;
+        }
+        if self.single_replace_pending {
+            return Tooltip::SingleReplace;
         }
         if !self.selection.is_collapsed() {
             return Tooltip::Selection;
+        }
+        if self.active_stroke.is_some() {
+            return Tooltip::LineStroke;
         }
         match self.cursor_mode {
             CursorMode::Text => Tooltip::Text,
@@ -2392,6 +2401,47 @@ mod tests {
 
         assert!(state.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
         assert_eq!(state.tooltip(), Tooltip::Export);
+    }
+
+    #[test]
+    fn tooltip_reacts_to_selection_and_transient_editor_states() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.insert("abcd");
+        state.move_home();
+        assert!(state.tooltip().text().contains("Alt-direction erases"));
+
+        state.extend_selection(Direction::Right);
+        assert_eq!(state.tooltip(), Tooltip::Selection);
+        assert!(
+            state
+                .tooltip()
+                .text()
+                .contains("Alt-direction lifts and moves")
+        );
+
+        assert!(state.begin_selected_move_lift());
+        assert_eq!(state.tooltip(), Tooltip::MoveLift);
+        assert!(state.tooltip().text().contains("Space/Enter confirms"));
+        assert!(state.cancel_move_lift());
+
+        state.move_to(Coord::default());
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state.toggle_shape_preview();
+        assert_eq!(state.tooltip(), Tooltip::ShapePreview);
+        assert!(state.tooltip().text().contains("Space confirms"));
+
+        state.toggle_shape_preview();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        assert!(state.begin_single_replace());
+        assert_eq!(state.tooltip(), Tooltip::SingleReplace);
+        assert!(state.tooltip().text().contains("type one character"));
+
+        state.cancel_text_entry();
+        state.clear_canvas();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        state.move_or_draw(Direction::Right, true);
+        assert_eq!(state.tooltip(), Tooltip::LineStroke);
+        assert!(state.tooltip().text().contains("release Shift to finish"));
     }
 
     #[test]

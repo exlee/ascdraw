@@ -254,6 +254,10 @@ pub enum Tooltip {
     UtilitiesPull,
     UtilitiesView,
     UtilitiesMove,
+    MoveLift,
+    ShapePreview,
+    SingleReplace,
+    LineStroke,
     Text,
     Replace,
     Export,
@@ -262,12 +266,10 @@ pub enum Tooltip {
 
 impl Tooltip {
     pub fn text(self) -> String {
-        const MISC_TIP: [&str; 5] = [
+        const MISC_TIP: [&str; 3] = [
             "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
-            "Select with Ctrl-<direction>",
-            "Erase with Alt-<direction>",
             "Direction keys are ←→↓↑ and hjkl",
-            "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps"
+            "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -280,25 +282,48 @@ impl Tooltip {
         let primary = match self {
             Self::None => "",
             Self::Line => {
-                "Shift-direction draws"
+                "Line: Shift-direction draws; Alt-direction erases; Ctrl-direction selects"
             }
-            Self::Stamp => "<Space> to put a stamp, Shift-<direction> for continuous drawing",
-            Self::Shapes => "<Space> to start drawing, <Space> to confirm",
-            Self::UtilitiesPush => "Push: Shift-hjkl/arrows inserts a blank row or column",
-            Self::UtilitiesPull => {
-                "Pull: Shift-direction pulls"
+            Self::Stamp => {
+                "Stamp: Space places; Shift-direction draws continuously; Alt-direction erases; Ctrl-direction selects"
             }
-            Self::UtilitiesView => "View: directions pan the view; Space centers the drawing",
+            Self::Shapes => {
+                "Shape: Space starts a preview; Alt-direction erases; Ctrl-direction selects"
+            }
+            Self::UtilitiesPush => {
+                "Push: Shift-direction inserts a blank row or column; Alt-direction erases"
+            }
+            Self::UtilitiesPull => "Pull: Shift-direction pulls; Alt-direction erases",
+            Self::UtilitiesView => "View: directions pan; Space centers; Alt-direction erases",
             Self::UtilitiesMove => {
-                "Move: Space lifts selection; directions move; Space/Enter confirms; Esc cancels"
+                "Move: Space lifts the current cell; Alt-direction erases; Ctrl-direction selects"
             }
+            Self::MoveLift => {
+                "Move: directions or Alt-direction move; Space/Enter confirms; Esc cancels"
+            }
+            Self::ShapePreview => "Shape preview: directions resize; Space confirms; Esc cancels",
+            Self::SingleReplace => "Replace selection: type one character; Esc cancels",
+            Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
             Self::Export => {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
-            Self::Selection => "Esc cancels selection; Space/Backspace clears, r then KEY for replace all",
+            Self::Selection => {
+                "Selection: Alt-direction lifts and moves; Ctrl-direction expands; Esc collapses; Space/Backspace clears; r then KEY replaces"
+            }
         };
+        if matches!(
+            self,
+            Self::MoveLift
+                | Self::ShapePreview
+                | Self::SingleReplace
+                | Self::LineStroke
+                | Self::Export
+                | Self::Selection
+        ) {
+            return primary.to_string();
+        }
         let secondary = if primary.is_empty() { "" } else { "; " };
 
         format!("{primary}{secondary}{misc}")
@@ -2590,6 +2615,17 @@ mod tests {
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
         assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
         assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesMove.text());
+        for tooltip in [
+            Tooltip::Line,
+            Tooltip::Stamp,
+            Tooltip::Shapes,
+            Tooltip::UtilitiesPush,
+            Tooltip::UtilitiesPull,
+            Tooltip::UtilitiesView,
+            Tooltip::UtilitiesMove,
+        ] {
+            assert!(tooltip.text().contains("Alt-direction erases"));
+        }
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
         assert_eq!(toolbar.tooltip(), Tooltip::Export);

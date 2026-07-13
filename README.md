@@ -42,7 +42,7 @@ Text entry is independent of the selected toolbar tool. Press Return to enter it
 
 ### Selection, Stamp, Shape, and Utils
 
-Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. Alt + a direction moves while erasing the traversed canvas content. The first held modifier selects the operation; a second modifier selects 5 or 10 stepwise cells: Shift then Ctrl is 5 and Shift then Alt is 10, Alt then Ctrl is 5 and Alt then Shift is 10, Ctrl then Alt is 5 and Ctrl then Shift is 10. With all three held, the first modifier remains the operation and the next modifier pressed selects the step size. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
+Ctrl + `h` `j` `k` `l` or Ctrl + an arrow key extends the canvas selection rectangle. With a collapsed selection, Alt + a direction moves while erasing the traversed canvas content. With an expanded selection in any mode, Alt + a direction lifts and moves the selected rectangle; directions continue moving it, Space or Enter confirms, and Escape cancels. Expanding or collapsing the selection ends the lift. The first held modifier selects the operation; a second modifier selects 5 or 10 stepwise cells: Shift then Ctrl is 5 and Shift then Alt is 10, Alt then Ctrl is 5 and Alt then Shift is 10, Ctrl then Alt is 5 and Ctrl then Shift is 10. With all three held, the first modifier remains the operation and the next modifier pressed selects the step size. Escape collapses the selection to 1x1, Backspace clears every selected cell, and `r` followed by a character replaces every selected cell with that character. In Stamp mode, Space fills the selected rectangle with the active stamp. Save/Load/Export exports include only the selected rectangle.
 
 Ctrl/Cmd-C copies the exact selected rectangle, Ctrl/Cmd-X copies and clears it, and Ctrl/Cmd-V pastes clipboard text as a rectangular overwrite at the selection's top-left corner.
 Ctrl/Cmd-Z undoes and Ctrl/Cmd-R redoes document edits independently in each window.
@@ -74,6 +74,8 @@ Default application shortcuts:
 All shortcuts can be changed in the `[keys]` section of the configuration file.
 
 Theme overrides use `[theme.<face>]` tables. The semantic faces are `default`, `selection`, `selection-highlight` (a pending menu prefix), `cursor-drawing`, `cursor-block`, and `tooltip`. Explicit colors are hexadecimal `#RRGGBB` or `#RRGGBBAA` strings; named colors are not supported. Unspecified colors use `"default"` and inherit from the default face.
+
+The bottom tooltip reacts to the current interaction state, including expanded selections, lifted moves, shape previews, pending replacement, and active line strokes. Idle canvas tooltips show the available Alt-direction erase and Ctrl-direction selection controls.
 
 ```toml
 [theme.selection]

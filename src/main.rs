@@ -205,6 +205,7 @@ fn try_main() -> Result<ExitCode> {
                             if released_shift {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
+                                editor.request_redraw();
                             }
                         }
                         WindowEvent::Focused(false) => {
@@ -212,6 +213,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.finish_history_transaction();
                             editor.modifiers = ModifiersState::empty();
                             editor.ordered_modifiers.update(editor.modifiers);
+                            editor.request_redraw();
                         }
                         WindowEvent::Ime(Ime::Commit(text)) => {
                             if !text.is_empty()
