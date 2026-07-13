@@ -209,6 +209,13 @@ impl EditorState {
         }
     }
 
+    pub fn view_active(&self) -> bool {
+        self.cursor_mode == CursorMode::Utilities
+            && self.toolbar.main_mode() == MainMode::Utilities
+            && self.toolbar.utility_kind() == UtilityKind::View
+            && !self.toolbar.export_menu_open()
+    }
+
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
         if self.cursor_mode.accepts_text() {
             self.toolbar.cancel_shortcut();
@@ -496,22 +503,14 @@ impl EditorState {
         self.collapse_selection();
     }
 
-    /// Relocates the cursor for an explicit viewport-centering command without
-    /// allocating blank cells. A target inside a wide grapheme resolves to
-    /// that grapheme's start column; a target beyond a ragged row stays at the
-    /// requested canvas column.
-    pub fn relocate_cursor_for_view_center(&mut self, coord: Coord) {
-        let line = &self.grid.lines[coord.line];
-        self.cursor_index = index_for_column(line, coord.column);
-        let grapheme_start = display_width(&line[..self.cursor_index]);
-        self.grid.cursor_pos = Coord {
-            line: coord.line,
-            column: if self.cursor_index < line.len() {
-                grapheme_start
-            } else {
-                coord.column
-            },
-        };
+    pub fn restore_cursor_after_view(&mut self, line: i64, column: i64) {
+        self.end_stroke();
+        self.cancel_line_preview();
+        self.cancel_move_lift();
+        self.move_to_without_ending_stroke(Coord {
+            line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
+            column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
+        });
         self.collapse_selection();
     }
 

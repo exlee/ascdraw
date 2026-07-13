@@ -81,22 +81,6 @@ impl ViewportOffset {
         self.y = self.y.saturating_sub(cell_shift(lines, cell_size.1));
     }
 
-    pub fn compensate_for_cursor_move(
-        &mut self,
-        previous: Coord,
-        current: Coord,
-        cell_size: (usize, usize),
-    ) {
-        self.x = self.x.saturating_sub(signed_cell_shift(
-            previous.column,
-            current.column,
-            cell_size.0,
-        ));
-        self.y = self
-            .y
-            .saturating_sub(signed_cell_shift(previous.line, current.line, cell_size.1));
-    }
-
     pub fn origin(self, cell_size: (usize, usize)) -> (i64, i64) {
         (
             self.x
@@ -141,12 +125,6 @@ fn cell_shift(count: usize, size: usize) -> i64 {
     i64::try_from(count)
         .unwrap_or(i64::MAX)
         .saturating_mul(i64::try_from(size).unwrap_or(i64::MAX))
-}
-
-fn signed_cell_shift(previous: usize, current: usize, size: usize) -> i64 {
-    let delta = current as i128 - previous as i128;
-    let pixels = delta.saturating_mul(size as i128);
-    pixels.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
 #[cfg(test)]
@@ -521,29 +499,6 @@ mod tests {
         viewport.reanchor_cursor(cursor, (8, 16), (11, 20), 44, 44);
 
         assert_eq!(cursor_top_left(cursor, (11, 20), 44, viewport), before);
-    }
-
-    #[test]
-    fn cursor_move_compensation_keeps_its_screen_position() {
-        let previous = Coord {
-            line: 7,
-            column: 11,
-        };
-        let current = Coord {
-            line: 4,
-            column: 16,
-        };
-        let cell_size = (8, 16);
-        let grid_top = 44;
-        let mut viewport = ViewportOffset { x: 3, y: -5 };
-        let before = cursor_top_left(previous, cell_size, grid_top, viewport);
-
-        viewport.compensate_for_cursor_move(previous, current, cell_size);
-
-        assert_eq!(
-            cursor_top_left(current, cell_size, grid_top, viewport),
-            before
-        );
     }
 
     #[test]

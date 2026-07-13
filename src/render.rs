@@ -925,7 +925,7 @@ fn render_grid_cursor(
 }
 
 fn grid_cursor_is_visible(state: &EditorState) -> bool {
-    !state.move_lift_active()
+    !state.view_active()
 }
 
 fn is_drawing_mode(mode: CursorMode) -> bool {
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn move_lift_hides_grid_cursor_until_it_ends() {
+    fn view_hides_grid_cursor_while_move_lift_keeps_it_visible() {
         let mut state = EditorState::new(&ThemeConfig::default(), "test");
         state
             .selection
@@ -1585,8 +1585,18 @@ mod tests {
 
         assert!(grid_cursor_is_visible(&state));
         assert!(state.begin_selected_move_lift());
-        assert!(!grid_cursor_is_visible(&state));
+        assert!(grid_cursor_is_visible(&state));
         assert!(state.cancel_move_lift());
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        }));
+        assert!(!grid_cursor_is_visible(&state));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 0,
+        }));
         assert!(grid_cursor_is_visible(&state));
     }
 

@@ -17,7 +17,7 @@ use crate::editor::{ContentIndex, EditorState};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
-    LayoutMetrics, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
+    LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
     content_top_padding, cursor_is_visible, layout_metrics, navigation_origin,
     normalized_cursor_and_origin,
 };
@@ -33,6 +33,81 @@ use crate::user_keys::FontSizeAction;
 const CURSOR_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ViewCursorAnchor {
+    x: i64,
+    y: i64,
+}
+
+impl ViewCursorAnchor {
+    fn capture(
+        cursor: Coord,
+        viewport: ViewportOffset,
+        cell_size: (usize, usize),
+        grid_top: usize,
+    ) -> Self {
+        Self {
+            x: (PADDING as i64)
+                .saturating_add(
+                    i64::try_from(cursor.column)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(i64::try_from(cell_size.0).unwrap_or(i64::MAX)),
+                )
+                .saturating_add(viewport.x),
+            y: i64::try_from(grid_top)
+                .unwrap_or(i64::MAX)
+                .saturating_add(
+                    i64::try_from(cursor.line)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(i64::try_from(cell_size.1).unwrap_or(i64::MAX)),
+                )
+                .saturating_add(viewport.y),
+        }
+    }
+
+    fn cursor_for_viewport(
+        self,
+        viewport: ViewportOffset,
+        cell_size: (usize, usize),
+        grid_top: usize,
+    ) -> (i64, i64) {
+        let width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
+        let height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
+        (
+            self.y
+                .saturating_sub(i64::try_from(grid_top).unwrap_or(i64::MAX))
+                .saturating_sub(viewport.y)
+                .div_euclid(height),
+            self.x
+                .saturating_sub(PADDING as i64)
+                .saturating_sub(viewport.x)
+                .div_euclid(width),
+        )
+    }
+
+    fn restore_for_cursor(
+        self,
+        viewport: &mut ViewportOffset,
+        cursor: Coord,
+        cell_size: (usize, usize),
+        grid_top: usize,
+    ) {
+        viewport.x = self.x.saturating_sub(PADDING as i64).saturating_sub(
+            i64::try_from(cursor.column)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(i64::try_from(cell_size.0).unwrap_or(i64::MAX)),
+        );
+        viewport.y = self
+            .y
+            .saturating_sub(i64::try_from(grid_top).unwrap_or(i64::MAX))
+            .saturating_sub(
+                i64::try_from(cursor.line)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(i64::try_from(cell_size.1).unwrap_or(i64::MAX)),
+            );
+    }
+}
+
 pub struct EditorWindow {
     pub window: Rc<Window>,
     pub surface: WindowSurface,
@@ -43,6 +118,7 @@ pub struct EditorWindow {
     pub state: EditorState,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
+    view_cursor_anchor: Option<ViewCursorAnchor>,
     history: EditHistory,
     content_index: ContentIndex,
     perf: PerfDiagnostics,
@@ -276,10 +352,6 @@ impl EditorWindow {
         }
         let menu_selections_changed =
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
-        let prepend = self.state.take_pending_prepend();
-        if document_changed || prepend != (0, 0) {
-            self.content_index.invalidate();
-        }
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let toolbar_metrics = self.renderer.title_metrics(scale_factor);
@@ -293,29 +365,24 @@ impl EditorWindow {
         );
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
-        self.viewport
-            .compensate_for_prepend(prepend.0, prepend.1, cell_size);
-        let move_lift_transition = compensate_move_lift_cursor(
+        let view_mode_changed = reconcile_view_cursor(
+            &mut self.view_cursor_anchor,
             &mut self.viewport,
             &previous_state,
-            &self.state,
+            &mut self.state,
             cell_size,
+            layout.grid_top,
         );
+        let prepend = self.state.take_pending_prepend();
+        if document_changed || prepend != (0, 0) {
+            self.content_index.invalidate();
+        }
+        self.viewport
+            .compensate_for_prepend(prepend.0, prepend.1, cell_size);
 
-        // A lift owns the cursor-to-viewport relationship until it ends, so
-        // cursor normalization must not replace the exact compensation above.
-        if move_lift_transition {
+        if view_mode_changed {
             self.menu_selections_dirty |= menu_selections_changed;
-            if !document_changed {
-                return false;
-            }
-            let current = self.history_snapshot();
-            return match group {
-                Some(group) => self
-                    .history
-                    .record_grouped_change(group, previous, &current),
-                None => self.history.record_change(previous, &current),
-            };
+            return false;
         }
 
         // A toolbar-only transition can temporarily clip anchored cells. Do
@@ -428,6 +495,14 @@ impl EditorWindow {
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        self.view_cursor_anchor.get_or_insert_with(|| {
+            ViewCursorAnchor::capture(
+                self.state.grid.cursor_pos,
+                self.viewport,
+                cell_size,
+                layout.grid_top,
+            )
+        });
         let changed = match command {
             ViewCommand::Pan(direction) => pan_viewport(
                 &mut self.viewport,
@@ -436,13 +511,9 @@ impl EditorWindow {
                 viewport_cells,
                 &content,
             ),
-            ViewCommand::Center => center_viewport(
-                &mut self.viewport,
-                &mut self.state,
-                cell_size,
-                viewport_cells,
-                &content,
-            ),
+            ViewCommand::Center => {
+                center_viewport(&mut self.viewport, cell_size, viewport_cells, &content)
+            }
         };
         if changed {
             self.request_redraw();
@@ -507,21 +578,38 @@ fn durable_menu_selections_changed(
     previous.durable_selections() != current.durable_selections()
 }
 
-fn compensate_move_lift_cursor(
+fn reconcile_view_cursor(
+    anchor: &mut Option<ViewCursorAnchor>,
     viewport: &mut ViewportOffset,
     previous: &EditorState,
-    current: &EditorState,
+    current: &mut EditorState,
     cell_size: (usize, usize),
+    grid_top: usize,
 ) -> bool {
-    let transition = previous.move_lift_active() || current.move_lift_active();
-    if transition {
-        viewport.compensate_for_cursor_move(
-            previous.grid.cursor_pos,
-            current.grid.cursor_pos,
-            cell_size,
-        );
+    let was_viewing = previous.view_active();
+    let is_viewing = current.view_active();
+    match (was_viewing, is_viewing) {
+        (false, true) => {
+            *anchor = Some(ViewCursorAnchor::capture(
+                current.grid.cursor_pos,
+                *viewport,
+                cell_size,
+                grid_top,
+            ));
+        }
+        (true, false) => {
+            if let Some(saved) = anchor.take() {
+                let (line, column) = saved.cursor_for_viewport(*viewport, cell_size, grid_top);
+                current.restore_cursor_after_view(line, column);
+                saved.restore_for_cursor(viewport, current.grid.cursor_pos, cell_size, grid_top);
+            }
+        }
+        (false, false) => {
+            *anchor = None;
+        }
+        (true, true) => {}
     }
-    transition
+    was_viewing != is_viewing
 }
 
 fn pan_viewport(
@@ -551,7 +639,6 @@ fn pan_viewport(
 
 fn center_viewport(
     viewport: &mut ViewportOffset,
-    state: &mut EditorState,
     cell_size: (usize, usize),
     viewport_cells: (usize, usize),
     content: &[Coord],
@@ -572,12 +659,8 @@ fn center_viewport(
             .saturating_sub(i64::try_from(viewport_cells.1 / 2).unwrap_or(i64::MAX)),
     );
     let old_viewport = *viewport;
-    let old_cursor = state.grid.cursor_pos;
     viewport.set_origin(origin, cell_size);
-    if !cursor_is_visible(origin, old_cursor, viewport_cells) {
-        state.relocate_cursor_for_view_center(center);
-    }
-    *viewport != old_viewport || state.grid.cursor_pos != old_cursor
+    *viewport != old_viewport
 }
 
 fn content_bounds(content: &[Coord]) -> Option<(Coord, Coord)> {
@@ -699,6 +782,7 @@ pub fn create_editor_window(
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
+        view_cursor_anchor: None,
         history: EditHistory::default(),
         content_index,
         perf: PerfDiagnostics::from_env(),
@@ -863,7 +947,6 @@ mod tests {
     use super::*;
     use crate::app::AppConfig;
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
-    use crate::layout::PADDING;
     use crate::model::{Atom, Direction, Face};
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -1000,86 +1083,127 @@ mod tests {
     }
 
     #[test]
-    fn move_lift_keeps_cursor_screen_position_through_confirm_and_cancel() {
-        let cell_size = (8, 12);
-        let grid_top = 40;
-        let initial_viewport = ViewportOffset { x: 5, y: -7 };
+    fn move_lift_does_not_reanchor_the_viewport() {
         let mut state = state_with_rows(&["ab"]);
         state
             .selection
             .select(Coord::default(), Coord { line: 0, column: 1 });
-        let initial_screen_position =
-            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, initial_viewport);
-
-        let mut confirmed_viewport = initial_viewport;
         let previous = state.clone();
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
-        assert!(compensate_move_lift_cursor(
-            &mut confirmed_viewport,
-            &previous,
-            &state,
-            cell_size,
-        ));
-        assert_eq!(
-            canvas_screen_position(
-                state.grid.cursor_pos,
-                grid_top,
-                cell_size,
-                confirmed_viewport,
-            ),
-            initial_screen_position
-        );
+        let mut viewport = ViewportOffset { x: 5, y: -7 };
+        let original_viewport = viewport;
+        let mut anchor = None;
 
+        assert!(!reconcile_view_cursor(
+            &mut anchor,
+            &mut viewport,
+            &previous,
+            &mut state,
+            (8, 12),
+            40,
+        ));
+        assert_eq!(viewport, original_viewport);
+        assert_ne!(state.grid.cursor_pos, previous.grid.cursor_pos);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+    }
+
+    #[test]
+    fn view_restores_cursor_to_entry_screen_position_after_panning() {
+        let cell_size = (8, 12);
+        let grid_top = 40;
+        let initial_viewport = ViewportOffset { x: 5, y: -7 };
+        let mut state = state_with_rows(&["", "", "", "drawing"]);
+        state.move_to(Coord { line: 1, column: 2 });
+        let initial_screen_position =
+            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, initial_viewport);
         let previous = state.clone();
-        assert!(state.confirm_move_lift());
-        assert!(compensate_move_lift_cursor(
-            &mut confirmed_viewport,
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        }));
+
+        let mut anchor = None;
+        let mut view_viewport = initial_viewport;
+        assert!(reconcile_view_cursor(
+            &mut anchor,
+            &mut view_viewport,
             &previous,
-            &state,
+            &mut state,
             cell_size,
+            grid_top,
         ));
+        assert!(anchor.is_some());
+
+        let mut panned_viewport = ViewportOffset {
+            x: initial_viewport.x - 3 * cell_size.0 as i64,
+            y: initial_viewport.y - 2 * cell_size.1 as i64,
+        };
+        let previous = state.clone();
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
+        assert!(reconcile_view_cursor(
+            &mut anchor,
+            &mut panned_viewport,
+            &previous,
+            &mut state,
+            cell_size,
+            grid_top,
+        ));
+        assert!(anchor.is_none());
+        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
         assert_eq!(
-            canvas_screen_position(
-                state.grid.cursor_pos,
-                grid_top,
-                cell_size,
-                confirmed_viewport,
-            ),
+            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, panned_viewport,),
             initial_screen_position
         );
+    }
 
-        let mut cancelled_state = state_with_rows(&["ab"]);
-        cancelled_state
-            .selection
-            .select(Coord::default(), Coord { line: 0, column: 1 });
-        let mut cancelled_viewport = initial_viewport;
-        let previous = cancelled_state.clone();
-        assert!(cancelled_state.begin_selected_move_lift());
-        assert!(cancelled_state.move_lift(Direction::Down));
-        assert!(compensate_move_lift_cursor(
-            &mut cancelled_viewport,
+    #[test]
+    fn view_restore_reanchors_when_screen_position_maps_before_canvas_origin() {
+        let cell_size = (8, 12);
+        let grid_top = 40;
+        let initial_viewport = ViewportOffset::default();
+        let mut state = state_with_rows(&["x"]);
+        let initial_screen_position =
+            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, initial_viewport);
+        let previous = state.clone();
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 3,
+        }));
+        let mut anchor = None;
+        let mut view_viewport = initial_viewport;
+        assert!(reconcile_view_cursor(
+            &mut anchor,
+            &mut view_viewport,
             &previous,
-            &cancelled_state,
+            &mut state,
             cell_size,
+            grid_top,
         ));
 
-        let previous = cancelled_state.clone();
-        assert!(cancelled_state.cancel_move_lift());
-        assert!(compensate_move_lift_cursor(
-            &mut cancelled_viewport,
+        let mut panned_viewport = ViewportOffset {
+            x: cell_size.0 as i64,
+            y: cell_size.1 as i64,
+        };
+        let previous = state.clone();
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
+        assert!(reconcile_view_cursor(
+            &mut anchor,
+            &mut panned_viewport,
             &previous,
-            &cancelled_state,
+            &mut state,
             cell_size,
+            grid_top,
         ));
-        assert_eq!(cancelled_viewport, initial_viewport);
+        let prepend = state.take_pending_prepend();
+        assert_eq!(prepend, (0, 0));
+
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+        assert_eq!(state.content_cells(), vec![Coord::default()]);
         assert_eq!(
-            canvas_screen_position(
-                cancelled_state.grid.cursor_pos,
-                grid_top,
-                cell_size,
-                cancelled_viewport,
-            ),
+            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, panned_viewport,),
             initial_screen_position
         );
     }
@@ -1104,39 +1228,21 @@ mod tests {
 
         // Bounds x=2..8 and y=1..4 use max - range/2, producing (5,3).
         // A 10x8 display uses cell midpoint (5,4), hence origin (0,-1).
-        assert!(center_viewport(
-            &mut viewport,
-            &mut state,
-            (7, 11),
-            (10, 8),
-            &content,
-        ));
+        assert!(center_viewport(&mut viewport, (7, 11), (10, 8), &content,));
         assert_eq!(viewport.origin((7, 11)), (0, -1));
         assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
         assert_eq!(state.selection, selection);
         assert_eq!(state.grid.lines, lines);
-        assert!(!center_viewport(
-            &mut viewport,
-            &mut state,
-            (7, 11),
-            (10, 8),
-            &content,
-        ));
+        assert!(!center_viewport(&mut viewport, (7, 11), (10, 8), &content,));
     }
 
     #[test]
-    fn view_center_is_blank_noop_and_moves_far_cursor_to_wide_grapheme_start() {
+    fn view_center_is_blank_noop_and_leaves_hidden_cursor_unchanged() {
         let mut blank = state_with_rows(&["     "]);
         blank.grid.cursor_pos = Coord { line: 0, column: 4 };
         let blank_cursor = blank.grid.cursor_pos;
         let mut blank_viewport = ViewportOffset { x: 5, y: -9 };
-        assert!(!center_viewport(
-            &mut blank_viewport,
-            &mut blank,
-            (8, 12),
-            (3, 3),
-            &[],
-        ));
+        assert!(!center_viewport(&mut blank_viewport, (8, 12), (3, 3), &[],));
         assert_eq!(blank_viewport, ViewportOffset { x: 5, y: -9 });
         assert_eq!(blank.grid.cursor_pos, blank_cursor);
 
@@ -1145,20 +1251,14 @@ mod tests {
         wide.selection
             .select(Coord::default(), Coord { line: 0, column: 1 });
         let lines = wide.grid.lines.clone();
+        let selection = wide.selection;
+        let cursor = wide.grid.cursor_pos;
         let content = wide.content_cells();
         let mut viewport = ViewportOffset::default();
-        assert!(center_viewport(
-            &mut viewport,
-            &mut wide,
-            (8, 12),
-            (3, 1),
-            &content,
-        ));
-        // The content midpoint is the wide glyph's second display cell (5),
-        // while the cursor must sit on its valid grapheme start (4).
+        assert!(center_viewport(&mut viewport, (8, 12), (3, 1), &content,));
         assert_eq!(viewport.origin((8, 12)), (4, 0));
-        assert_eq!(wide.grid.cursor_pos, Coord { line: 0, column: 4 });
-        assert!(wide.selection.is_collapsed());
+        assert_eq!(wide.grid.cursor_pos, cursor);
+        assert_eq!(wide.selection, selection);
         assert_eq!(wide.grid.lines, lines);
     }
 
