@@ -256,6 +256,7 @@ pub enum Tooltip {
     UtilitiesMove,
     MoveLift,
     SelectionMoveLift,
+    LinePreview,
     ShapePreview,
     SingleReplace,
     LineStroke,
@@ -283,7 +284,7 @@ impl Tooltip {
         let primary = match self {
             Self::None => "",
             Self::Line => {
-                "Line: Shift-direction draws; Alt-direction erases; Ctrl-direction selects"
+                "Line: Space starts a preview; Shift-direction draws; Alt-direction erases; Ctrl-direction selects"
             }
             Self::Stamp => {
                 "Stamp: Space places; Shift-direction draws continuously; Alt-direction erases; Ctrl-direction selects"
@@ -303,6 +304,9 @@ impl Tooltip {
             Self::SelectionMoveLift => {
                 "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms; Esc cancels"
             }
+            Self::LinePreview => {
+                "Line preview: directions set an orthogonal segment; Space anchors; Space again confirms; Backspace removes the last anchor; Esc cancels"
+            }
             Self::ShapePreview => "Shape preview: directions resize; Space confirms; Esc cancels",
             Self::SingleReplace => "Replace selection: type one character; Esc cancels",
             Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
@@ -312,13 +316,14 @@ impl Tooltip {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
             Self::Selection => {
-                "Selection: Alt-direction lifts and moves; Ctrl-direction expands; Esc collapses; Space/Backspace clears; r then KEY replaces"
+                "Selection: Alt-direction lifts and moves; Ctrl-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
             }
         };
         if matches!(
             self,
             Self::MoveLift
                 | Self::SelectionMoveLift
+                | Self::LinePreview
                 | Self::ShapePreview
                 | Self::SingleReplace
                 | Self::LineStroke

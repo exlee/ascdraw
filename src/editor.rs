@@ -3,10 +3,9 @@ use unicode_width::UnicodeWidthStr;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::app::{CursorMode, ThemeConfig};
-use crate::drawing::{
-    CornerStyle, LineEnding, LineStyle, glyph_with_connection, glyph_with_connection_and_corner,
-    glyph_without_connection, is_line_glyph, line_ending_glyph,
-};
+#[cfg(test)]
+use crate::drawing::LineEnding;
+use crate::drawing::{LineStyle, glyph_with_connection, is_line_glyph};
 use crate::model::{Atom, Coord, Direction, Face};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
@@ -16,8 +15,12 @@ use crate::toolbar::{
     DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip, UtilityKind,
 };
 
+mod line_preview;
+mod line_tool;
 mod move_tool;
 mod utility;
+use line_preview::LinePreview;
+use line_tool::{ActiveStroke, PlacedLineMarker};
 use move_tool::MoveLift;
 
 #[derive(Debug, Clone)]
@@ -39,24 +42,11 @@ pub struct EditorState {
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
+    line_preview: Option<LinePreview>,
     shape_preview: Option<ShapePreview>,
     move_lift: Option<MoveLift>,
     single_replace_pending: bool,
     pending_prepend: (usize, usize),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActiveStroke {
-    end: Coord,
-    end_base_glyph: String,
-    moving_ending: LineEnding,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PlacedLineMarker {
-    coord: Coord,
-    ending: LineEnding,
-    base_glyph: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,23 +82,41 @@ impl EditorState {
         self.shape_preview.is_some()
     }
     pub fn edit_snapshot(&self) -> EditSnapshot {
-        let (cursor_pos, cursor_index, selection) = self.move_lift.as_ref().map_or(
-            (self.grid.cursor_pos, self.cursor_index, self.selection),
-            |lift| {
+        let (lines, cursor_pos, cursor_index, selection, line_markers) =
+            if let Some(preview) = self.line_preview.as_ref() {
                 (
-                    lift.source_cursor,
-                    lift.source_cursor_index,
-                    lift.source_selection,
+                    preview.source_lines.clone(),
+                    preview.source_cursor,
+                    preview.source_cursor_index,
+                    preview.source_selection,
+                    preview.source_markers.clone(),
                 )
-            },
-        );
+            } else {
+                let (cursor_pos, cursor_index, selection) = self.move_lift.as_ref().map_or(
+                    (self.grid.cursor_pos, self.cursor_index, self.selection),
+                    |lift| {
+                        (
+                            lift.source_cursor,
+                            lift.source_cursor_index,
+                            lift.source_selection,
+                        )
+                    },
+                );
+                (
+                    self.grid.lines.clone(),
+                    cursor_pos,
+                    cursor_index,
+                    selection,
+                    self.line_markers.clone(),
+                )
+            };
         EditSnapshot {
-            lines: self.grid.lines.clone(),
+            lines,
             cursor_pos,
             cursor_index,
             selection,
             active_stroke: self.active_stroke.clone(),
-            line_markers: self.line_markers.clone(),
+            line_markers,
         }
     }
 
@@ -119,6 +127,7 @@ impl EditorState {
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
         self.line_markers = snapshot.line_markers;
+        self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
         self.pending_prepend = (0, 0);
@@ -140,6 +149,7 @@ impl EditorState {
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
+            line_preview: None,
             shape_preview: None,
             move_lift: None,
             single_replace_pending: false,
@@ -155,6 +165,7 @@ impl EditorState {
 
     pub fn restore_menu_selections(&mut self, selections: &DurableMenuSelections) {
         self.end_stroke();
+        self.cancel_line_preview();
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
@@ -173,6 +184,9 @@ impl EditorState {
             } else {
                 Tooltip::MoveLift
             };
+        }
+        if self.line_preview.is_some() {
+            return Tooltip::LinePreview;
         }
         if self.shape_preview.is_some() {
             return Tooltip::ShapePreview;
@@ -209,6 +223,7 @@ impl EditorState {
         }
         if self.toolbar.main_mode() != old_mode {
             self.end_stroke();
+            self.cancel_line_preview();
             self.shape_preview = None;
             self.sync_cursor_mode_with_toolbar();
         }
@@ -224,6 +239,7 @@ impl EditorState {
     }
 
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
+        self.cancel_line_preview();
         if self.move_lift.is_some() {
             self.cancel_move_lift();
         }
@@ -245,6 +261,7 @@ impl EditorState {
 
     pub fn toggle_text_entry(&mut self) {
         self.end_stroke();
+        self.cancel_line_preview();
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
         if matches!(self.cursor_mode, CursorMode::Text | CursorMode::Replace) {
@@ -256,6 +273,7 @@ impl EditorState {
 
     pub fn toggle_replace_mode(&mut self) {
         self.end_stroke();
+        self.cancel_line_preview();
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = false;
         if matches!(self.cursor_mode, CursorMode::Text | CursorMode::Replace) {
@@ -273,6 +291,7 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.cancel_line_preview();
         self.toolbar.cancel_shortcut();
         self.single_replace_pending = true;
         self.cursor_mode = CursorMode::Replace;
@@ -284,6 +303,7 @@ impl EditorState {
             return false;
         }
         self.end_stroke();
+        self.cancel_line_preview();
         self.shape_preview = None;
         self.move_lift = None;
         self.collapse_selection();
@@ -293,10 +313,12 @@ impl EditorState {
 
     pub fn prepare_history_command(&mut self) -> bool {
         let changed = self.active_stroke.is_some()
+            || self.line_preview.is_some()
             || self.shape_preview.is_some()
             || self.move_lift.is_some()
             || self.toolbar.pending_shortcut().is_some();
         self.end_stroke();
+        self.cancel_line_preview();
         self.shape_preview = None;
         self.cancel_move_lift();
         self.toolbar.cancel_shortcut();
@@ -433,6 +455,7 @@ impl EditorState {
     }
 
     pub fn move_to(&mut self, coord: Coord) -> bool {
+        self.cancel_line_preview();
         self.cancel_move_lift();
         let old_line_count = self.grid.lines.len();
         let old_width = self
@@ -455,6 +478,7 @@ impl EditorState {
     /// resized.
     pub fn clamp_cursor_to_content(&mut self, coord: Coord) {
         self.end_stroke();
+        self.cancel_line_preview();
         self.shape_preview = None;
         self.move_lift = None;
         self.grid.cursor_pos = coord;
@@ -500,6 +524,9 @@ impl EditorState {
     }
 
     pub fn move_cursor(&mut self, direction: Direction) -> bool {
+        if self.line_preview.is_some() {
+            return self.move_line_preview(direction);
+        }
         let changed = self.move_or_draw(direction, false);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.end = self.grid.cursor_pos;
@@ -508,6 +535,7 @@ impl EditorState {
     }
 
     pub fn extend_selection(&mut self, direction: Direction) -> bool {
+        self.cancel_line_preview();
         self.cancel_move_lift();
         let prepended = self.prepare_adjacent(direction);
         let to = adjacent_coord(self.grid.cursor_pos, direction)
@@ -523,6 +551,7 @@ impl EditorState {
     /// lose only that edge; every other non-blank atom is replaced by
     /// display-width-preserving blank cells.
     pub fn erase(&mut self, direction: Direction) -> bool {
+        self.cancel_line_preview();
         self.cancel_move_lift();
         self.prepare_adjacent(direction);
         self.end_stroke();
@@ -580,203 +609,6 @@ impl EditorState {
         }
         self.grid.cursor_pos = coord;
         self.cursor_index = index_for_column(line, coord.column);
-    }
-
-    pub fn move_or_draw(&mut self, direction: Direction, draw: bool) -> bool {
-        let prepended = self.prepare_adjacent(direction);
-        let from = self.grid.cursor_pos;
-        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
-        let line_style = self.toolbar.line_style();
-        let corner_style = self.toolbar.line_corner();
-
-        if !draw {
-            self.end_stroke();
-            self.move_to_without_ending_stroke(to);
-            self.collapse_selection();
-            return prepended;
-        }
-
-        let continuing_stroke = self
-            .active_stroke
-            .take()
-            .filter(|stroke| stroke.end == from);
-        let (from_was_existing_line, moving_ending) =
-            if let Some(stroke) = continuing_stroke.as_ref() {
-                self.take_line_marker(from);
-                self.set_cell_contents(from, stroke.end_base_glyph.clone());
-                (true, stroke.moving_ending)
-            } else if let Some(marker) = self.take_line_marker(from) {
-                self.set_cell_contents(from, marker.base_glyph);
-                (true, marker.ending)
-            } else {
-                (
-                    self.cell_contents(from).is_some_and(is_line_glyph),
-                    self.toolbar.line_end(),
-                )
-            };
-
-        let continuing_stroke = continuing_stroke.is_some();
-        if !continuing_stroke {
-            self.active_stroke = None;
-        }
-
-        let from_base = self.add_connection(from, direction, line_style, corner_style);
-        self.move_to_without_ending_stroke(to);
-        let to_was_existing_line = self.cell_contents(to).is_some_and(is_line_glyph);
-        let Some(end_base_glyph) =
-            self.add_connection(to, direction.opposite(), line_style, corner_style)
-        else {
-            self.active_stroke = None;
-            self.collapse_selection();
-            return true;
-        };
-
-        if !continuing_stroke
-            && !from_was_existing_line
-            && let Some(from_base) = from_base
-        {
-            self.apply_line_ending(
-                from,
-                self.toolbar.line_start(),
-                direction,
-                line_style,
-                &from_base,
-            );
-        }
-        if !to_was_existing_line {
-            self.apply_line_ending(
-                to,
-                moving_ending,
-                direction.opposite(),
-                line_style,
-                &end_base_glyph,
-            );
-        }
-        self.active_stroke = Some(ActiveStroke {
-            end: to,
-            end_base_glyph,
-            moving_ending,
-        });
-        self.collapse_selection();
-        true
-    }
-
-    fn remove_connection(&mut self, coord: Coord, direction: Direction) {
-        if let Some(marker) = self.take_line_marker(coord) {
-            self.set_cell_contents(coord, marker.base_glyph);
-        }
-        let Some(line) = self.grid.lines.get_mut(coord.line) else {
-            return;
-        };
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        if column != coord.column {
-            return;
-        }
-        if let Some(atom) = line.get_mut(index)
-            && atom_width(atom) == 1
-            && let Some(glyph) = glyph_without_connection(&atom.contents, direction)
-        {
-            atom.contents = glyph.to_string();
-        }
-    }
-
-    fn cell_contents(&self, coord: Coord) -> Option<&str> {
-        let line = self.grid.lines.get(coord.line)?;
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        (column == coord.column)
-            .then(|| line.get(index))
-            .flatten()
-            .map(|atom| atom.contents.as_str())
-    }
-
-    fn take_line_marker(&mut self, coord: Coord) -> Option<PlacedLineMarker> {
-        let index = self
-            .line_markers
-            .iter()
-            .position(|marker| marker.coord == coord)?;
-        Some(self.line_markers.remove(index))
-    }
-
-    fn remove_line_marker(&mut self, coord: Coord) {
-        self.line_markers.retain(|marker| marker.coord != coord);
-    }
-
-    fn add_connection(
-        &mut self,
-        coord: Coord,
-        direction: Direction,
-        line_style: LineStyle,
-        corner_style: CornerStyle,
-    ) -> Option<String> {
-        self.remove_line_marker(coord);
-        let line = &mut self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-
-        if column < coord.column {
-            line.extend((column..coord.column).map(|_| blank_atom()));
-        }
-
-        if let Some(atom) = line.get_mut(index) {
-            if atom_width(atom) == 1
-                && let Some(glyph) = glyph_with_connection_and_corner(
-                    &atom.contents,
-                    direction,
-                    line_style,
-                    corner_style,
-                )
-            {
-                atom.contents = glyph.to_string();
-                return Some(atom.contents.clone());
-            }
-            None
-        } else {
-            let contents =
-                glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
-                    .expect("blank cells accept line connections")
-                    .to_string();
-            line.push(Atom {
-                face: Face::default(),
-                contents: contents.clone(),
-            });
-            Some(contents)
-        }
-    }
-
-    fn apply_line_ending(
-        &mut self,
-        coord: Coord,
-        ending: LineEnding,
-        connected_direction: Direction,
-        line_style: LineStyle,
-        base_glyph: &str,
-    ) {
-        self.remove_line_marker(coord);
-        self.set_cell_contents(
-            coord,
-            line_ending_glyph(ending, connected_direction, line_style).to_string(),
-        );
-        if ending != LineEnding::None {
-            self.line_markers.push(PlacedLineMarker {
-                coord,
-                ending,
-                base_glyph: base_glyph.to_string(),
-            });
-        }
-    }
-
-    fn set_cell_contents(&mut self, coord: Coord, contents: String) {
-        let line = &mut self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        if column == coord.column
-            && let Some(atom) = line.get_mut(index)
-            && atom_width(atom) == 1
-        {
-            atom.contents = contents;
-        }
-    }
-
-    pub fn end_stroke(&mut self) {
-        self.active_stroke = None;
     }
 
     pub fn clear_selection(&mut self) {
@@ -872,6 +704,7 @@ impl EditorState {
     }
 
     pub fn paste_text_rectangle(&mut self, text: &str) -> bool {
+        self.cancel_line_preview();
         let Some(rectangle) = TextRectangle::from_text(text) else {
             return false;
         };
@@ -905,6 +738,7 @@ impl EditorState {
         self.cursor_index = 0;
         self.active_stroke = None;
         self.line_markers.clear();
+        self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
@@ -928,6 +762,7 @@ impl EditorState {
         self.selection = selection;
         self.active_stroke = None;
         self.line_markers.clear();
+        self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
@@ -936,6 +771,7 @@ impl EditorState {
     }
 
     pub fn clear_canvas(&mut self) {
+        self.cancel_line_preview();
         let cursor = self.grid.cursor_pos;
         let already_blank = self.content_cells().is_empty()
             && self.line_markers.is_empty()
@@ -960,6 +796,7 @@ impl EditorState {
         self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
         self.active_stroke = None;
         self.line_markers.clear();
+        self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
@@ -987,6 +824,9 @@ impl EditorState {
 
     pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
         if let Some(lines) = self.lines_with_move_lift_preview() {
+            return Some(lines);
+        }
+        if let Some(lines) = self.lines_with_line_preview() {
             return Some(lines);
         }
         let preview = self.shape_preview?;
@@ -1124,6 +964,7 @@ impl EditorState {
         for marker in &mut self.line_markers {
             marker.coord.line = marker.coord.line.saturating_add(1);
         }
+        self.shift_line_preview(0, 1);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.anchor.line = preview.anchor.line.saturating_add(1);
             preview.end.line = preview.end.line.saturating_add(1);
@@ -1144,6 +985,7 @@ impl EditorState {
         for marker in &mut self.line_markers {
             marker.coord.column = marker.coord.column.saturating_add(1);
         }
+        self.shift_line_preview(1, 0);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.anchor.column = preview.anchor.column.saturating_add(1);
             preview.end.column = preview.end.column.saturating_add(1);

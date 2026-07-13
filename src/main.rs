@@ -40,8 +40,8 @@ use export::{ExportOutcome, NativeExportPlatform};
 use history::HistoryGroup;
 use input::{
     ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
-    history_command, move_selection_command, ordered_direction_command, pointer_position_to_coord,
-    pointer_position_to_toolbar_position, view_command,
+    history_command, line_preview_command, move_selection_command, ordered_direction_command,
+    pointer_position_to_coord, pointer_position_to_toolbar_position, view_command,
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
@@ -463,6 +463,7 @@ fn handle_clipboard_shortcut(
     platform: &mut impl export::ExportPlatform,
 ) -> Option<Result<bool>> {
     let command = clipboard_command(key, modifiers)?;
+    state.cancel_line_preview();
     state.cancel_move_lift();
     Some(match command {
         ClipboardCommand::Copy => export::copy_selection(state, platform).map(|()| false),
@@ -568,6 +569,7 @@ fn handle_editor_key_with_order(
         state.move_lift_plain_direction_confirms(),
         !state.selection.is_collapsed(),
     ) {
+        state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
         return Some(match command {
             input::MoveSelectionCommand::Begin => {
@@ -595,8 +597,23 @@ fn handle_editor_key_with_order(
         });
     }
     if let Some(command) =
+        line_preview_command(key, modifiers, state.cursor_mode, state.has_line_preview())
+    {
+        state.toolbar.cancel_shortcut();
+        return Some(match command {
+            input::LinePreviewCommand::StartOrAdvance => state.start_or_advance_line_preview(),
+            input::LinePreviewCommand::Move(direction) => state.move_line_preview(direction),
+            input::LinePreviewCommand::RemoveAnchor => state.remove_line_preview_anchor(),
+            input::LinePreviewCommand::Cancel => {
+                state.cancel_line_preview();
+                false
+            }
+        });
+    }
+    if let Some(command) =
         ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
     {
+        state.cancel_line_preview();
         state.cancel_move_lift();
         state.toolbar.cancel_shortcut();
         let mut document_changed = false;
@@ -611,6 +628,7 @@ fn handle_editor_key_with_order(
     if let Some(command @ (EditCommand::ExtendSelection(_) | EditCommand::Erase(_))) =
         edit_command(key, repeat, modifiers, state.cursor_mode)
     {
+        state.cancel_line_preview();
         state.cancel_move_lift();
         state.toolbar.cancel_shortcut();
         return Some(apply_edit_command(state, command));
@@ -619,6 +637,7 @@ fn handle_editor_key_with_order(
         return Some(false);
     }
     if let Some(command) = edit_command(key, repeat, modifiers, state.cursor_mode) {
+        state.cancel_line_preview();
         state.cancel_move_lift();
         return Some(apply_edit_command(state, command));
     }
@@ -629,6 +648,7 @@ fn handle_editor_key_with_order(
         && let Some(text) = text
         && !text.chars().all(char::is_control)
     {
+        state.cancel_line_preview();
         state.cancel_move_lift();
         state.write_text(text);
         return Some(true);
@@ -794,6 +814,266 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[test]
+    fn line_preview_anchors_orthogonal_segments_and_zero_length_space_commits() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let before = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert!(state.has_line_preview());
+        assert_eq!(state.tooltip(), crate::toolbar::Tooltip::LinePreview);
+
+        for _ in 0..2 {
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(false)
+            );
+        }
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::ArrowDown),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
+        assert!(state.content_cells().is_empty());
+        assert_eq!(
+            state
+                .lines_with_shape_preview()
+                .expect("line preview is composited")
+                .iter()
+                .flatten()
+                .filter(|atom| drawing::is_line_glyph(&atom.contents))
+                .count(),
+            3
+        );
+
+        for key in [
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::ArrowDown),
+            Key::Named(NamedKey::ArrowDown),
+            Key::Named(NamedKey::Space),
+        ] {
+            assert_eq!(
+                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty(),),
+                Some(false)
+            );
+        }
+        assert!(state.content_cells().is_empty());
+        assert_eq!(state.edit_snapshot(), before.edit);
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert!(!state.has_line_preview());
+        assert_eq!(
+            state.content_cells(),
+            [
+                Coord { line: 0, column: 0 },
+                Coord { line: 0, column: 1 },
+                Coord { line: 0, column: 2 },
+                Coord { line: 1, column: 2 },
+                Coord { line: 2, column: 2 },
+            ]
+        );
+
+        let after = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        let mut history = history::EditHistory::default();
+        assert!(history.record_change(before.clone(), &after));
+        assert_eq!(history.undo(after), Some(before));
+    }
+
+    #[test]
+    fn zero_length_line_preview_confirms_without_a_document_change() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let before = state.edit_snapshot();
+
+        for _ in 0..2 {
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::Space),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(false)
+            );
+        }
+        assert!(!state.has_line_preview());
+        assert_eq!(state.edit_snapshot(), before);
+    }
+
+    #[test]
+    fn line_preview_origin_prepend_remains_transient_until_commit() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let before = state.edit_snapshot();
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::ArrowLeft),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(state.edit_snapshot(), before);
+        assert_eq!(state.take_pending_prepend(), (1, 0));
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Escape),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert!(!state.has_line_preview());
+        assert_eq!(state.edit_snapshot(), before);
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+
+        for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::ArrowLeft)] {
+            assert!(
+                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty()).is_some()
+            );
+        }
+        assert_eq!(state.take_pending_prepend(), (1, 0));
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert!(!state.has_line_preview());
+        assert_eq!(
+            state.content_cells(),
+            [Coord { line: 0, column: 0 }, Coord { line: 0, column: 1 }]
+        );
+    }
+
+    #[test]
+    fn line_preview_backspace_removes_the_last_anchor() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+
+        for key in [
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::ArrowRight),
+            Key::Named(NamedKey::ArrowRight),
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::ArrowDown),
+            Key::Named(NamedKey::ArrowDown),
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::Backspace),
+        ] {
+            assert_eq!(
+                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty(),),
+                Some(false)
+            );
+        }
+        assert!(state.has_line_preview());
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
+        assert_eq!(
+            state
+                .lines_with_shape_preview()
+                .expect("earlier preview segment remains active")
+                .iter()
+                .flatten()
+                .filter(|atom| drawing::is_line_glyph(&atom.contents))
+                .count(),
+            3
+        );
+        assert!(state.content_cells().is_empty());
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert!(!state.has_line_preview());
+        assert_eq!(
+            state.content_cells(),
+            [
+                Coord { line: 0, column: 0 },
+                Coord { line: 0, column: 1 },
+                Coord { line: 0, column: 2 },
+            ]
+        );
     }
 
     #[test]
@@ -1203,25 +1483,26 @@ mod tests {
     }
 
     #[test]
-    fn backspace_and_line_space_route_to_the_same_literal_clear() {
+    fn backspace_still_clears_in_line_mode() {
         let config = AppConfig::default();
-        let mut cleared = Vec::new();
-        for key in [Key::Named(NamedKey::Backspace), Key::Named(NamedKey::Space)] {
-            let mut state = EditorState::new(&config.theme, "test");
-            state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
-            state.insert("│\n│\n│");
-            state.move_to(Coord { line: 1, column: 0 });
+        let mut state = EditorState::new(&config.theme, "test");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        state.insert("│\n│\n│");
+        state.move_to(Coord { line: 1, column: 0 });
 
-            assert_eq!(
-                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty()),
-                Some(true)
-            );
-            assert_eq!(line_contents(&state.grid.lines[0]), "│");
-            assert_eq!(line_contents(&state.grid.lines[1]), " ");
-            assert_eq!(line_contents(&state.grid.lines[2]), "│");
-            cleared.push(state.edit_snapshot());
-        }
-        assert_eq!(cleared[0], cleared[1]);
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Backspace),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&state.grid.lines[0]), "│");
+        assert_eq!(line_contents(&state.grid.lines[1]), " ");
+        assert_eq!(line_contents(&state.grid.lines[2]), "│");
     }
 
     #[test]

@@ -13,7 +13,8 @@ The editor opens in **Line** mode.
 | Resize the canvas selection | Ctrl + direction (add Alt for 5 steps, Shift for 10) |
 | Erase | Alt + direction (add Ctrl for 5 steps, Shift for 10) |
 | Collapse the selection to 1x1 | Escape |
-| Clear the selected rectangle | Backspace, or Space in Line mode |
+| Clear the selected rectangle | Backspace |
+| Preview an orthogonal line | Space in Line mode |
 | Replace the selected rectangle | `r`, then a character |
 | Enter or leave text entry | Return |
 | Choose a tool directly | `1`, then its displayed number |
@@ -34,7 +35,7 @@ Line mode is fully usable. Its options control:
 - **Line End** — none, six rotatable arrow styles, or any decorator
 - **Line Width** — thin, heavy, or double; **Corner** is shown only for thin lines
 
-Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw. Move without Shift to navigate.
+Press Space to start an orthogonal line preview. Move horizontally or vertically to set the current segment, then press Space to anchor it without changing the document. Press Space again without moving to commit the complete line. Backspace removes the most recently anchored segment, and Escape cancels the preview. Hold Shift while moving with the arrow keys or `h` `j` `k` `l` to draw directly. Move without Shift to navigate when no preview is active.
 
 ### Text entry
 

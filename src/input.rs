@@ -49,6 +49,45 @@ pub enum MoveSelectionCommand {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinePreviewCommand {
+    StartOrAdvance,
+    Move(Direction),
+    RemoveAnchor,
+    Cancel,
+}
+
+pub fn line_preview_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    mode: CursorMode,
+    active: bool,
+) -> Option<LinePreviewCommand> {
+    if mode != CursorMode::MoveDraw {
+        return None;
+    }
+    if active
+        && (matches!(key, Key::Named(NamedKey::Escape))
+            || (modifiers == ModifiersState::CONTROL
+                && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("g"))))
+    {
+        return Some(LinePreviewCommand::Cancel);
+    }
+    if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() {
+        return None;
+    }
+    if active && matches!(key, Key::Named(NamedKey::Backspace)) {
+        return Some(LinePreviewCommand::RemoveAnchor);
+    }
+    if is_space_key(key) {
+        return Some(LinePreviewCommand::StartOrAdvance);
+    }
+    active
+        .then(|| direction_for_key(key))
+        .flatten()
+        .map(LinePreviewCommand::Move)
+}
+
 /// Resolves the modal keyboard interaction for the Utilities Move tool.
 /// Clipboard/history shortcuts are routed before this command by the runtime.
 pub fn move_selection_command(
@@ -344,7 +383,7 @@ fn edit_command_for_key(
 
     if mode == CursorMode::MoveDraw {
         return match key {
-            _ if is_space_key(key) => Some(EditCommand::Clear),
+            _ if is_space_key(key) => None,
             _ => direction_for_key(key).map(|direction| {
                 if modifiers.shift_key() {
                     EditCommand::Draw(direction)
@@ -780,7 +819,57 @@ mod tests {
                 ModifiersState::empty(),
                 CursorMode::MoveDraw,
             ),
-            Some(EditCommand::Clear)
+            None
+        );
+    }
+
+    #[test]
+    fn line_preview_routes_space_movement_backspace_and_cancel() {
+        let mode = CursorMode::MoveDraw;
+        assert_eq!(
+            line_preview_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                mode,
+                false,
+            ),
+            Some(LinePreviewCommand::StartOrAdvance)
+        );
+        assert_eq!(
+            line_preview_command(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::empty(),
+                mode,
+                true,
+            ),
+            Some(LinePreviewCommand::Move(Direction::Right))
+        );
+        assert_eq!(
+            line_preview_command(
+                &Key::Named(NamedKey::Backspace),
+                ModifiersState::empty(),
+                mode,
+                true,
+            ),
+            Some(LinePreviewCommand::RemoveAnchor)
+        );
+        for (key, modifiers) in [
+            (Key::Named(NamedKey::Escape), ModifiersState::empty()),
+            (Key::Character("g".into()), ModifiersState::CONTROL),
+        ] {
+            assert_eq!(
+                line_preview_command(&key, modifiers, mode, true),
+                Some(LinePreviewCommand::Cancel)
+            );
+        }
+        assert_eq!(
+            line_preview_command(
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                CursorMode::Stamp,
+                false,
+            ),
+            None
         );
     }
 
