@@ -204,14 +204,16 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
     }
 
     render_canvas_selection(canvas, state, metrics, layout.grid_top);
-    render_grid_cursor(
-        canvas,
-        state,
-        lines,
-        &config.display.cursor_shape,
-        grid_layout,
-        metrics,
-    );
+    if grid_cursor_is_visible(state) {
+        render_grid_cursor(
+            canvas,
+            state,
+            lines,
+            &config.display.cursor_shape,
+            grid_layout,
+            metrics,
+        );
+    }
     canvas.restore();
     render_bottom_tooltip(canvas, state, toolbar_metrics, layout, width);
 }
@@ -829,6 +831,10 @@ fn render_grid_cursor(
             &cursor_resolved,
         ),
     }
+}
+
+fn grid_cursor_is_visible(state: &EditorState) -> bool {
+    !state.move_lift_active()
 }
 
 fn is_drawing_mode(mode: CursorMode) -> bool {
@@ -1453,7 +1459,7 @@ mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::EditorState;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::Direction;
+    use crate::model::{Coord, Direction};
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 
@@ -1465,6 +1471,20 @@ mod tests {
 
         assert_eq!(title, "ascdraw - /t");
         assert_eq!(atom_display_width(&title), 12);
+    }
+
+    #[test]
+    fn move_lift_hides_grid_cursor_until_it_ends() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+
+        assert!(grid_cursor_is_visible(&state));
+        assert!(state.begin_selected_move_lift());
+        assert!(!grid_cursor_is_visible(&state));
+        assert!(state.cancel_move_lift());
+        assert!(grid_cursor_is_visible(&state));
     }
 
     #[test]
