@@ -15,10 +15,12 @@ use crate::toolbar::{
     DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip, UtilityKind,
 };
 
+mod grid;
 mod line_preview;
 mod line_tool;
 mod move_tool;
 mod utility;
+pub(crate) use grid::{ContentIndex, compact_blank_runs, compacted_blank_runs};
 use line_preview::LinePreview;
 use line_tool::{ActiveStroke, PlacedLineMarker};
 use move_tool::MoveLift;
@@ -338,6 +340,7 @@ impl EditorState {
 
     pub fn insert(&mut self, text: &str) {
         self.end_stroke();
+        self.expose_cursor_cells();
         for part in text.split_inclusive('\n') {
             let content = part.strip_suffix('\n').unwrap_or(part);
             let atoms = UnicodeSegmentation::graphemes(content, true).map(|contents| Atom {
@@ -379,6 +382,7 @@ impl EditorState {
 
     fn replace(&mut self, text: &str) {
         self.end_stroke();
+        self.expose_cursor_cells();
         for part in text.split_inclusive('\n') {
             let content = part.strip_suffix('\n').unwrap_or(part);
             for grapheme in UnicodeSegmentation::graphemes(content, true) {
@@ -414,6 +418,7 @@ impl EditorState {
 
     pub fn backspace(&mut self) {
         self.end_stroke();
+        self.expose_cursor_cells();
         if self.cursor_index > 0 {
             self.cursor_index -= 1;
             self.grid.lines[self.grid.cursor_pos.line].remove(self.cursor_index);
@@ -429,6 +434,7 @@ impl EditorState {
 
     pub fn delete(&mut self) {
         self.end_stroke();
+        self.expose_cursor_cells();
         let line = self.grid.cursor_pos.line;
         if self.cursor_index < self.grid.lines[line].len() {
             self.grid.lines[line].remove(self.cursor_index);
@@ -442,6 +448,7 @@ impl EditorState {
 
     pub fn move_home(&mut self) {
         self.end_stroke();
+        grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], 0);
         self.cursor_index = 0;
         self.sync_cursor_column();
         self.collapse_selection();
@@ -449,6 +456,8 @@ impl EditorState {
 
     pub fn move_end(&mut self) {
         self.end_stroke();
+        let width = display_width(&self.grid.lines[self.grid.cursor_pos.line]);
+        grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], width);
         self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
         self.sync_cursor_column();
         self.collapse_selection();
@@ -511,13 +520,13 @@ impl EditorState {
             self.grid.lines.push(Vec::new());
         }
         self.grid.cursor_pos.line = coord.line;
+        grid::expose_cursor_cells(&mut self.grid.lines[coord.line], coord.column);
         self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
         let current_width = display_width(&self.grid.lines[coord.line][..self.cursor_index]);
         if current_width < coord.column && self.cursor_index == self.grid.lines[coord.line].len() {
-            self.grid.lines[coord.line].extend((current_width..coord.column).map(|_| Atom {
-                face: Face::default(),
-                contents: " ".to_string(),
-            }));
+            if let Some(blank) = grid::blank_run(coord.column - current_width) {
+                self.grid.lines[coord.line].push(blank);
+            }
             self.cursor_index = self.grid.lines[coord.line].len();
         }
         self.sync_cursor_column();
@@ -532,6 +541,67 @@ impl EditorState {
             preview.end = self.grid.cursor_pos;
         }
         changed
+    }
+
+    /// Resolves the cursor coordinate produced by a non-prepending move
+    /// without mutating the grid. Runtime navigation uses this to validate the
+    /// viewport before applying a lightweight cursor/selection update.
+    pub fn navigation_target(
+        &self,
+        direction: Direction,
+        extend_selection: bool,
+        steps: usize,
+    ) -> Option<Coord> {
+        let mut cursor = self.grid.cursor_pos;
+        for _ in 0..steps {
+            cursor = self.navigation_target_from(cursor, direction, extend_selection)?;
+        }
+        Some(cursor)
+    }
+
+    pub fn cursor_target_for_coord(&self, target: Coord) -> Coord {
+        let Some(line) = self.grid.lines.get(target.line) else {
+            return target;
+        };
+        let index = index_for_column(line, target.column);
+        if index < line.len() && !grid::is_blank_run(&line[index]) {
+            Coord {
+                line: target.line,
+                column: display_width(&line[..index]),
+            }
+        } else {
+            target
+        }
+    }
+
+    fn navigation_target_from(
+        &self,
+        cursor: Coord,
+        direction: Direction,
+        extend_selection: bool,
+    ) -> Option<Coord> {
+        if matches!(direction, Direction::Up) && cursor.line == 0
+            || matches!(direction, Direction::Left) && cursor.column == 0
+        {
+            return None;
+        }
+        let target = adjacent_coord(cursor, direction)?;
+        if extend_selection {
+            return Some(target);
+        }
+        let Some(line) = self.grid.lines.get(target.line) else {
+            return Some(target);
+        };
+        let index = index_for_column(line, target.column);
+        let column = if index < line.len() && !grid::is_blank_run(&line[index]) {
+            display_width(&line[..index])
+        } else {
+            target.column
+        };
+        Some(Coord {
+            line: target.line,
+            column,
+        })
     }
 
     pub fn extend_selection(&mut self, direction: Direction) -> bool {
@@ -594,7 +664,7 @@ impl EditorState {
                 || marker.coord.column < start_column
                 || marker.coord.column >= start_column.saturating_add(width)
         });
-        line.splice(index..=index, (0..width).map(|_| blank_atom()));
+        line.splice(index..=index, grid::blank_run(width));
         true
     }
 
@@ -604,9 +674,12 @@ impl EditorState {
         }
         let line = &mut self.grid.lines[coord.line];
         let current_width = display_width(line);
-        if current_width <= coord.column {
-            line.extend((current_width..coord.column).map(|_| blank_atom()));
+        if current_width < coord.column
+            && let Some(blank) = grid::blank_run(coord.column - current_width)
+        {
+            line.push(blank);
         }
+        grid::expose_cursor_cells(line, coord.column);
         self.grid.cursor_pos = coord;
         self.cursor_index = index_for_column(line, coord.column);
     }
@@ -837,6 +910,11 @@ impl EditorState {
         Some(lines)
     }
 
+    pub fn preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
+        self.move_lift_render_lines()
+            .or_else(|| self.line_preview_render_lines())
+    }
+
     fn shape_cells(&self, preview: ShapePreview) -> Vec<(Coord, String)> {
         let left = preview.anchor.column.min(preview.end.column);
         let right = preview.anchor.column.max(preview.end.column);
@@ -858,6 +936,12 @@ impl EditorState {
     fn collapse_selection(&mut self) {
         self.cancel_move_lift();
         self.selection.collapse(self.grid.cursor_pos);
+    }
+
+    fn expose_cursor_cells(&mut self) {
+        let line = self.grid.cursor_pos.line;
+        grid::expose_cursor_cells(&mut self.grid.lines[line], self.grid.cursor_pos.column);
+        self.cursor_index = index_for_column(&self.grid.lines[line], self.grid.cursor_pos.column);
     }
 
     fn restore_active_cursor_index(&mut self) {
@@ -923,21 +1007,12 @@ impl EditorState {
     }
 
     pub fn content_cells(&self) -> Vec<Coord> {
-        let mut cells = Vec::new();
-        for (line_index, line) in self.grid.lines.iter().enumerate() {
-            let mut column: usize = 0;
-            for atom in line {
-                let width = atom_width(atom);
-                if !atom.contents.chars().all(char::is_whitespace) {
-                    cells.extend((column..column.saturating_add(width)).map(|column| Coord {
-                        line: line_index,
-                        column,
-                    }));
-                }
-                column = column.saturating_add(width);
-            }
-        }
-        cells
+        grid::content_cells(&self.grid.lines)
+    }
+
+    pub fn compact_blank_runs_preserving_cursor(&mut self) {
+        grid::compact_blank_runs(&mut self.grid.lines);
+        self.expose_cursor_cells();
     }
 
     fn prepare_adjacent(&mut self, direction: Direction) -> bool {
@@ -1022,7 +1097,7 @@ fn blank_atom() -> Atom {
     }
 }
 
-fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
+pub(super) fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
     while lines.len() <= coord.line {
         lines.push(Vec::new());
     }
@@ -1030,6 +1105,7 @@ fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
     let boundary = coord.column.saturating_add(1);
     let mut prefix = Vec::new();
     let mut suffix = Vec::new();
+    let mut replacement_face = Face::default();
     let mut column = 0usize;
     for atom in line.iter() {
         let width = atom_width(atom);
@@ -1037,22 +1113,37 @@ fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: String) {
         if end <= coord.column {
             prefix.push(atom.clone());
         } else if column < coord.column {
-            prefix.extend((column..coord.column).map(|_| blank_atom()));
+            if grid::is_blank_run(atom) {
+                replacement_face = atom.face.clone();
+                prefix.extend(grid::blank_run_with_face(
+                    atom.face.clone(),
+                    coord.column - column,
+                ));
+            } else {
+                prefix.extend((column..coord.column).map(|_| blank_atom()));
+            }
+        } else if column == coord.column && grid::is_blank_run(atom) {
+            replacement_face = atom.face.clone();
         }
         if column >= boundary {
             suffix.push(atom.clone());
         } else if end > boundary {
-            suffix.extend((boundary..end).map(|_| blank_atom()));
+            if grid::is_blank_run(atom) {
+                suffix.extend(grid::blank_run_with_face(atom.face.clone(), end - boundary));
+            } else {
+                suffix.extend((boundary..end).map(|_| blank_atom()));
+            }
         }
         column = end;
     }
     let prefix_width = display_width(&prefix);
-    prefix.extend((prefix_width..coord.column).map(|_| blank_atom()));
+    prefix.extend(grid::blank_run(coord.column.saturating_sub(prefix_width)));
     prefix.push(Atom {
-        face: Face::default(),
+        face: replacement_face,
         contents,
     });
     prefix.extend(suffix);
+    grid::compact_blank_line(&mut prefix);
     *line = prefix;
 }
 
@@ -1899,7 +1990,8 @@ mod tests {
         let mut state = state();
         state.move_to(Coord { line: 2, column: 4 });
         assert_eq!(state.grid.lines.len(), 3);
-        assert_eq!(state.grid.lines[2].len(), 4);
+        assert_eq!(state.grid.lines[2].len(), 1);
+        assert_eq!(contents(&state.grid.lines[2]), "    ");
         assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 4 });
     }
 
@@ -2428,7 +2520,7 @@ mod tests {
                 .lines
                 .iter()
                 .flatten()
-                .all(|atom| atom.contents == " ")
+                .all(|atom| atom.contents.chars().all(char::is_whitespace))
         );
 
         state.confirm_shape();

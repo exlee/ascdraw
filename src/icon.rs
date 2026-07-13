@@ -23,4 +23,3 @@ pub fn apply_app_icon() -> Result<()> {
 pub fn apply_app_icon() -> Result<()> {
     Ok(())
 }
-

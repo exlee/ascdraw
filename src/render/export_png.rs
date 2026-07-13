@@ -88,7 +88,7 @@ pub fn render_canvas_image(
             row,
             line,
             default_face,
-            columns,
+            0..columns,
             &metrics,
             DrawOrigin::Grid { top_padding: 0 },
         );

@@ -31,6 +31,10 @@ struct PendingChange {
 }
 
 impl EditHistory {
+    pub fn has_pending_transaction(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub fn record_change(&mut self, previous: HistorySnapshot, current: &HistorySnapshot) -> bool {
         self.finish_transaction(&previous);
         if previous.edit.same_document(&current.edit) {
@@ -105,11 +109,6 @@ impl EditHistory {
     #[cfg(test)]
     pub(crate) fn lengths(&self) -> (usize, usize) {
         (self.undo.len(), self.redo.len())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_pending_transaction(&self) -> bool {
-        self.pending.is_some()
     }
 }
 

@@ -18,6 +18,7 @@ pub(super) struct MoveLift {
     rectangle: TextRectangle,
     markers: Vec<PlacedLineMarker>,
     plain_direction_confirms: bool,
+    rendered_lines: Vec<Vec<crate::model::Atom>>,
 }
 
 impl EditorState {
@@ -77,7 +78,9 @@ impl EditorState {
             rectangle,
             markers,
             plain_direction_confirms,
+            rendered_lines: Vec::new(),
         });
+        self.refresh_move_lift_render();
         true
     }
 
@@ -127,6 +130,7 @@ impl EditorState {
             .map_or(0, |line| {
                 index_for_column(line, self.grid.cursor_pos.column)
             });
+        self.refresh_move_lift_render();
         true
     }
 
@@ -180,11 +184,28 @@ impl EditorState {
     }
 
     pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<crate::model::Atom>>> {
-        let lift = self.move_lift.as_ref()?;
+        self.move_lift
+            .as_ref()
+            .map(|lift| lift.rendered_lines.clone())
+    }
+
+    pub(super) fn move_lift_render_lines(&self) -> Option<&[Vec<crate::model::Atom>]> {
+        self.move_lift
+            .as_ref()
+            .map(|lift| lift.rendered_lines.as_slice())
+    }
+
+    fn refresh_move_lift_render(&mut self) {
+        let Some(lift) = self.move_lift.as_ref() else {
+            return;
+        };
         let mut lines = self.grid.lines.clone();
         replace_range(&mut lines, lift.source_bounds, None);
         overwrite_rectangle(&mut lines, lift.origin, &lift.rectangle);
-        Some(lines)
+        self.move_lift
+            .as_mut()
+            .expect("move lift remains active while composing")
+            .rendered_lines = lines;
     }
 }
 

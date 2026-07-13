@@ -18,8 +18,9 @@ use crate::editor::EditorState;
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
-use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, layout_metrics};
+use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, layout_metrics};
 use crate::model::{Atom, Face};
+use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
 
 mod export_png;
@@ -75,8 +76,8 @@ struct FallbackFontKey {
 #[derive(Clone, Copy)]
 struct LineRenderPosition {
     pub row: usize,
-    pub start_column: usize,
-    pub max_columns: usize,
+    pub first_column: usize,
+    pub max_column: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -99,7 +100,8 @@ pub fn render(
     renderer: &Renderer,
     config: &AppConfig,
     viewport: ViewportOffset,
-) -> Result<()> {
+) -> Result<FrameTiming> {
+    let buffer_started = std::time::Instant::now();
     let size = window.inner_size();
     let width = size.width.max(1) as usize;
     let height = size.height.max(1) as usize;
@@ -109,6 +111,8 @@ pub fn render(
     let mut buffer = surface
         .buffer_mut()
         .map_err(|error| anyhow!(error.to_string()))?;
+    let buffer_acquisition = buffer_started.elapsed();
+    let raster_started = std::time::Instant::now();
     let pixels = unsafe { buffer_as_u8_mut(buffer.as_mut()) };
 
     let image_info = ImageInfo::new(
@@ -145,11 +149,17 @@ pub fn render(
             viewport,
         },
     );
+    let rasterization = raster_started.elapsed();
 
+    let presentation_started = std::time::Instant::now();
     buffer
         .present()
         .map_err(|error| anyhow!(error.to_string()))?;
-    Ok(())
+    Ok(FrameTiming {
+        buffer_acquisition,
+        rasterization,
+        presentation: presentation_started.elapsed(),
+    })
 }
 
 fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame: RenderFrame<'_>) {
@@ -174,6 +184,19 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
     render_toolbar(canvas, state, toolbar_metrics, layout.top_padding, width);
 
     let grid_layout = visible_grid_layout(layout, metrics, viewport);
+    let visible_cells = VisibleCanvasCells::from_layout(
+        layout,
+        viewport,
+        (metrics.cell_width, metrics.cell_height),
+    );
+    let first_row = usize::try_from(visible_cells.origin.1.max(0)).unwrap_or(usize::MAX);
+    let first_column = usize::try_from(visible_cells.origin.0.max(0)).unwrap_or(usize::MAX);
+    let max_row = first_row
+        .saturating_add(visible_cells.rows)
+        .saturating_add(2);
+    let max_column = first_column
+        .saturating_add(visible_cells.columns)
+        .saturating_add(2);
     canvas.save();
     canvas.clip_rect(
         Rect::from_xywh(
@@ -187,15 +210,27 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
     );
     canvas.translate((viewport.x as f32, viewport.y as f32));
 
-    let preview_lines = state.lines_with_shape_preview();
-    let lines = preview_lines.as_ref().unwrap_or(&state.grid.lines);
-    for (row_index, line) in lines.iter().take(grid_layout.rows).enumerate() {
+    let preview_lines = state
+        .preview_render_lines()
+        .is_none()
+        .then(|| state.lines_with_shape_preview())
+        .flatten();
+    let lines = state
+        .preview_render_lines()
+        .or(preview_lines.as_deref())
+        .unwrap_or(&state.grid.lines);
+    for (row_index, line) in lines
+        .iter()
+        .enumerate()
+        .skip(first_row)
+        .take(max_row.saturating_sub(first_row))
+    {
         render_line(
             canvas,
             row_index,
             line,
             &state.grid.default_face,
-            grid_layout.cols,
+            first_column..max_column,
             metrics,
             DrawOrigin::Grid {
                 top_padding: layout.grid_top,
@@ -462,7 +497,7 @@ fn render_toolbar_span_contents(
         row,
         &atoms,
         &state.grid.default_face,
-        max_columns,
+        0..max_columns,
         metrics,
         DrawOrigin::Grid {
             top_padding: top_padding + crate::toolbar::toolbar_row_offset(row, metrics.cell_height),
@@ -684,7 +719,7 @@ fn render_line(
     row: usize,
     line: &[Atom],
     default_face: &Face,
-    max_columns: usize,
+    columns: std::ops::Range<usize>,
     metrics: &CellMetrics,
     origin: DrawOrigin,
 ) {
@@ -692,8 +727,8 @@ fn render_line(
         canvas,
         LineRenderPosition {
             row,
-            start_column: 0,
-            max_columns,
+            first_column: columns.start,
+            max_column: columns.end,
         },
         line,
         default_face,
@@ -711,43 +746,88 @@ fn render_line_at(
     origin: DrawOrigin,
 ) {
     let top = line_top(origin, position.row, metrics);
-    let mut column = position.start_column;
+    let root_face = resolve_root_face(default_face, FALLBACK_FG, FALLBACK_BG);
+    let mut column = 0usize;
     let mut bg_paint = Paint::default();
     bg_paint.set_anti_alias(false);
     let mut fg_paint = Paint::default();
     fg_paint.set_anti_alias(true);
 
     for atom in line {
-        let atom_width = atom_display_width(&atom.contents);
-        if atom_width == 0 {
+        let full_width = atom_display_width(&atom.contents);
+        if full_width == 0 {
             continue;
         }
 
         let atom_start = column;
-        let atom_width = atom_width.min(position.max_columns.saturating_sub(atom_start));
-        if atom_width == 0 {
+        let atom_end = atom_start.saturating_add(full_width);
+        column = atom_end;
+        if atom_end <= position.first_column {
+            continue;
+        }
+        if atom_start >= position.max_column {
             return;
         }
-        let resolved = resolve_derived_face(default_face, &atom.face, FALLBACK_FG, FALLBACK_BG);
+        let visible_start = atom_start.max(position.first_column);
+        let visible_end = atom_end.min(position.max_column);
+        let visible_width = visible_end.saturating_sub(visible_start);
+        let resolved = if face_is_default(&atom.face) {
+            root_face
+        } else {
+            resolve_derived_face(default_face, &atom.face, FALLBACK_FG, FALLBACK_BG)
+        };
         bg_paint.set_color(resolved.bg.to_color());
         fg_paint.set_color(resolved.fg.to_color());
-        fill_cells(canvas, atom_start, top, atom_width, metrics, &bg_paint);
-        let font = font_for_face(metrics, &resolved);
+        let is_plain_blank = atom.contents.bytes().all(|byte| byte == b' ')
+            && resolved.bg == root_face.bg
+            && resolved.underline_style.is_none()
+            && !resolved.strikethrough;
+        if !is_plain_blank {
+            fill_cells(
+                canvas,
+                visible_start,
+                top,
+                visible_width,
+                metrics,
+                &bg_paint,
+            );
+        }
+        let font = (!is_plain_blank).then(|| font_for_face(metrics, &resolved));
 
+        let mut cluster_column = atom_start;
         for cluster in text_clusters(&atom.contents) {
             if cluster == "\n" {
                 continue;
             }
 
             let span = cluster_display_width(cluster);
-            draw_text_cluster(canvas, column, top, cluster, &font, metrics, &fg_paint);
-            column += span;
-            if column >= position.max_columns {
-                draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
-                return;
+            let cluster_end = cluster_column.saturating_add(span);
+            if cluster_end > position.first_column
+                && cluster_column < position.max_column
+                && let Some(font) = font.as_ref()
+            {
+                draw_text_cluster(
+                    canvas,
+                    cluster_column,
+                    top,
+                    cluster,
+                    font,
+                    metrics,
+                    &fg_paint,
+                );
             }
+            cluster_column = cluster_end;
         }
-        draw_text_decorations(canvas, atom_start, top, atom_width, metrics, &resolved);
+        if !is_plain_blank {
+            draw_text_decorations(
+                canvas,
+                visible_start,
+                top,
+                visible_width,
+                metrics,
+                &resolved,
+            );
+        }
     }
 }
 
@@ -1165,6 +1245,9 @@ fn cluster_display_width(cluster: &str) -> usize {
 }
 
 fn font_for_text(metrics: &CellMetrics, font: &Font, text: &str) -> Font {
+    if text.is_ascii() {
+        return font.clone();
+    }
     if !prefers_fallback_font(text) && typeface_supports_text(&font.typeface(), text) {
         return font.clone();
     }
@@ -1205,6 +1288,13 @@ fn font_for_text(metrics: &CellMetrics, font: &Font, text: &str) -> Font {
         .get(&key)
         .cloned()
         .unwrap_or_else(|| font.clone())
+}
+
+fn face_is_default(face: &Face) -> bool {
+    face.fg == "default"
+        && face.bg == "default"
+        && face.underline == "default"
+        && face.attributes.is_empty()
 }
 
 fn typeface_supports_text(typeface: &skia_safe::Typeface, text: &str) -> bool {
@@ -1944,7 +2034,10 @@ mod tests {
         );
 
         assert!(layout.tooltip_visible);
-        assert_eq!(layout.tooltip_top, height - metrics.cell_height - TOOLTIP_BOTTOM_PAD);
+        assert_eq!(
+            layout.tooltip_top,
+            height - metrics.cell_height - TOOLTIP_BOTTOM_PAD
+        );
         let spans = crate::toolbar::tooltip_spans(state.tooltip(), 12);
         assert_eq!(UnicodeWidthStr::width(spans[0].contents.as_str()), 12);
         let atoms = toolbar_atoms(&spans, &state);

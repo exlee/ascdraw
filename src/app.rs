@@ -365,9 +365,9 @@ mod tests {
                     color == "default"
                         || (color.len() == 7
                             && color.starts_with('#')
-                            && color[1..].chars().all(|character| {
-                                character.is_ascii_hexdigit()
-                            })),
+                            && color[1..]
+                                .chars()
+                                .all(|character| { character.is_ascii_hexdigit() })),
                     "bundled explicit color is not canonical hexadecimal: {color}"
                 );
             }

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::editor::{compact_blank_runs, compacted_blank_runs};
 use crate::model::Atom;
 use crate::toolbar::DurableMenuSelections;
 
@@ -41,7 +42,7 @@ pub fn load(path: &Path) -> Result<Option<Document>> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    let document: Document =
+    let mut document: Document =
         toml::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))?;
     anyhow::ensure!(
         document.version == DOCUMENT_VERSION,
@@ -49,6 +50,7 @@ pub fn load(path: &Path) -> Result<Option<Document>> {
         document.version,
         path.display()
     );
+    compact_blank_runs(&mut document.lines);
     Ok(Some(document))
 }
 
@@ -62,7 +64,7 @@ pub fn save(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let contents = toml::to_string_pretty(&Document::new(
-        lines.to_vec(),
+        compacted_blank_runs(lines),
         Some(menu_selections.clone()),
     ))
     .context("failed to serialize document")?;
@@ -129,6 +131,51 @@ mod tests {
 
         assert_eq!(loaded.lines, lines);
         assert_eq!(loaded.menu_selections, Some(menu_selections));
+    }
+
+    #[test]
+    fn version_one_save_compacts_styled_trailing_spaces_without_changing_text() {
+        let path = std::env::temp_dir().join(format!(
+            "ascdraw-compact-document-{}-{}.toml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let face = Face {
+            bg: "selection".to_owned(),
+            ..Face::default()
+        };
+        let lines = vec![vec![
+            Atom {
+                face: Face::default(),
+                contents: "x".to_owned(),
+            },
+            Atom {
+                face: face.clone(),
+                contents: " ".to_owned(),
+            },
+            Atom {
+                face: face.clone(),
+                contents: " ".to_owned(),
+            },
+        ]];
+        let selections = crate::toolbar::ToolbarState::default().durable_selections();
+
+        save(&path, &lines, &selections).unwrap();
+        let loaded = load(&path).unwrap().unwrap();
+        let serialized = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(path);
+
+        assert!(serialized.contains("version = 1"));
+        assert_eq!(loaded.lines[0].len(), 2);
+        assert_eq!(loaded.lines[0][1].contents, "  ");
+        assert_eq!(loaded.lines[0][1].face, face);
+        assert_eq!(
+            loaded.lines[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "x  "
+        );
     }
 
     #[test]

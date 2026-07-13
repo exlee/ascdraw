@@ -17,12 +17,13 @@ mod editor;
 mod export;
 mod face_resolution;
 mod history;
+mod icon;
 mod input;
 mod layout;
 #[cfg(target_os = "macos")]
 mod macos;
-mod icon;
 mod model;
+mod perf;
 mod render;
 mod runtime;
 pub mod selection;
@@ -45,6 +46,9 @@ use input::{
 };
 use render::{render, resize_surface};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
+#[cfg(test)]
+use runtime::input_dispatch::history_group_for_key;
+use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 use runtime::window::{
     EditorWindow, close_window, create_editor_window, handle_command, save_windows_on_exit,
 };
@@ -176,7 +180,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
-                            if let Err(error) = render(
+                            match render(
                                 &editor.window,
                                 &mut editor.surface,
                                 &editor.state,
@@ -184,17 +188,20 @@ fn try_main() -> Result<ExitCode> {
                                 &config,
                                 editor.viewport,
                             ) {
-                                log_error(format!("render failed: {error:#}"));
-                                should_close = true;
-                            } else {
-                                #[cfg(target_os = "macos")]
-                                if should_apply_app_icon {
-                                    should_apply_app_icon = false;
-                                    if let Err(error) = icon::apply_app_icon() {
-                                        log_error(format!("app icon setup failed: {error:#}"));
+                                Err(error) => {
+                                    log_error(format!("render failed: {error:#}"));
+                                    should_close = true;
+                                }
+                                Ok(timing) => {
+                                    editor.record_present(timing, Instant::now());
+                                    #[cfg(target_os = "macos")]
+                                    if should_apply_app_icon {
+                                        should_apply_app_icon = false;
+                                        if let Err(error) = icon::apply_app_icon() {
+                                            log_error(format!("app icon setup failed: {error:#}"));
+                                        }
                                     }
                                 }
-
                             }
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
@@ -324,51 +331,78 @@ fn try_main() -> Result<ExitCode> {
                                 editor.state.toolbar.cancel_shortcut();
                                 editor.apply_view_command(command);
                             } else {
-                                let history_group = history_group_for_key(
+                                let state_history_started = Instant::now();
+                                let policy = change_policy_for_key(
                                     &editor.state,
                                     &event.logical_key,
-                                    editor.modifiers,
-                                    &editor.ordered_modifiers,
-                                );
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
-                                let handled = handle_editor_key_with_order(
-                                    &mut editor.state,
-                                    &event.logical_key,
-                                    event.text.as_deref(),
                                     event.repeat,
                                     editor.modifiers,
                                     &editor.ordered_modifiers,
                                 );
-                                if let Some(document_changed) = handled {
-                                    if history_group.is_none() {
-                                        editor.state.end_stroke();
-                                    }
-                                    let document_changed = match history_group {
-                                        Some(group) => editor.finish_grouped_state_change(
-                                            previous_state,
-                                            previous_viewport,
-                                            document_changed,
-                                            group,
-                                        ),
-                                        None => editor.finish_state_change(
-                                            previous_state,
-                                            previous_viewport,
-                                            document_changed,
-                                        ),
-                                    };
-                                    if document_changed {
-                                        editor.mark_document_dirty();
-                                    }
-                                    if history_group == Some(HistoryGroup::TextSession)
-                                        && !editor.state.cursor_mode.accepts_text()
+                                let handled_navigation =
+                                    if let ChangePolicy::Navigation { command, steps } = policy
+                                        && let Some(target) =
+                                            navigation_target(&editor.state, command, steps)
+                                        && let Some(origin) = editor.navigation_origin_for(target)
                                     {
                                         editor.finish_history_transaction();
+                                        apply_navigation_command(&mut editor.state, command, steps);
+                                        editor.finish_navigation(origin);
+                                        editor.request_redraw();
+                                        perform_pending_export(editor, &config);
+                                        true
+                                    } else {
+                                        false
+                                    };
+                                if !handled_navigation {
+                                    let history_group = match policy {
+                                        ChangePolicy::GroupedEdit(group) => Some(group),
+                                        ChangePolicy::Navigation { .. } | ChangePolicy::Edit => {
+                                            None
+                                        }
+                                    };
+                                    let previous_state = editor.state.clone();
+                                    let previous_viewport = editor.viewport;
+                                    let handled = handle_editor_key_with_order(
+                                        &mut editor.state,
+                                        &event.logical_key,
+                                        event.text.as_deref(),
+                                        event.repeat,
+                                        editor.modifiers,
+                                        &editor.ordered_modifiers,
+                                    );
+                                    if let Some(document_changed) = handled {
+                                        if history_group.is_none() {
+                                            editor.state.end_stroke();
+                                        }
+                                        let document_changed = match history_group {
+                                            Some(group) => editor.finish_grouped_state_change(
+                                                previous_state,
+                                                previous_viewport,
+                                                document_changed,
+                                                group,
+                                            ),
+                                            None => editor.finish_state_change(
+                                                previous_state,
+                                                previous_viewport,
+                                                document_changed,
+                                            ),
+                                        };
+                                        if document_changed {
+                                            editor.mark_document_dirty();
+                                        }
+                                        if history_group == Some(HistoryGroup::TextSession)
+                                            && !editor.state.cursor_mode.accepts_text()
+                                        {
+                                            editor.finish_history_transaction();
+                                        }
+                                        editor.request_redraw();
                                     }
-                                    editor.request_redraw();
+                                    perform_pending_export(editor, &config);
                                 }
-                                perform_pending_export(editor, &config);
+                                editor.record_state_history_time(state_history_started);
                             }
+                            editor.finish_keypress(Instant::now());
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             #[cfg(target_os = "macos")]
@@ -416,15 +450,13 @@ fn try_main() -> Result<ExitCode> {
                                 perform_pending_export(editor, &config);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
-                                editor.state.move_to(coord);
-                                editor.finish_state_change(
-                                    previous_state,
-                                    previous_viewport,
-                                    false,
-                                );
-                                editor.request_redraw();
+                                let target = editor.state.cursor_target_for_coord(coord);
+                                if let Some(origin) = editor.navigation_origin_for(target) {
+                                    editor.finish_history_transaction();
+                                    editor.state.move_to(coord);
+                                    editor.finish_navigation(origin);
+                                    editor.request_redraw();
+                                }
                             }
                         }
                         WindowEvent::ScaleFactorChanged { .. } => {
@@ -538,18 +570,11 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
-fn history_group_for_key(
-    state: &EditorState,
-    key: &Key,
-    modifiers: ModifiersState,
-    ordered_modifiers: &input::OrderedModifierTracker,
-) -> Option<HistoryGroup> {
-    if state.cursor_mode.accepts_text() {
-        return Some(HistoryGroup::TextSession);
+fn apply_navigation_command(state: &mut EditorState, command: EditCommand, steps: usize) {
+    state.toolbar.cancel_shortcut();
+    for _ in 0..steps {
+        apply_edit_command(state, command);
     }
-    ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
-        .is_some_and(|command| matches!(command.command, EditCommand::Draw(_)))
-        .then_some(HistoryGroup::LineStroke)
 }
 
 fn handle_editor_key_with_order(
@@ -1158,6 +1183,40 @@ mod tests {
                 "mode {mode:?}"
             );
         }
+    }
+
+    #[test]
+    fn plain_and_selection_movement_use_navigation_policy() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        state.insert("abc");
+        state.move_home();
+        let key = Key::Named(NamedKey::ArrowRight);
+        let plain = input::OrderedModifierTracker::default();
+
+        assert_eq!(
+            change_policy_for_key(&state, &key, false, ModifiersState::empty(), &plain),
+            ChangePolicy::Navigation {
+                command: EditCommand::Move(Direction::Right),
+                steps: 1,
+            }
+        );
+        assert_eq!(
+            navigation_target(&state, EditCommand::Move(Direction::Right), 1),
+            Some(Coord { line: 0, column: 1 })
+        );
+        apply_navigation_command(&mut state, EditCommand::Move(Direction::Right), 1);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
+
+        let mut control = input::OrderedModifierTracker::default();
+        control.update(ModifiersState::CONTROL);
+        assert_eq!(
+            change_policy_for_key(&state, &key, false, ModifiersState::CONTROL, &control),
+            ChangePolicy::Navigation {
+                command: EditCommand::ExtendSelection(Direction::Right),
+                steps: 1,
+            }
+        );
     }
 
     #[test]

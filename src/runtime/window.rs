@@ -12,7 +12,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
-use crate::editor::EditorState;
+use crate::editor::{ContentIndex, EditorState};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
@@ -23,6 +23,7 @@ use crate::layout::{
 #[cfg(target_os = "macos")]
 use crate::macos;
 use crate::model::{Atom, Coord, Direction};
+use crate::perf::{FrameTiming, PerfDiagnostics};
 use crate::render::{Renderer, load_renderer, resize_surface};
 use crate::title_policy::window_attributes;
 use crate::user_keys::FontSizeAction;
@@ -42,6 +43,8 @@ pub struct EditorWindow {
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
     history: EditHistory,
+    content_index: ContentIndex,
+    perf: PerfDiagnostics,
     transparent_menubar: bool,
     document_path: PathBuf,
     document_dirty: bool,
@@ -101,6 +104,19 @@ impl EditorWindow {
 
     pub fn note_keypress(&mut self, now: Instant) {
         self.last_keypress = now;
+        self.perf.begin_keypress(now);
+    }
+
+    pub fn record_state_history_time(&mut self, started: Instant) {
+        self.perf.record_state_history(started.elapsed());
+    }
+
+    pub fn finish_keypress(&mut self, now: Instant) {
+        self.perf.finish_keypress(now);
+    }
+
+    pub fn record_present(&mut self, timing: FrameTiming, now: Instant) {
+        self.perf.record_present(timing, now);
     }
 
     pub fn show_export_success(&mut self, action: crate::export::ExportAction, now: Instant) {
@@ -164,8 +180,34 @@ impl EditorWindow {
     }
 
     pub fn finish_history_transaction(&mut self) -> bool {
+        if !self.history.has_pending_transaction() {
+            return false;
+        }
         let current = self.history_snapshot();
         self.history.finish_transaction(&current)
+    }
+
+    pub fn navigation_origin_for(&mut self, cursor: Coord) -> Option<(i64, i64)> {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        let layout = self.current_layout();
+        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        resolve_navigation_origin(
+            self.viewport.origin(cell_size),
+            cursor,
+            (layout.cols.max(1), layout.rows.max(1)),
+            &content,
+        )
+    }
+
+    pub fn finish_navigation(&mut self, origin: (i64, i64)) {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        if self.viewport.origin(cell_size) != origin {
+            self.viewport.set_origin(origin, cell_size);
+        }
     }
 
     pub fn redo(&mut self) -> bool {
@@ -183,6 +225,7 @@ impl EditorWindow {
 
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.state.restore_edit_snapshot(snapshot.edit);
+        self.content_index.invalidate();
         self.viewport = snapshot.viewport;
         self.ensure_cursor_in_viewport();
         self.mark_document_dirty();
@@ -230,6 +273,9 @@ impl EditorWindow {
         let menu_selections_changed =
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
         let prepend = self.state.take_pending_prepend();
+        if document_changed || prepend != (0, 0) {
+            self.content_index.invalidate();
+        }
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let toolbar_metrics = self.renderer.title_metrics(scale_factor);
@@ -282,7 +328,7 @@ impl EditorWindow {
 
         let current = self.viewport.origin(cell_size);
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.state.content_cells();
+        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
 
         if let Some(origin) = resolve_navigation_origin(
             current,
@@ -316,6 +362,7 @@ impl EditorWindow {
         }
 
         self.state = previous_state;
+        self.content_index.invalidate();
         self.viewport = previous_viewport;
         false
     }
@@ -327,6 +374,8 @@ impl EditorWindow {
     ) -> bool {
         self.menu_selections_dirty |=
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
+        self.state.compact_blank_runs_preserving_cursor();
+        self.content_index.invalidate();
         self.ensure_cursor_in_viewport();
         let previous = HistorySnapshot {
             edit: previous_state.edit_snapshot(),
@@ -348,7 +397,7 @@ impl EditorWindow {
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let current = self.viewport.origin(cell_size);
-        let content = self.state.content_cells();
+        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
         let old_cursor = self.state.grid.cursor_pos;
         let (cursor, origin) =
             normalized_cursor_and_origin(current, old_cursor, viewport_cells, &content);
@@ -374,7 +423,7 @@ impl EditorWindow {
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.state.content_cells();
+        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
         let changed = match command {
             ViewCommand::Pan(direction) => pan_viewport(
                 &mut self.viewport,
@@ -638,6 +687,7 @@ pub fn create_editor_window(
             state.restore_menu_selections(&menu_selections);
         }
     }
+    let content_index = ContentIndex::new(&state.grid.lines);
     let mut editor = EditorWindow {
         window,
         surface,
@@ -649,6 +699,8 @@ pub fn create_editor_window(
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
         history: EditHistory::default(),
+        content_index,
+        perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
         document_path: document_path.to_path_buf(),
         document_dirty: false,

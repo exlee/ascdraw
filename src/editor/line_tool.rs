@@ -2,9 +2,11 @@ use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_with_connection_and_corner, is_line_glyph,
     line_ending_glyph,
 };
-use crate::model::{Atom, Coord, Direction, Face};
+use crate::model::{Coord, Direction};
 
-use super::{EditorState, adjacent_coord, atom_width, blank_atom, index_and_column_for_coord};
+use super::{
+    EditorState, adjacent_coord, atom_width, grid, index_and_column_for_coord, replace_cell,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ActiveStroke {
@@ -122,10 +124,14 @@ impl EditorState {
     pub(super) fn cell_contents(&self, coord: Coord) -> Option<&str> {
         let line = self.grid.lines.get(coord.line)?;
         let (index, column) = index_and_column_for_coord(line, coord.column);
-        (column == coord.column)
-            .then(|| line.get(index))
-            .flatten()
-            .map(|atom| atom.contents.as_str())
+        let atom = line.get(index)?;
+        if column == coord.column {
+            Some(atom.contents.as_str())
+        } else if grid::is_blank_run(atom) {
+            Some(" ")
+        } else {
+            None
+        }
     }
 
     fn take_line_marker(&mut self, coord: Coord) -> Option<PlacedLineMarker> {
@@ -148,14 +154,14 @@ impl EditorState {
         corner_style: CornerStyle,
     ) -> Option<String> {
         self.remove_line_marker(coord);
-        let line = &mut self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
+        let (index, column) =
+            index_and_column_for_coord(&self.grid.lines[coord.line], coord.column);
 
-        if column < coord.column {
-            line.extend((column..coord.column).map(|_| blank_atom()));
+        if column < coord.column && index == self.grid.lines[coord.line].len() {
+            self.grid.lines[coord.line].extend(grid::blank_run(coord.column - column));
         }
 
-        if let Some(atom) = line.get_mut(index) {
+        if let Some(atom) = self.grid.lines[coord.line].get_mut(index) {
             if atom_width(atom) == 1
                 && let Some(glyph) = glyph_with_connection_and_corner(
                     &atom.contents,
@@ -167,16 +173,21 @@ impl EditorState {
                 atom.contents = glyph.to_string();
                 return Some(atom.contents.clone());
             }
+            if grid::is_blank_run(atom) {
+                let contents =
+                    glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
+                        .expect("blank cells accept line connections")
+                        .to_string();
+                replace_cell(&mut self.grid.lines, coord, contents.clone());
+                return Some(contents);
+            }
             None
         } else {
             let contents =
                 glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
                     .expect("blank cells accept line connections")
                     .to_string();
-            line.push(Atom {
-                face: Face::default(),
-                contents: contents.clone(),
-            });
+            replace_cell(&mut self.grid.lines, coord, contents.clone());
             Some(contents)
         }
     }
@@ -204,13 +215,16 @@ impl EditorState {
     }
 
     fn set_cell_contents(&mut self, coord: Coord, contents: String) {
-        let line = &mut self.grid.lines[coord.line];
+        let line = &self.grid.lines[coord.line];
         let (index, column) = index_and_column_for_coord(line, coord.column);
+        let blank_run = line.get(index).is_some_and(grid::is_blank_run);
         if column == coord.column
-            && let Some(atom) = line.get_mut(index)
+            && let Some(atom) = self.grid.lines[coord.line].get_mut(index)
             && atom_width(atom) == 1
         {
             atom.contents = contents;
+        } else if blank_run {
+            replace_cell(&mut self.grid.lines, coord, contents);
         }
     }
 

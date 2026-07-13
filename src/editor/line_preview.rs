@@ -13,6 +13,7 @@ pub(super) struct LinePreview {
     pub(super) source_cursor: Coord,
     pub(super) source_cursor_index: usize,
     pub(super) source_selection: CanvasSelection,
+    rendered_lines: Vec<Vec<Atom>>,
     prepended_columns: usize,
     prepended_lines: usize,
 }
@@ -54,6 +55,7 @@ impl EditorState {
                 source_cursor: self.grid.cursor_pos,
                 source_cursor_index: self.cursor_index,
                 source_selection,
+                rendered_lines: self.grid.lines.clone(),
                 prepended_columns: 0,
                 prepended_lines: 0,
             });
@@ -97,6 +99,7 @@ impl EditorState {
             .as_mut()
             .expect("preview remains active while moving")
             .end = self.grid.cursor_pos;
+        self.refresh_line_preview_render();
         prepended
     }
 
@@ -120,6 +123,7 @@ impl EditorState {
             .get(target.line)
             .map_or(0, |line| index_for_column(line, target.column));
         self.selection.collapse(target);
+        self.refresh_line_preview_render();
         false
     }
 
@@ -142,7 +146,27 @@ impl EditorState {
     }
 
     pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<Atom>>> {
-        Some(self.composed_line_preview_state()?.grid.lines)
+        self.line_preview
+            .as_ref()
+            .map(|preview| preview.rendered_lines.clone())
+    }
+
+    pub(super) fn line_preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
+        self.line_preview
+            .as_ref()
+            .map(|preview| preview.rendered_lines.as_slice())
+    }
+
+    fn refresh_line_preview_render(&mut self) {
+        let Some(lines) = self
+            .composed_line_preview_state()
+            .map(|composed| composed.grid.lines)
+        else {
+            return;
+        };
+        if let Some(preview) = self.line_preview.as_mut() {
+            preview.rendered_lines = lines;
+        }
     }
 
     fn confirm_line_preview(&mut self) -> bool {

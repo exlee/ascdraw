@@ -455,5 +455,4 @@ mod tests {
         assert_eq!(resolved.fg, Rgba::rgb(1, 2, 3));
         assert_eq!(resolved.bg, Rgba::rgb(4, 5, 6));
     }
-
 }

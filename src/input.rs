@@ -320,8 +320,9 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
-    if !mode.accepts_text() && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("i")) {
-        return Some(EditCommand::ToggleTextEntry)
+    if !mode.accepts_text() && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("i"))
+    {
+        return Some(EditCommand::ToggleTextEntry);
     }
 
     if !mode.accepts_text()
@@ -337,7 +338,7 @@ fn edit_command_for_key(
             (true, true) => EditCommand::ConfirmOrTextEntry,
             (true, false) => EditCommand::ConfirmOrReplace,
             (false, true) => EditCommand::ToggleTextEntry,
-            (false, false) =>  EditCommand::ToggleReplaceMode,
+            (false, false) => EditCommand::ToggleReplaceMode,
         });
     }
 

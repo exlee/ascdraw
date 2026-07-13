@@ -74,6 +74,12 @@ pub fn log_error(message: impl AsRef<str>) {
     eprintln!("{message}");
 }
 
+pub fn log_info(message: impl AsRef<str>) {
+    let message = message.as_ref();
+    write_entry(message);
+    eprintln!("{message}");
+}
+
 fn log_panic(info: &PanicHookInfo<'_>) {
     let thread = thread::current();
     let thread_name = thread.name().unwrap_or("<unnamed>");
