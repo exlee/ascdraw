@@ -1804,7 +1804,10 @@ mod tests {
         assert_eq!(font_for_face(&metrics, &value).is_embolden(), base.bold);
 
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        let menu_atoms = toolbar_atoms(&state.toolbar.toolbar_spans(2), &state);
+        let menu_atoms = toolbar_atoms(
+            &state.toolbar.toolbar_spans(crate::toolbar::MENU_FIRST_ROW),
+            &state,
+        );
         assert!(menu_atoms.iter().any(|atom| {
             atom.contents == "Decorators:" && atom.face.attributes.iter().any(|attr| attr == "bold")
         }));
@@ -1839,7 +1842,7 @@ mod tests {
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
         let max_columns = 100;
-        let logical_row = 3;
+        let logical_row = crate::toolbar::MENU_FIRST_ROW + 1;
         let physical_row = crate::toolbar::toolbar_content_row(logical_row);
         let spans = crate::toolbar::boxed_toolbar_spans(
             &state.toolbar.toolbar_spans(logical_row),
@@ -1938,7 +1941,11 @@ mod tests {
             option: 10,
         }));
 
-        assert_toolbar_bottom_edge_visible(&state, 4, Rgba::rgb(0xff, 0x00, 0x00));
+        assert_toolbar_bottom_edge_visible(
+            &state,
+            crate::toolbar::MENU_FIRST_ROW + 2,
+            Rgba::rgb(0xff, 0x00, 0x00),
+        );
     }
 
     #[test]
@@ -1951,14 +1958,14 @@ mod tests {
                 .handle_shortcut(&Key::Character("2".into()), ModifiersState::empty())
         );
 
-        assert_toolbar_bottom_edge_visible(&state, 3, Rgba::rgb(0x80, 0x00, 0x80));
+        assert_toolbar_bottom_edge_visible(
+            &state,
+            crate::toolbar::MENU_FIRST_ROW + 1,
+            Rgba::rgb(0x80, 0x00, 0x80),
+        );
     }
 
-    fn assert_toolbar_bottom_edge_visible(
-        state: &EditorState,
-        logical_row: usize,
-        _: Rgba,
-    ) {
+    fn assert_toolbar_bottom_edge_visible(state: &EditorState, logical_row: usize, _: Rgba) {
         let metrics = CellMetrics {
             font: Font::default(),
             cell_width: 8,
@@ -1976,7 +1983,8 @@ mod tests {
             max_columns,
         );
         let outline = toolbar_span_outlines(physical_row, &spans, state, &metrics, 0)
-            .into_iter().next()
+            .into_iter()
+            .next()
             .expect("expected toolbar outline");
 
         assert!(

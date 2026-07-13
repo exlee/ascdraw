@@ -17,7 +17,7 @@ pub const TOOLBAR_ROW_GAP: usize = 0;
 
 const MAIN_LABEL_ROW: usize = 0;
 const MAIN_SHORTCUT_ROW: usize = 1;
-const MENU_FIRST_ROW: usize = 2;
+pub(crate) const MENU_FIRST_ROW: usize = 3;
 const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
 pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
@@ -625,6 +625,9 @@ impl ToolbarState {
         if self.export_open {
             return 2;
         }
+        if self.main_mode == MainMode::Utilities {
+            return 1;
+        }
         self.layout().map_or(2, |layout| {
             1 + layout
                 .options
@@ -788,22 +791,18 @@ impl ToolbarState {
         menu_layout::hierarchical_menu_spans(self, row)
     }
 
-    fn utilities_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let label_row = row == MENU_FIRST_ROW;
+    fn utilities_menu_spans(&self, _row: usize) -> Vec<ToolbarSpan> {
         let mut spans = Vec::new();
         for (option, label) in UTILITY_OPTIONS[0].iter().enumerate() {
             if option > 0 {
-                spans.push(plain_span(GAP.to_string()));
+                spans.push(plain_span("  ".to_string()));
             }
             let action = ToolbarAction::SelectSubmenu { submenu: 0, option };
+            let label = format!("{label}:");
             spans.push(ToolbarSpan {
-                contents: if label_row {
-                    (*label).to_string()
-                } else {
-                    aligned_shortcut(option + 2, label)
-                },
-                bold_prefix: 0,
-                selected: label_row && option == self.utility_selected,
+                contents: format!("{label} {}", option + 2),
+                bold_prefix: UnicodeWidthStr::width(label.as_str()),
+                selected: option == self.utility_selected,
                 highlighted: false,
                 tooltip: false,
                 action: Some(action),
@@ -1261,13 +1260,11 @@ mod tests {
         }
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        assert!(
-            toolbar
-                .toolbar_spans(MENU_FIRST_ROW)
-                .iter()
-                .chain(toolbar.toolbar_spans(MENU_FIRST_ROW + 1).iter())
-                .all(|span| span.bold_prefix == 0)
+        assert_eq!(
+            bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
+            ["Move:", "Push:", "Pull:", "View:"]
         );
+        assert!(toolbar.toolbar_spans(MENU_FIRST_ROW + 1).is_empty());
     }
 
     #[test]
@@ -1384,20 +1381,22 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
         assert_eq!(toolbar.menu_row_count(), 4);
-        assert_eq!(toolbar.content_rows(), 6);
-        assert_eq!(toolbar.rows(), 8);
+        assert_eq!(toolbar.content_rows(), 7);
+        assert_eq!(toolbar.rows(), 9);
         assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert_eq!(toolbar.menu_row_count(), 4);
-        assert_eq!(toolbar.content_rows(), 6);
-        assert_eq!(toolbar.rows(), 8);
+        assert_eq!(toolbar.content_rows(), 7);
+        assert_eq!(toolbar.rows(), 9);
 
-        for mode in [MainMode::Shapes, MainMode::Utilities] {
-            toolbar.apply_action(ToolbarAction::SelectMain(mode));
-            assert_eq!(toolbar.menu_row_count(), 2);
-            assert_eq!(toolbar.rows(), 6);
-        }
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        assert_eq!(toolbar.menu_row_count(), 2);
+        assert_eq!(toolbar.rows(), 7);
+
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
+        assert_eq!(toolbar.menu_row_count(), 1);
+        assert_eq!(toolbar.rows(), 6);
     }
 
     #[test]
@@ -1410,6 +1409,7 @@ mod tests {
 
         assert_eq!(row(&toolbar, 0), "Mode: 1     2    3     4");
         assert_eq!(row(&toolbar, 1), "   1. Stamp Line Shape Utils");
+        assert!(row(&toolbar, 2).is_empty());
         assert_eq!(
             toolbar
                 .toolbar_spans(1)
@@ -1440,10 +1440,10 @@ mod tests {
         }));
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
-        assert!(row(&toolbar, 2).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 3).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
-        assert!(row(&toolbar, 3).contains("4. ─ ━ ═"));
-        assert!(row(&toolbar, 3).contains("5. Smooth Sharp"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smooth Sharp"));
     }
 
     #[test]
@@ -1592,18 +1592,18 @@ mod tests {
         for key in ["1", "1"] {
             press(&mut toolbar, key);
         }
-        assert!(row(&toolbar, 2).starts_with("Decorators: 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 2).contains("Arrows: 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 2).contains("Fills: 1 2 3 4"));
-        assert!(row(&toolbar, 2).contains("Blocks: 1 2 3 4 5 6 7 8 9 0"));
-        assert!(row(&toolbar, 3).contains("2.1. □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
-        assert!(row(&toolbar, 3).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
-        assert!(row(&toolbar, 3).contains("4. ░ ▒ ▓ █"));
-        assert!(row(&toolbar, 3).contains("5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
-        assert!(row(&toolbar, 4).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
-        assert!(row(&toolbar, 4).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
-        assert!(row(&toolbar, 4).contains("5.2. ▜ ▄ ▙ ▟ █"));
-        assert!(row(&toolbar, 5).contains("3.3. ↕ ↔"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).starts_with("Decorators: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Arrows: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Fills: 1 2 3 4"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Blocks: 1 2 3 4 5 6 7 8 9 0"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1. □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ░ ▒ ▓ █"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("5.2. ▜ ▄ ▙ ▟ █"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("3.3. ↕ ↔"));
     }
 
     #[test]
@@ -1831,12 +1831,17 @@ mod tests {
             toolbar.pending_shortcut(),
             Some(PendingShortcut::Category(0))
         );
-        assert!(toolbar.toolbar_spans(3).iter().any(|span| span.highlighted));
+        assert!(
+            toolbar
+                .toolbar_spans(MENU_FIRST_ROW + 1)
+                .iter()
+                .any(|span| span.highlighted)
+        );
         toolbar.cancel_shortcut();
         assert_eq!(toolbar.pending_shortcut(), None);
         assert!(
             toolbar
-                .toolbar_spans(3)
+                .toolbar_spans(MENU_FIRST_ROW + 1)
                 .iter()
                 .all(|span| !span.highlighted)
         );
@@ -2011,7 +2016,7 @@ mod tests {
         assert_eq!(toolbar.stamp(), "□");
 
         assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
-        let shortcut_spans = toolbar.toolbar_spans(3);
+        let shortcut_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
         let (column, _) = shortcut_spans
             .iter()
             .scan(0, |column, span| {
@@ -2028,7 +2033,7 @@ mod tests {
             })
             .expect("flattened Width shortcut is clickable");
         let width = toolbar
-            .action_at(3, column + 2, 80)
+            .action_at(MENU_FIRST_ROW + 1, column + 2, 80)
             .expect("flattened Width shortcut hit tests");
         assert!(toolbar.apply_action(width));
         assert_eq!(toolbar.line_style(), LineStyle::Double);
@@ -2043,29 +2048,30 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert_eq!(row(&toolbar, 2), "Move    Push    Pull    View");
-        assert_eq!(row(&toolbar, 3), "2       3       4       5   ");
-        assert!(!row(&toolbar, 2).contains("Tool"));
+        assert_eq!(
+            row(&toolbar, MENU_FIRST_ROW),
+            "Move: 2  Push: 3  Pull: 4  View: 5"
+        );
+        assert!(row(&toolbar, 2).is_empty());
+        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Tool"));
         for obsolete in ["2.1", "2.2", "2.3"] {
-            assert!(!row(&toolbar, 3).contains(obsolete));
+            assert!(!row(&toolbar, MENU_FIRST_ROW).contains(obsolete));
         }
 
         let expected = ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 2,
         };
-        for row in [2, 3] {
-            let pull_column = (0..80)
-                .find(|column| toolbar.action_at(row, *column, 80) == Some(expected))
-                .expect("Pull label and shortcut are visible and clickable");
-            let action = toolbar.action_at(row, pull_column, 80).unwrap();
-            assert!(toolbar.apply_action(action));
-        }
+        let pull_column = (0..80)
+            .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(expected))
+            .expect("Pull label and shortcut are visible and clickable");
+        let action = toolbar.action_at(MENU_FIRST_ROW, pull_column, 80).unwrap();
+        assert!(toolbar.apply_action(action));
         assert_eq!(toolbar.utility_kind(), UtilityKind::Pull);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPull);
         assert_eq!(
             toolbar
-                .toolbar_spans(2)
+                .toolbar_spans(MENU_FIRST_ROW)
                 .iter()
                 .filter(|span| span.selected)
                 .count(),
@@ -2073,7 +2079,7 @@ mod tests {
         );
         assert!(
             toolbar
-                .toolbar_spans(3)
+                .toolbar_spans(MENU_FIRST_ROW)
                 .iter()
                 .all(|span| !span.highlighted)
         );
@@ -2082,14 +2088,16 @@ mod tests {
             submenu: 0,
             option: 3,
         };
-        for row in [2, 3] {
-            let column = (0..80)
-                .find(|column| toolbar.action_at(row, *column, 80) == Some(view_action))
-                .expect("View label and shortcut are visible and clickable");
-            assert!(
-                toolbar.apply_action(toolbar.action_at(row, column, 80).expect("View hit tests"))
-            );
-        }
+        let column = (0..80)
+            .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(view_action))
+            .expect("View label and shortcut are visible and clickable");
+        assert!(
+            toolbar.apply_action(
+                toolbar
+                    .action_at(MENU_FIRST_ROW, column, 80)
+                    .expect("View hit tests")
+            )
+        );
         assert_eq!(toolbar.utility_kind(), UtilityKind::View);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesView);
 
@@ -2097,14 +2105,16 @@ mod tests {
             submenu: 0,
             option: 0,
         };
-        for row in [2, 3] {
-            let column = (0..80)
-                .find(|column| toolbar.action_at(row, *column, 80) == Some(move_action))
-                .expect("Move label and shortcut are visible and clickable");
-            assert!(
-                toolbar.apply_action(toolbar.action_at(row, column, 80).expect("Move hit tests"))
-            );
-        }
+        let column = (0..80)
+            .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(move_action))
+            .expect("Move label and shortcut are visible and clickable");
+        assert!(
+            toolbar.apply_action(
+                toolbar
+                    .action_at(MENU_FIRST_ROW, column, 80)
+                    .expect("Move hit tests")
+            )
+        );
         assert_eq!(toolbar.utility_kind(), UtilityKind::Move);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesMove);
     }
@@ -2128,7 +2138,7 @@ mod tests {
             assert_eq!(toolbar.pending_shortcut(), None);
             assert!(
                 toolbar
-                    .toolbar_spans(MENU_FIRST_ROW + 1)
+                    .toolbar_spans(MENU_FIRST_ROW)
                     .iter()
                     .all(|span| !span.highlighted)
             );
@@ -2146,11 +2156,9 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
 
         for width in 0..24 {
-            for row in MENU_FIRST_ROW..=MENU_FIRST_ROW + 1 {
-                let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
-                assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
-                assert!(spans.iter().all(|span| !span.highlighted));
-            }
+            let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width);
+            assert_eq!(UnicodeWidthStr::width(spans_text(&spans).as_str()), width);
+            assert!(spans.iter().all(|span| !span.highlighted));
         }
     }
 
@@ -2546,7 +2554,7 @@ mod tests {
         assert_eq!(toggle, ToolbarAction::ToggleExportMenu);
         assert!(toolbar.apply_action(toggle));
 
-        let clipboard_txt = boxed_toolbar_spans(&toolbar.toolbar_spans(3), width)
+        let clipboard_txt = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width)
             .iter()
             .scan(0, |column, span| {
                 let start = *column;
@@ -2558,7 +2566,9 @@ mod tests {
                     .then_some(column)
             })
             .expect("Clipboard TXT is visible");
-        let action = toolbar.action_at(3, clipboard_txt, width).unwrap();
+        let action = toolbar
+            .action_at(MENU_FIRST_ROW + 1, clipboard_txt, width)
+            .unwrap();
         assert!(toolbar.apply_action(action));
         assert_eq!(
             toolbar.take_export_action(),

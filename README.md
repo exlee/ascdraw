@@ -24,7 +24,7 @@ Lines connect automatically into corners, tees, and crossings. Starting a stroke
 
 ## Toolbar
 
-The first two rows select a tool directly: press `1`, then the number under **Line**, **Stamp**, **Shape**, or **Utils**. The option rows show hierarchical paths such as `2.1.3`: press the category number, page number, and option number in sequence. On each page, `1` through `9` select the first nine options and `0` selects the tenth.
+The first two rows select a tool directly: press `1`, then the number under **Line**, **Stamp**, **Shape**, or **Utils**. A blank row separates the mode selector from its submenu. Hierarchical option rows show paths such as `2.1.3`: press the category number, page number, and option number in sequence. Direct submenus keep each label and shortcut together, as in `Move: 2  Push: 3  Pull: 4  View: 5`. On each page, `1` through `9` select the first nine options and `0` selects the tenth.
 
 ### Line
 
