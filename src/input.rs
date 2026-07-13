@@ -272,6 +272,10 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
+    if !mode.accepts_text() && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("i")) {
+        return Some(EditCommand::ToggleTextEntry)
+    }
+
     if !mode.accepts_text()
         && modifiers.shift_key()
         && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("r"))
