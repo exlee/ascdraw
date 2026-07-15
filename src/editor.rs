@@ -382,7 +382,7 @@ impl EditorState {
             return;
         };
         self.end_stroke();
-        self.replace_selection(Some(grapheme));
+        self.replace_selection_literal(Some(grapheme));
         self.sync_cursor_mode_with_toolbar();
         self.restore_active_cursor_index();
     }
@@ -949,61 +949,12 @@ impl EditorState {
         self.cursor_index = index_for_column(&self.grid.lines[active.line], active.column);
     }
 
-    fn replace_selection(&mut self, replacement: Option<&str>) {
-        let bounds = self.selection.bounds();
-        self.cleanup_selection_connections(bounds);
-        self.replace_selection_literal(replacement);
-    }
-
     fn replace_selection_literal(&mut self, replacement: Option<&str>) {
         let bounds = self.selection.bounds();
         self.line_markers
             .retain(|marker| !bounds.contains(marker.coord));
         replace_range(&mut self.grid.lines, bounds, replacement);
         self.restore_active_cursor_index();
-    }
-
-    fn cleanup_selection_connections(&mut self, bounds: SelectionBounds) {
-        if bounds.top > 0 {
-            for column in bounds.left..=bounds.right {
-                self.remove_connection(
-                    Coord {
-                        line: bounds.top - 1,
-                        column,
-                    },
-                    Direction::Down,
-                );
-            }
-        }
-        if bounds.left > 0 {
-            for line in bounds.top..=bounds.bottom {
-                self.remove_connection(
-                    Coord {
-                        line,
-                        column: bounds.left - 1,
-                    },
-                    Direction::Right,
-                );
-            }
-        }
-        for column in bounds.left..=bounds.right {
-            self.remove_connection(
-                Coord {
-                    line: bounds.bottom.saturating_add(1),
-                    column,
-                },
-                Direction::Up,
-            );
-        }
-        for line in bounds.top..=bounds.bottom {
-            self.remove_connection(
-                Coord {
-                    line,
-                    column: bounds.right.saturating_add(1),
-                },
-                Direction::Left,
-            );
-        }
     }
 
     pub fn take_pending_prepend(&mut self) -> (usize, usize) {
@@ -1756,17 +1707,17 @@ mod tests {
     }
 
     #[test]
-    fn replacement_retains_its_existing_smart_connection_cleanup() {
+    fn single_replacement_preserves_neighboring_line_segments() {
         let mut state = state();
-        state.insert("│\n│\n│");
+        state.insert("╷\n│\n╵");
         state.move_to(Coord { line: 1, column: 0 });
 
         assert!(state.begin_single_replace());
         state.write_text("x");
 
-        assert_eq!(contents(&state.grid.lines[0]), "╵");
+        assert_eq!(contents(&state.grid.lines[0]), "╷");
         assert_eq!(contents(&state.grid.lines[1]), "x");
-        assert_eq!(contents(&state.grid.lines[2]), "╷");
+        assert_eq!(contents(&state.grid.lines[2]), "╵");
     }
 
     #[test]
