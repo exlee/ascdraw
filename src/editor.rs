@@ -54,6 +54,7 @@ pub struct EditorState {
     move_lift: Option<MoveLift>,
     single_replace_pending: bool,
     pending_prepend: (usize, usize),
+    canvas_origin: Coord,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,11 +84,14 @@ pub struct EditSnapshot {
     selection: CanvasSelection,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
+    canvas_origin: Coord,
 }
 
 impl EditSnapshot {
     pub fn same_document(&self, other: &Self) -> bool {
-        self.lines == other.lines && self.line_markers == other.line_markers
+        self.lines == other.lines
+            && self.line_markers == other.line_markers
+            && self.canvas_origin == other.canvas_origin
     }
 
     #[cfg(test)]
@@ -102,7 +106,7 @@ impl EditorState {
         self.shape_preview.is_some()
     }
     pub fn edit_snapshot(&self) -> EditSnapshot {
-        let (lines, cursor_pos, cursor_index, selection, line_markers) =
+        let (lines, cursor_pos, cursor_index, selection, line_markers, canvas_origin) =
             if let Some(preview) = self.line_preview.as_ref() {
                 (
                     preview.source_lines.clone(),
@@ -110,6 +114,7 @@ impl EditorState {
                     preview.source_cursor_index,
                     preview.source_selection,
                     preview.source_markers.clone(),
+                    preview.source_canvas_origin,
                 )
             } else {
                 let (cursor_pos, cursor_index, selection) = self.move_lift.as_ref().map_or(
@@ -128,6 +133,7 @@ impl EditorState {
                     cursor_index,
                     selection,
                     self.line_markers.clone(),
+                    self.canvas_origin,
                 )
             };
         EditSnapshot {
@@ -137,6 +143,7 @@ impl EditorState {
             selection,
             active_stroke: self.active_stroke.clone(),
             line_markers,
+            canvas_origin,
         }
     }
 
@@ -147,6 +154,7 @@ impl EditorState {
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
         self.line_markers = snapshot.line_markers;
+        self.canvas_origin = snapshot.canvas_origin;
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -174,6 +182,7 @@ impl EditorState {
             move_lift: None,
             single_replace_pending: false,
             pending_prepend: (0, 0),
+            canvas_origin: Coord::default(),
         }
     }
 
@@ -228,11 +237,9 @@ impl EditorState {
     pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
         let mut spans = self.toolbar.toolbar_spans(row);
         if row + 1 == self.toolbar.content_rows() {
+            let (x, y) = self.cursor_coordinates();
             spans.push(ToolbarSpan {
-                contents: format!(
-                    "  ({},{})",
-                    self.grid.cursor_pos.column, self.grid.cursor_pos.line
-                ),
+                contents: format!("  ({x},{y})"),
                 bold_prefix: 0,
                 selected: false,
                 highlighted: false,
@@ -242,6 +249,13 @@ impl EditorState {
             });
         }
         spans
+    }
+
+    pub fn cursor_coordinates(&self) -> (i128, i128) {
+        (
+            self.grid.cursor_pos.column as i128 - self.canvas_origin.column as i128,
+            self.grid.cursor_pos.line as i128 - self.canvas_origin.line as i128,
+        )
     }
 
     pub fn view_active(&self) -> bool {
@@ -757,6 +771,7 @@ impl EditorState {
         } else {
             lines
         };
+        self.canvas_origin = edited_content_origin(&self.grid.lines).unwrap_or_default();
         self.grid.cursor_pos = Coord::default();
         self.cursor_index = 0;
         self.active_stroke = None;
@@ -925,10 +940,12 @@ impl EditorState {
         match direction {
             Direction::Up if self.grid.cursor_pos.line == 0 => {
                 self.prepend_line();
+                self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
                 true
             }
             Direction::Left if self.grid.cursor_pos.column == 0 => {
                 self.prepend_column();
+                self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
                 true
             }
             _ => false,
@@ -973,6 +990,13 @@ impl EditorState {
         }
         self.pending_prepend.0 = self.pending_prepend.0.saturating_add(1);
     }
+}
+
+fn edited_content_origin(lines: &[Vec<Atom>]) -> Option<Coord> {
+    grid::content_cells(lines).into_iter().reduce(|origin, coord| Coord {
+        line: origin.line.min(coord.line),
+        column: origin.column.min(coord.column),
+    })
 }
 
 fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord> {
@@ -1203,13 +1227,15 @@ mod tests {
     fn cursor_coordinates_use_downward_positive_screen_coordinates() {
         let mut state = state();
 
-        for (coord, expected) in [
-            (Coord { line: 0, column: 0 }, "(0,0)"),
-            (Coord { line: 0, column: 1 }, "(1,0)"),
-            (Coord { line: 1, column: 0 }, "(0,1)"),
-            (Coord { line: 1, column: 1 }, "(1,1)"),
+        for (direction, expected) in [
+            (Direction::Right, "(1,0)"),
+            (Direction::Down, "(1,1)"),
+            (Direction::Left, "(0,1)"),
+            (Direction::Up, "(0,0)"),
+            (Direction::Left, "(-1,0)"),
+            (Direction::Up, "(-1,-1)"),
         ] {
-            state.move_to(coord);
+            state.move_cursor(direction);
             let last_row = state.toolbar.content_rows() - 1;
             let coordinate = state
                 .toolbar_spans(last_row)
@@ -1218,6 +1244,31 @@ mod tests {
                 .expect("last toolbar row contains cursor coordinates");
             assert_eq!(coordinate.contents.trim(), expected);
         }
+    }
+
+    #[test]
+    fn loaded_document_origin_is_its_top_left_edited_cell_and_stays_fixed() {
+        let mut state = state();
+        state.replace_canvas(vec![
+            Vec::new(),
+            vec![
+                blank_atom(),
+                Atom {
+                    face: Face::default(),
+                    contents: "x".to_owned(),
+                },
+            ],
+        ]);
+
+        assert_eq!(state.cursor_coordinates(), (-1, -1));
+        state.move_to(Coord { line: 1, column: 1 });
+        assert_eq!(state.cursor_coordinates(), (0, 0));
+
+        state.move_cursor(Direction::Left);
+        state.place_stamp();
+        assert_eq!(state.cursor_coordinates(), (-1, 0));
+        state.clear_selection();
+        assert_eq!(state.cursor_coordinates(), (-1, 0));
     }
 
     #[test]

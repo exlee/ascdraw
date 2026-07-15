@@ -13,6 +13,7 @@ pub(super) struct LinePreview {
     pub(super) source_cursor: Coord,
     pub(super) source_cursor_index: usize,
     pub(super) source_selection: CanvasSelection,
+    pub(super) source_canvas_origin: Coord,
     rendered_lines: Vec<Vec<Atom>>,
     prepended_columns: usize,
     prepended_lines: usize,
@@ -55,6 +56,7 @@ impl EditorState {
                 source_cursor: self.grid.cursor_pos,
                 source_cursor_index: self.cursor_index,
                 source_selection,
+                source_canvas_origin: self.canvas_origin,
                 rendered_lines: self.grid.lines.clone(),
                 prepended_columns: 0,
                 prepended_lines: 0,
@@ -136,6 +138,7 @@ impl EditorState {
         self.grid.cursor_pos = preview.source_cursor;
         self.cursor_index = preview.source_cursor_index;
         self.selection = preview.source_selection;
+        self.canvas_origin = preview.source_canvas_origin;
         true
     }
 
