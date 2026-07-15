@@ -2,6 +2,14 @@
 name = "ascdraw"
 version = "0.1.0"
 edition = "2024"
+authors = ["Przemysław Alexander Kamiński <alexander@kaminski.se>"]
+description = "A native, keyboard-first editor for drawing diagrams on a Unicode text canvas"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+repository = "https://github.com/exlee/ascdraw"
+homepage = "https://github.com/exlee/ascdraw"
+keywords = ["ascii-art", "diagram", "editor", "unicode"]
+categories = ["graphics", "text-editors"]
 
 [package.metadata.bundle]
 name = "ascdraw"

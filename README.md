@@ -17,6 +17,9 @@ result without leaving the keyboard.
 ascdraw is currently at **0.1.0**. The core editor is ready to use, while interfaces and the native
 document format should still be considered evolving.
 
+ascdraw is free software under the GNU GPL version 3 or later. Commercial licenses are also
+available for organizations that cannot use the GPL; see [Licensing](#licensing).
+
 ## Why ascdraw?
 
 - **Connected lines, not loose characters.** Strokes automatically become corners, tees, and
@@ -218,3 +221,13 @@ mise exec -- cargo clippy --all-targets --all-features --locked -- -D warnings
 
 This repository uses Jujutsu as its version-control frontend. See [`AGENTS.md`](AGENTS.md) for the
 project's change, test, symbol, and file-size conventions.
+
+## Licensing
+
+ascdraw is Copyright (C) 2026 Przemysław Alexander Kamiński vel xlii vel exlee.
+
+The source code is available under the [GNU General Public License, version 3 or later](LICENSE).
+Commercial licenses are available for use where the GPL's terms are unsuitable. For commercial
+licensing inquiries, contact [alexander@kaminski.se](mailto:alexander@kaminski.se).
+
+See [`NOTICE`](NOTICE) for the complete licensing notice.
