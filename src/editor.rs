@@ -64,16 +64,7 @@ struct ShapePreview {
 }
 
 fn reverse_theme_colors(theme: &mut ThemeConfig) {
-    for face in [
-        &mut theme.default,
-        &mut theme.selection,
-        &mut theme.selection_highlight,
-        &mut theme.cursor_drawing,
-        &mut theme.cursor_block,
-        &mut theme.tooltip,
-    ] {
-        std::mem::swap(&mut face.fg, &mut face.bg);
-    }
+    std::mem::swap(&mut theme.default.fg, &mut theme.default.bg);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1205,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn dark_mode_reverses_every_configured_face_and_reapplies_on_theme_reload() {
+    fn dark_mode_reverses_root_and_preserves_explicit_ui_accent_colors() {
         let source = ThemeConfig::default();
         let mut reversed = source.clone();
         reverse_theme_colors(&mut reversed);
@@ -1215,6 +1206,36 @@ mod tests {
         assert_eq!(state.theme, reversed);
         assert_eq!(state.grid.default_face, reversed.default);
         assert_eq!(state.grid.cursor_face, reversed.cursor_block);
+        assert_eq!(state.theme.selection, source.selection);
+        assert_eq!(state.theme.selection_highlight, source.selection_highlight);
+        assert_eq!(state.theme.cursor_drawing, source.cursor_drawing);
+        assert_eq!(state.theme.tooltip, source.tooltip);
+
+        let selection = crate::face_resolution::resolve_derived_face(
+            &state.grid.default_face,
+            &state.theme.selection,
+            crate::face_resolution::Rgba::rgb(0, 0, 0),
+            crate::face_resolution::Rgba::rgb(255, 255, 255),
+        );
+        let highlight = crate::face_resolution::resolve_derived_face(
+            &state.grid.default_face,
+            &state.theme.selection_highlight,
+            crate::face_resolution::Rgba::rgb(0, 0, 0),
+            crate::face_resolution::Rgba::rgb(255, 255, 255),
+        );
+        let tooltip = crate::face_resolution::resolve_derived_face(
+            &state.grid.default_face,
+            &state.theme.tooltip,
+            crate::face_resolution::Rgba::rgb(0, 0, 0),
+            crate::face_resolution::Rgba::rgb(255, 255, 255),
+        );
+        assert_eq!(selection.fg, crate::face_resolution::Rgba::rgb(0xff, 0, 0));
+        assert_eq!(
+            highlight.fg,
+            crate::face_resolution::Rgba::rgb(0x00, 0x4d, 0xff)
+        );
+        assert_eq!(tooltip.fg, crate::face_resolution::Rgba::rgb(0x80, 0x80, 0x80));
+        assert_eq!(tooltip.bg, crate::face_resolution::Rgba::rgb(0, 0, 0));
 
         state.apply_theme(&source);
         assert_eq!(state.theme, reversed);
