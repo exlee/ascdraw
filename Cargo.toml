@@ -12,8 +12,9 @@ keywords = ["ascii-art", "diagram", "editor", "unicode"]
 categories = ["graphics", "text-editors"]
 
 [package.metadata.bundle]
-name = "ascdraw"
+name = "Ascdraw"
 identifier = "sh.axk.ascdraw"
+icon = ["target/generated/ascdraw.icns"]
 version = "0.1.0"
 category = "Graphics and Design"
 short_description = "A native ASCII drawing editor."

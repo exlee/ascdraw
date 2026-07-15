@@ -95,6 +95,9 @@ jobs:
         if: steps.cache-cargo-bundle.outputs.cache-hit != 'true'
         run: cargo install cargo-bundle --version 0.11.0 --locked
 
+      - name: Generate macOS icon
+        run: rake icon
+
       - name: Build macOS app bundle
         run: rake bundle
 
@@ -102,20 +105,20 @@ jobs:
         run: |
           mkdir -p dist
           create-dmg \
-            --volname "ascdraw" \
+            --volname "Ascdraw" \
             --window-pos 200 120 \
             --window-size 640 420 \
             --icon-size 96 \
-            --icon "ascdraw.app" 180 170 \
+            --icon "Ascdraw.app" 180 170 \
             --app-drop-link 460 170 \
-            "dist/ascdraw.dmg" \
-            "target/release/bundle/osx/ascdraw.app"
+            "dist/Ascdraw.dmg" \
+            "target/release/bundle/osx/Ascdraw.app"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
           name: ascdraw-macos-dmg
-          path: dist/ascdraw.dmg
+          path: dist/Ascdraw.dmg
           if-no-files-found: error
 
   release-nightly:
@@ -147,4 +150,4 @@ jobs:
           files: |
             dist/ascdraw-linux/ascdraw-linux.tar.gz
             dist/ascdraw-macos/ascdraw-macos.tar.gz
-            dist/ascdraw-macos-dmg/ascdraw.dmg
+            dist/ascdraw-macos-dmg/Ascdraw.dmg
