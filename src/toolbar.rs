@@ -20,7 +20,7 @@ const MAIN_SHORTCUT_ROW: usize = 1;
 pub(crate) const MENU_FIRST_ROW: usize = 3;
 const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
-pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub fn toolbar_height(toolbar: &ToolbarState, cell_height: usize) -> usize {
     let rows = toolbar.rows();
@@ -268,10 +268,12 @@ pub enum Tooltip {
 
 impl Tooltip {
     pub fn text(self) -> String {
-        const MISC_TIP: [&str; 3] = [
+        const MISC_TIP: [&str; 5] = [
             "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
             "Direction keys are ←→↓↑ and hjkl",
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
+            "Alt-direction erases",
+            "Ctrl-direction selects",
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -284,34 +286,34 @@ impl Tooltip {
         let primary = match self {
             Self::None => "",
             Self::Line => {
-                "Line: Space starts a preview; Shift-direction draws; Alt-direction erases; Ctrl-direction selects"
+                "Line: Space starts a preview; Shift-direction draws"
             }
             Self::Stamp => {
-                "Stamp: Space places; Shift-direction draws continuously; Alt-direction erases; Ctrl-direction selects"
+                "Stamp: Space places; Shift-direction draws continuously"
             }
             Self::Shapes => {
-                "Shape: Space starts a preview; Alt-direction erases; Ctrl-direction selects"
+                "Shape: Space starts a preview"
             }
             Self::UtilitiesPush => {
-                "Push: Shift-direction inserts a blank row or column; Alt-direction erases"
+                "Push: Shift-direction inserts a blank row or column"
             }
-            Self::UtilitiesPull => "Pull: Shift-direction pulls; Alt-direction erases",
-            Self::UtilitiesView => "View: directions pan; Space centers; Alt-direction erases",
+            Self::UtilitiesPull => "Pull: Shift-direction pulls",
+            Self::UtilitiesView => "View: directions pan; Space centers",
             Self::UtilitiesMove => {
-                "Move: Space lifts the current cell; Alt-direction erases; Ctrl-direction selects"
+                "Move: Space lifts the current cell"
             }
             Self::MoveLift => "Move: directions reposition; Space/Enter confirms; Esc cancels",
             Self::SelectionMoveLift => {
-                "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms; Esc cancels"
+                "Selection move: Alt-direction repositions; Space/Enter confirms; Esc cancels"
             }
             Self::LinePreview => {
-                "Line preview: directions set an orthogonal segment; Space anchors; Space again confirms; Backspace removes the last anchor; Esc cancels"
+                "Space anchors; Space again confirms; Backspace removes the last anchor; Esc cancels"
             }
             Self::ShapePreview => "Shape preview: directions resize; Space confirms; Esc cancels",
             Self::SingleReplace => "Replace selection: type one character; Esc cancels",
             Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
-            Self::Replace => "<Shift-Ret> exits replace mode; arrows move freely over the canvas",
+            Self::Replace => "<Esc> to exit replace mode",
             Self::Export => {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
