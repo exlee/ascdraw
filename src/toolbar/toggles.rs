@@ -6,6 +6,7 @@ use super::{
 };
 
 const TOGGLE_LABELS: [&str; 3] = ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"];
+const TOGGLE_SHORTCUT_OFFSET: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -64,7 +65,7 @@ impl ToolbarState {
         }
         if row == MAIN_LABEL_ROW {
             spans.push(ToolbarSpan {
-                contents: "9. Toggles  ".to_string(),
+                contents: "9. Toggles".to_string(),
                 bold_prefix: UnicodeWidthStr::width("9."),
                 selected: self.toggles_open,
                 highlighted: false,
@@ -72,6 +73,9 @@ impl ToolbarState {
                 action: Some(ToolbarAction::ToggleTogglesMenu),
                 right_aligned: true,
             });
+            let mut gap = plain_span("  ".to_string());
+            gap.right_aligned = true;
+            spans.push(gap);
             spans.push(ToolbarSpan {
                 contents: "0. Save/Load/Export".to_string(),
                 bold_prefix: UnicodeWidthStr::width("0."),
@@ -92,7 +96,7 @@ impl ToolbarState {
                 spans.push(plain_span("  ".to_string()));
             }
             spans.push(ToolbarSpan {
-                contents: format!("{}: {}", label, index + 1),
+                contents: format!("{}: {}", label, index + TOGGLE_SHORTCUT_OFFSET),
                 bold_prefix: UnicodeWidthStr::width(label) + 1,
                 selected: self.toggles[toggle.index()],
                 highlighted: false,
@@ -137,7 +141,10 @@ impl ToolbarState {
     }
 
     pub(super) fn select_toggle_digit(&mut self, digit: usize) {
-        if let Some(toggle) = digit.checked_sub(1).and_then(|index| ToggleKind::ALL.get(index)) {
+        if let Some(toggle) = digit
+            .checked_sub(TOGGLE_SHORTCUT_OFFSET)
+            .and_then(|index| ToggleKind::ALL.get(index))
+        {
             self.toggle_setting(*toggle);
         }
     }
@@ -169,19 +176,19 @@ mod tests {
         assert_eq!(
             labels,
             [
-                ("Dark Mode: 1".to_string(), ToolbarAction::Toggle(ToggleKind::DarkMode)),
+                ("Dark Mode: 2".to_string(), ToolbarAction::Toggle(ToggleKind::DarkMode)),
                 (
-                    "Multi Color Mode: 2".to_string(),
+                    "Multi Color Mode: 3".to_string(),
                     ToolbarAction::Toggle(ToggleKind::MultiColorMode),
                 ),
                 (
-                    "Multi Layer Mode: 3".to_string(),
+                    "Multi Layer Mode: 4".to_string(),
                     ToolbarAction::Toggle(ToggleKind::MultiLayerMode),
                 ),
             ]
         );
 
-        for key in ["1", "2", "3"] {
+        for key in ["2", "3", "4"] {
             press(&mut toolbar, key);
         }
         assert!(toolbar.dark_mode());
@@ -191,6 +198,36 @@ mod tests {
             .filter(|span| span.action.is_some())
             .all(|span| span.selected));
         assert_eq!(toolbar.durable_selections(), durable);
+    }
+
+    #[test]
+    fn mode_prefix_remains_available_while_toggles_are_open() {
+        let mut toolbar = ToolbarState::default();
+
+        press(&mut toolbar, "9");
+        press(&mut toolbar, "1");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
+
+        press(&mut toolbar, "2");
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+        assert!(!toolbar.toggles_menu_open());
+    }
+
+    #[test]
+    fn toggles_selection_ends_at_the_label_before_the_unselected_gap() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::ToggleTogglesMenu);
+
+        let spans = toolbar.toolbar_spans(MAIN_LABEL_ROW);
+        let toggle = spans
+            .iter()
+            .position(|span| span.action == Some(ToolbarAction::ToggleTogglesMenu))
+            .expect("Toggles action is visible");
+        assert_eq!(spans[toggle].contents, "9. Toggles");
+        assert!(spans[toggle].selected);
+        assert_eq!(spans[toggle + 1].contents, "  ");
+        assert!(!spans[toggle + 1].selected);
+        assert_eq!(spans[toggle + 1].action, None);
     }
 
     #[test]

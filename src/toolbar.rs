@@ -492,7 +492,7 @@ impl ToolbarState {
                     .checked_sub(1)
                     .and_then(|index| MainMode::ALL.get(index))
                 {
-                    self.main_mode = *mode;
+                    self.apply_action(ToolbarAction::SelectMain(*mode));
                 }
             }
             Some(PendingShortcut::Category(category)) => {
@@ -542,6 +542,8 @@ impl ToolbarState {
             Some(PendingShortcut::Toggles) => {
                 if digit == 0 {
                     self.toggle_export_menu();
+                } else if digit == 1 {
+                    self.shortcut_prefix = Some(PendingShortcut::Mode);
                 } else {
                     self.select_toggle_digit(digit);
                 }
