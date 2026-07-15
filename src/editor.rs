@@ -1396,6 +1396,8 @@ mod tests {
             moving_ending: LineEnding::Directional(
                 crate::drawing::DirectionalEnding::BlackTriangle,
             ),
+            incoming_connection: Direction::Left,
+            end_was_existing_line: false,
         });
         state.line_markers.push(PlacedLineMarker {
             coord: Coord::default(),
@@ -2146,6 +2148,8 @@ mod tests {
             end: Coord::default(),
             end_base_glyph: "─".to_string(),
             moving_ending: LineEnding::None,
+            incoming_connection: Direction::Left,
+            end_was_existing_line: false,
         });
 
         state.prepend_line();
@@ -2268,6 +2272,37 @@ mod tests {
         assert_eq!(contents(&vertical.grid.lines[2]), "╵");
         assert_eq!(contents(&vertical.grid.lines[3]), "╵");
         assert_eq!(contents(&vertical.grid.lines[4]), "╵");
+    }
+
+    #[test]
+    fn dashed_stroke_keeps_the_incoming_direction_when_turning_left_then_up() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 3,
+        });
+        state.move_to(Coord { line: 0, column: 3 });
+
+        for direction in [
+            Direction::Down,
+            Direction::Down,
+            Direction::Left,
+            Direction::Left,
+            Direction::Left,
+            Direction::Up,
+            Direction::Up,
+        ] {
+            state.move_or_draw(direction, true);
+        }
+
+        assert_eq!(contents(&state.grid.lines[0]), "╵  △");
+        assert_eq!(contents(&state.grid.lines[1]), "╵  ╵");
+        assert_eq!(contents(&state.grid.lines[2]), "╰╴╴╯");
     }
 
     #[test]
@@ -3016,6 +3051,8 @@ mod tests {
             end: Coord { line: 0, column: 1 },
             end_base_glyph: "─".into(),
             moving_ending: LineEnding::None,
+            incoming_connection: Direction::Left,
+            end_was_existing_line: false,
         });
         state.line_markers.extend([
             PlacedLineMarker {
@@ -3080,6 +3117,8 @@ mod tests {
             end: Coord { line: 3, column: 0 },
             end_base_glyph: "D".into(),
             moving_ending: LineEnding::None,
+            incoming_connection: Direction::Up,
+            end_was_existing_line: false,
         });
         state.line_markers.extend([
             PlacedLineMarker {
@@ -3159,6 +3198,8 @@ mod tests {
             end: Coord { line: 0, column: 2 },
             end_base_glyph: "─".into(),
             moving_ending: LineEnding::None,
+            incoming_connection: Direction::Left,
+            end_was_existing_line: false,
         });
         state.line_markers.push(PlacedLineMarker {
             coord: Coord { line: 0, column: 2 },

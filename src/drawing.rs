@@ -123,6 +123,19 @@ pub fn glyph_with_connection_and_corner(
     Some(glyph_for_connections(connections, style, corner_style))
 }
 
+pub fn glyph_for_connection_pair(
+    first: Direction,
+    second: Direction,
+    style: LineStyle,
+    corner_style: CornerStyle,
+) -> char {
+    glyph_for_connections(
+        connection(first) | connection(second),
+        style,
+        corner_style,
+    )
+}
+
 pub fn glyph_without_connection(glyph: &str, direction: Direction) -> Option<char> {
     let connections = connections_for_glyph(glyph)? & !connection(direction);
     Some(glyph_for_connections(

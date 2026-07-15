@@ -1,6 +1,6 @@
 use crate::drawing::{
-    CornerStyle, LineEnding, LineStyle, glyph_with_connection_and_corner, is_line_glyph,
-    line_ending_glyph,
+    CornerStyle, LineEnding, LineStyle, glyph_for_connection_pair,
+    glyph_with_connection_and_corner, is_line_glyph, line_ending_glyph,
 };
 use crate::model::{Coord, Direction};
 
@@ -13,6 +13,8 @@ pub(super) struct ActiveStroke {
     pub(super) end: Coord,
     pub(super) end_base_glyph: String,
     pub(super) moving_ending: LineEnding,
+    pub(super) incoming_connection: Direction,
+    pub(super) end_was_existing_line: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,18 +43,23 @@ impl EditorState {
             .active_stroke
             .take()
             .filter(|stroke| stroke.end == from);
-        let (from_was_existing_line, moving_ending) =
+        let (from_was_existing_line, moving_ending, known_incoming_connection) =
             if let Some(stroke) = continuing_stroke.as_ref() {
                 self.take_line_marker(from);
                 self.set_cell_contents(from, stroke.end_base_glyph.clone());
-                (true, stroke.moving_ending)
+                (
+                    true,
+                    stroke.moving_ending,
+                    (!stroke.end_was_existing_line).then_some(stroke.incoming_connection),
+                )
             } else if let Some(marker) = self.take_line_marker(from) {
                 self.set_cell_contents(from, marker.base_glyph);
-                (true, marker.ending)
+                (true, marker.ending, None)
             } else {
                 (
                     self.cell_contents(from).is_some_and(is_line_glyph),
                     self.toolbar.line_end(),
+                    None,
                 )
             };
 
@@ -61,7 +68,13 @@ impl EditorState {
             self.active_stroke = None;
         }
 
-        let from_base = self.add_connection(from, direction, line_style, corner_style);
+        let from_base = if let Some(incoming) = known_incoming_connection {
+            let glyph = glyph_for_connection_pair(incoming, direction, line_style, corner_style);
+            self.set_cell_contents(from, glyph.to_string());
+            Some(glyph.to_string())
+        } else {
+            self.add_connection(from, direction, line_style, corner_style)
+        };
         self.move_to_without_ending_stroke(to);
         let to_was_existing_line = self.cell_contents(to).is_some_and(is_line_glyph);
         let Some(end_base_glyph) =
@@ -97,6 +110,8 @@ impl EditorState {
             end: to,
             end_base_glyph,
             moving_ending,
+            incoming_connection: direction.opposite(),
+            end_was_existing_line: to_was_existing_line,
         });
         self.collapse_selection();
         true
