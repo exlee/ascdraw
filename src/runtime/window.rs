@@ -158,6 +158,24 @@ enum MouseDragOverride {
     Space,
 }
 
+fn finish_mouse_drag_state(
+    state: &mut EditorState,
+    input_override: Option<MouseDragOverride>,
+) -> bool {
+    let changed = if state.move_lift_active() {
+        state.confirm_move_lift()
+    } else if input_override == Some(MouseDragOverride::Space)
+        && state.cursor_mode == crate::app::CursorMode::Shapes
+        && state.has_shape_preview()
+    {
+        crate::apply_edit_command(state, EditCommand::StartOrConfirmShape)
+    } else {
+        false
+    };
+    state.end_stroke();
+    changed
+}
+
 impl EditorWindow {
     pub fn window_id(&self) -> WindowId {
         self.window.id()
@@ -278,15 +296,7 @@ impl EditorWindow {
         if !drag.active {
             return;
         }
-        let finished_document = if drag.input_override == Some(MouseDragOverride::Space)
-            && self.state.cursor_mode == crate::app::CursorMode::Shapes
-            && self.state.has_shape_preview()
-        {
-            crate::apply_edit_command(&mut self.state, EditCommand::StartOrConfirmShape)
-        } else {
-            false
-        };
-        self.state.end_stroke();
+        let finished_document = finish_mouse_drag_state(&mut self.state, drag.input_override);
         let document_changed = drag.document_changed || finished_document;
         let recorded = self.finish_state_change(
             drag.previous_state,
@@ -1208,6 +1218,24 @@ mod tests {
             })
             .collect();
         state
+    }
+
+    #[test]
+    fn alt_drag_release_commits_the_move_before_a_later_click() {
+        let mut state = state_with_rows(&["abcd"]);
+        state.extend_selection(Direction::Right);
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.move_lift_active());
+        let original = state.grid.lines.clone();
+
+        assert!(finish_mouse_drag_state(&mut state, None));
+        assert!(!state.move_lift_active());
+        assert_ne!(state.grid.lines, original);
+        let committed = state.grid.lines.clone();
+
+        state.move_to(Coord { line: 0, column: 3 });
+        assert_eq!(state.grid.lines, committed);
     }
 
     #[test]
