@@ -18,12 +18,14 @@ use crate::toolbar::{
 };
 
 mod grid;
+mod layers;
 mod line_preview;
 mod line_tool;
 mod move_tool;
 mod text_tool;
 mod utility;
 pub(crate) use grid::{ContentIndex, compact_blank_runs, compacted_blank_runs};
+pub use layers::{LayerId, LayerStack, LayerSummary, LayerView};
 use line_preview::LinePreview;
 use line_tool::{ActiveStroke, PlacedLineMarker};
 use move_tool::MoveLift;
@@ -47,6 +49,7 @@ pub struct EditorState {
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
+    layers: LayerStack,
     line_preview: Option<LinePreview>,
     shape_preview: Option<ShapePreview>,
     move_lift: Option<MoveLift>,
@@ -74,6 +77,7 @@ pub struct EditSnapshot {
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
     canvas_origin: Coord,
+    layers: LayerStack,
 }
 
 impl EditSnapshot {
@@ -81,6 +85,7 @@ impl EditSnapshot {
         self.lines == other.lines
             && self.line_markers == other.line_markers
             && self.canvas_origin == other.canvas_origin
+            && self.layers == other.layers
     }
 
     #[cfg(test)]
@@ -91,6 +96,114 @@ impl EditSnapshot {
 }
 
 impl EditorState {
+    pub fn layer_summaries(&self) -> Vec<LayerSummary> {
+        self.layers.summaries()
+    }
+
+    pub fn layer_views(&self) -> Vec<LayerView<'_>> {
+        self.layers
+            .layers()
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| LayerView {
+                id: layer.id,
+                visible: layer.visible,
+                lines: if index == self.layers.active_index() {
+                    &self.grid.lines
+                } else {
+                    &layer.lines
+                },
+            })
+            .collect()
+    }
+
+    pub fn active_layer_id(&self) -> LayerId {
+        self.layers.active_id()
+    }
+
+    pub fn select_layer(&mut self, id: LayerId) -> bool {
+        let Some(index) = self.layers.index_of(id) else {
+            return false;
+        };
+        let changed = self
+            .layers
+            .activate(index, &mut self.grid.lines, &mut self.line_markers);
+        if changed {
+            self.cancel_layer_transients();
+            self.sync_cursor_to_active_layer();
+        }
+        changed
+    }
+
+    pub fn add_layer_above(&mut self, id: LayerId) -> bool {
+        let Some(index) = self.layers.index_of(id) else {
+            return false;
+        };
+        let changed = self
+            .layers
+            .add_above(index, &mut self.grid.lines, &mut self.line_markers)
+            .is_some();
+        if changed {
+            self.cancel_layer_transients();
+            self.sync_cursor_to_active_layer();
+        }
+        changed
+    }
+
+    pub fn toggle_layer_visibility(&mut self, id: LayerId) -> bool {
+        self.layers
+            .index_of(id)
+            .is_some_and(|index| self.layers.toggle_visibility(index))
+    }
+
+    pub fn move_layer_up(&mut self, id: LayerId) -> bool {
+        self.layers
+            .index_of(id)
+            .is_some_and(|index| self.layers.move_up(index))
+    }
+
+    pub fn move_layer_down(&mut self, id: LayerId) -> bool {
+        self.layers
+            .index_of(id)
+            .is_some_and(|index| self.layers.move_down(index))
+    }
+
+    pub fn delete_layer(&mut self, id: LayerId) -> bool {
+        let Some(index) = self.layers.index_of(id) else {
+            return false;
+        };
+        let changed = self
+            .layers
+            .delete(index, &mut self.grid.lines, &mut self.line_markers);
+        if changed {
+            self.cancel_layer_transients();
+            self.sync_cursor_to_active_layer();
+        }
+        changed
+    }
+
+    fn cancel_layer_transients(&mut self) {
+        self.active_stroke = None;
+        self.line_preview = None;
+        self.shape_preview = None;
+        self.move_lift = None;
+        self.single_replace_pending = false;
+    }
+
+    fn sync_cursor_to_active_layer(&mut self) {
+        while self.grid.lines.len() <= self.grid.cursor_pos.line {
+            self.grid.lines.push(Vec::new());
+        }
+        grid::expose_cursor_cells(
+            &mut self.grid.lines[self.grid.cursor_pos.line],
+            self.grid.cursor_pos.column,
+        );
+        self.cursor_index = index_for_column(
+            &self.grid.lines[self.grid.cursor_pos.line],
+            self.grid.cursor_pos.column,
+        );
+    }
+
     pub fn has_shape_preview(&self) -> bool {
         self.shape_preview.is_some()
     }
@@ -133,6 +246,7 @@ impl EditorState {
             active_stroke: self.active_stroke.clone(),
             line_markers,
             canvas_origin,
+            layers: self.layers.clone(),
         }
     }
 
@@ -144,6 +258,7 @@ impl EditorState {
         self.active_stroke = snapshot.active_stroke;
         self.line_markers = snapshot.line_markers;
         self.canvas_origin = snapshot.canvas_origin;
+        self.layers = snapshot.layers;
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -166,6 +281,7 @@ impl EditorState {
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
+            layers: LayerStack::default(),
             line_preview: None,
             shape_preview: None,
             move_lift: None,
@@ -755,6 +871,7 @@ impl EditorState {
     }
 
     pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
+        self.layers.reset();
         self.grid.lines = if lines.is_empty() {
             vec![Vec::new()]
         } else {
@@ -800,7 +917,8 @@ impl EditorState {
     pub fn clear_canvas(&mut self) {
         self.cancel_line_preview();
         let cursor = self.grid.cursor_pos;
-        let already_blank = self.content_cells().is_empty()
+        let already_blank = self.layers.layers().len() == 1
+            && self.content_cells().is_empty()
             && self.line_markers.is_empty()
             && self
                 .grid
@@ -810,6 +928,7 @@ impl EditorState {
                 .all(|atom| atom.face == Face::default());
 
         if !already_blank {
+            self.layers.reset();
             self.grid.lines = (0..=cursor.line).map(|_| Vec::new()).collect();
             self.grid.lines[cursor.line] = (0..cursor.column)
                 .map(|_| Atom {
@@ -942,6 +1061,7 @@ impl EditorState {
     }
 
     fn prepend_line(&mut self) {
+        self.layers.prepend_line_to_inactive();
         self.grid.lines.insert(0, Vec::new());
         self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
         self.selection.shift(0, 1);
@@ -960,6 +1080,7 @@ impl EditorState {
     }
 
     fn prepend_column(&mut self) {
+        self.layers.prepend_column_to_inactive();
         for line in &mut self.grid.lines {
             line.insert(0, blank_atom());
         }
@@ -1316,6 +1437,32 @@ mod tests {
                     .all(|span| !span.contents.contains("(10,8)"))
             );
         }
+    }
+
+    #[test]
+    fn layer_state_swaps_active_content_and_round_trips_in_edit_snapshots() {
+        let mut state = state();
+        state.insert("a");
+        let base = state.active_layer_id();
+
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        assert_ne!(upper, base);
+        state.insert("b");
+
+        let views = state.layer_views();
+        assert_eq!(contents(&views[0].lines[0]), "a");
+        assert_eq!(contents(&views[1].lines[0]), "b");
+
+        let snapshot = state.edit_snapshot();
+        assert!(state.select_layer(base));
+        state.insert("c");
+        assert_eq!(contents(&state.grid.lines[0]), "ac");
+
+        state.restore_edit_snapshot(snapshot);
+        assert_eq!(state.active_layer_id(), upper);
+        assert_eq!(contents(&state.grid.lines[0]), "b");
+        assert_eq!(contents(&state.layer_views()[0].lines[0]), "a");
     }
 
     #[test]
