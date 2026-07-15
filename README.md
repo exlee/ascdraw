@@ -68,6 +68,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Action | Key |
 | --- | --- |
 | Move the cursor | direction |
+| Draw with the mouse | click-drag (Line connects, Stamp paints, Shape commits on release) |
 | Draw or apply the active Line/Stamp/Utils operation | Ctrl + direction |
 | Place the active stamp | Space |
 | Grow the rectangular selection | Shift + direction |

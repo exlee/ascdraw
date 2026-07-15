@@ -121,6 +121,7 @@ pub struct EditorWindow {
     pub ordered_modifiers: OrderedModifierTracker,
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
+    mouse_drag: Option<MouseDrag>,
     pub state: EditorState,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -140,9 +141,80 @@ pub struct EditorWindow {
     cursor_hidden: bool,
 }
 
+#[derive(Debug, Clone)]
+struct MouseDrag {
+    previous_state: EditorState,
+    previous_viewport: ViewportOffset,
+    last: Coord,
+    active: bool,
+    document_changed: bool,
+}
+
 impl EditorWindow {
     pub fn window_id(&self) -> WindowId {
         self.window.id()
+    }
+
+    pub fn begin_mouse_drag(&mut self, coord: Coord) {
+        let target = self.state.cursor_target_for_coord(coord);
+        if let Some(origin) = self.navigation_origin_for(target) {
+            self.finish_history_transaction();
+            self.state.move_to(coord);
+            self.finish_navigation(origin);
+            self.request_redraw();
+        }
+        self.mouse_drag = Some(MouseDrag {
+            previous_state: self.state.clone(),
+            previous_viewport: self.viewport,
+            last: self.state.grid.cursor_pos,
+            active: false,
+            document_changed: false,
+        });
+    }
+
+    pub fn continue_mouse_drag(&mut self) {
+        let Some(coord) = self.mouse_cell else {
+            return;
+        };
+        let target = self.state.cursor_target_for_coord(coord);
+        let Some(mut drag) = self.mouse_drag.take() else {
+            return;
+        };
+        if target == drag.last {
+            self.mouse_drag = Some(drag);
+            return;
+        }
+        if !drag.active {
+            drag.document_changed |= self.state.begin_pointer_drag();
+            drag.active = true;
+        }
+        drag.document_changed |= self.state.drag_pointer_to(target);
+        drag.last = self.state.grid.cursor_pos;
+        if drag.document_changed {
+            self.content_index.invalidate();
+        }
+        self.mouse_drag = Some(drag);
+        self.request_redraw();
+    }
+
+    pub fn finish_mouse_drag(&mut self) {
+        let Some(drag) = self.mouse_drag.take() else {
+            return;
+        };
+        if !drag.active {
+            return;
+        }
+        let finished_document = self.state.finish_pointer_drag();
+        let document_changed = drag.document_changed || finished_document;
+        let recorded = self.finish_state_change(
+            drag.previous_state,
+            drag.previous_viewport,
+            document_changed,
+        );
+        if recorded {
+            self.mark_document_dirty();
+        }
+        self.request_redraw();
     }
 
     pub fn request_redraw(&self) {
@@ -827,6 +899,7 @@ pub fn create_editor_window(
         ordered_modifiers: OrderedModifierTracker::default(),
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
+        mouse_drag: None,
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),

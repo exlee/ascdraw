@@ -446,6 +446,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.state.toolbar,
                                 editor.viewport,
                             );
+                            editor.continue_mouse_drag();
                         }
                         WindowEvent::MouseInput {
                             state: ElementState::Pressed,
@@ -471,15 +472,14 @@ fn try_main() -> Result<ExitCode> {
                                 perform_pending_export(editor, &config);
                                 editor.request_redraw();
                             } else if let Some(coord) = editor.mouse_cell {
-                                let target = editor.state.cursor_target_for_coord(coord);
-                                if let Some(origin) = editor.navigation_origin_for(target) {
-                                    editor.finish_history_transaction();
-                                    editor.state.move_to(coord);
-                                    editor.finish_navigation(origin);
-                                    editor.request_redraw();
-                                }
+                                editor.begin_mouse_drag(coord);
                             }
                         }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Released,
+                            button: MouseButton::Left,
+                            ..
+                        } => editor.finish_mouse_drag(),
                         WindowEvent::ScaleFactorChanged { .. } => {
                             if let Err(error) = editor
                                 .surface
