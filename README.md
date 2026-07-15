@@ -95,6 +95,7 @@ The first key of a toolbar path selects its group. Press `1`, then a mode number
 The toolbar displays every remaining path. Short groups use `group option`; long groups add a page,
 as in `2 1 3`. On a page, `1` through `9` choose the first nine entries and `0` chooses the tenth.
 Pending prefixes are highlighted, and Escape cancels an unfinished path.
+The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and up positive.
 
 Press `9` to open Toggles. Dark Mode (`9 1`) reverses the configured foreground and background
 colors. Multi Color Mode (`9 2`) and Multi Layer Mode (`9 3`) currently expose menu state only.

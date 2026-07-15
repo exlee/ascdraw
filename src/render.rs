@@ -445,7 +445,7 @@ fn render_toolbar(
         let physical_row = crate::toolbar::toolbar_content_row(row);
         rows.push((
             physical_row,
-            crate::toolbar::boxed_toolbar_spans(&state.toolbar.toolbar_spans(row), max_columns),
+            crate::toolbar::boxed_toolbar_spans(&state.toolbar_spans(row), max_columns),
         ));
     }
 

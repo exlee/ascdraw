@@ -13,7 +13,8 @@ use crate::selection::{
     selected_text,
 };
 use crate::toolbar::{
-    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarState, Tooltip, UtilityKind,
+    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarSpan, ToolbarState, Tooltip,
+    UtilityKind,
 };
 
 mod grid;
@@ -225,6 +226,26 @@ impl EditorState {
             CursorMode::Replace => Tooltip::Replace,
             _ => self.toolbar.tooltip(),
         }
+    }
+
+    pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let mut spans = self.toolbar.toolbar_spans(row);
+        if row + 1 == self.toolbar.content_rows() {
+            spans.push(ToolbarSpan {
+                contents: format!(
+                    "  ({},{})",
+                    self.grid.cursor_pos.column,
+                    -(self.grid.cursor_pos.line as i128)
+                ),
+                bold_prefix: 0,
+                selected: false,
+                highlighted: false,
+                tooltip: false,
+                action: None,
+                right_aligned: true,
+            });
+        }
+        spans
     }
 
     pub fn view_active(&self) -> bool {
@@ -1180,6 +1201,32 @@ mod tests {
 
         assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode)));
         assert_eq!(state.theme, source);
+    }
+
+    #[test]
+    fn cursor_coordinates_are_right_aligned_on_the_last_toolbar_content_row() {
+        let mut state = state();
+        state.move_to(Coord {
+            line: 8,
+            column: 10,
+        });
+
+        for action in [None, Some(ToolbarAction::ToggleExportMenu)] {
+            if let Some(action) = action {
+                assert!(state.apply_toolbar_action(action));
+            }
+            let last_row = state.toolbar.content_rows() - 1;
+            let coordinate = state
+                .toolbar_spans(last_row)
+                .into_iter()
+                .find(|span| span.right_aligned && span.contents.contains('('))
+                .expect("last toolbar row contains cursor coordinates");
+            assert_eq!(coordinate.contents.trim(), "(10,-8)");
+            assert!(state
+                .toolbar_spans(last_row - 1)
+                .iter()
+                .all(|span| !span.contents.contains("(10,-8)")));
+        }
     }
 
     #[test]
