@@ -274,14 +274,13 @@ impl Tooltip {
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
             "Alt-direction erases",
             "Ctrl-direction selects",
+            "Esc cancels most modes",
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as usize;
 
-        let selector = (timestamp / TOOLTIP_ROTATION_INTERVAL.as_secs() as usize) % MISC_TIP.len();
-        let misc = MISC_TIP[selector];
 
         let primary = match self {
             Self::None => "",
@@ -302,15 +301,15 @@ impl Tooltip {
             Self::UtilitiesMove => {
                 "Move: Space lifts the current cell"
             }
-            Self::MoveLift => "Move: directions reposition; Space/Enter confirms; Esc cancels",
+            Self::MoveLift => "Space/Enter confirms",
             Self::SelectionMoveLift => {
-                "Selection move: Alt-direction repositions; Space/Enter confirms; Esc cancels"
+                "Selection move: Alt-direction repositions; Space/Enter confirms"
             }
             Self::LinePreview => {
-                "Space anchors; Space again confirms; Backspace removes the last anchor; Esc cancels"
+                "Space anchors; Space again confirms; Backspace removes the last anchor"
             }
-            Self::ShapePreview => "Shape preview: directions resize; Space confirms; Esc cancels",
-            Self::SingleReplace => "Replace selection: type one character; Esc cancels",
+            Self::ShapePreview => "Shape preview: Space confirms",
+            Self::SingleReplace => "Replace selection: type one character",
             Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Esc> to exit replace mode",
@@ -334,7 +333,16 @@ impl Tooltip {
         ) {
             return primary.to_string();
         }
-        let secondary = if primary.is_empty() { "" } else { "; " };
+        let selector = (timestamp / TOOLTIP_ROTATION_INTERVAL.as_secs() as usize) % MISC_TIP.len();
+        let random_tip = MISC_TIP[selector];
+        let misc = if primary.len() + random_tip.len() > 80 {
+            ""
+        } else {
+            random_tip
+        };
+        let secondary = if primary.is_empty() || misc.is_empty() { "" } else { "; " };
+
+
 
         format!("{primary}{secondary}{misc}")
     }
