@@ -41,7 +41,11 @@ pub fn change_policy_for_key(
         && let Some(command @ (EditCommand::Move(_) | EditCommand::ExtendSelection(_))) =
             edit_command(key, repeat, modifiers, state.cursor_mode)
     {
-        return ChangePolicy::Navigation { command, steps: 1 };
+        return if matches!(command, EditCommand::ExtendSelection(_)) {
+            ChangePolicy::Edit
+        } else {
+            ChangePolicy::Navigation { command, steps: 1 }
+        };
     }
     if let Some(group) = history_group_for_key(state, key, modifiers, ordered_modifiers) {
         return ChangePolicy::GroupedEdit(group);

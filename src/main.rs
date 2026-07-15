@@ -684,6 +684,9 @@ fn handle_editor_key_with_order(
         state.cancel_line_preview();
         state.cancel_move_lift();
         state.toolbar.cancel_shortcut();
+        if matches!(command, EditCommand::ExtendSelection(_)) && state.cursor_mode.accepts_text() {
+            state.cancel_text_entry();
+        }
         return Some(apply_edit_command(state, command));
     }
     if state.handle_toolbar_shortcut(key, modifiers) {
@@ -1245,6 +1248,47 @@ mod tests {
                 steps: 1,
             }
         );
+    }
+
+    #[test]
+    fn shift_arrow_leaves_text_modes_and_starts_selection() {
+        let config = AppConfig::default();
+        for mode in [CursorMode::Text, CursorMode::Replace] {
+            let mut state = EditorState::new(&config.theme, "test");
+            state.move_to(Coord { line: 1, column: 1 });
+            state.cursor_mode = mode;
+            let origin = state.grid.cursor_pos;
+
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::SHIFT,
+                ),
+                Some(false)
+            );
+
+            assert_eq!(state.cursor_mode, CursorMode::Stamp);
+            assert_eq!(state.selection.anchor(), origin);
+            assert_eq!(state.selection.active(), Coord { line: 1, column: 2 });
+        }
+
+        let mut pending = EditorState::new(&config.theme, "test");
+        assert!(pending.begin_single_replace());
+        assert_eq!(
+            handle_editor_key(
+                &mut pending,
+                &Key::Named(NamedKey::ArrowDown),
+                None,
+                false,
+                ModifiersState::SHIFT,
+            ),
+            Some(false)
+        );
+        assert_eq!(pending.cursor_mode, CursorMode::Stamp);
+        assert_eq!(pending.selection.active(), Coord { line: 1, column: 0 });
     }
 
     #[test]

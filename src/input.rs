@@ -350,13 +350,16 @@ fn edit_command_for_key(
         };
     }
 
-    if !mode.accepts_text()
-        && modifiers.shift_key()
+    if modifiers.shift_key()
         && !modifiers.alt_key()
         && !modifiers.control_key()
         && !modifiers.super_key()
     {
-        return direction_for_key(key).map(EditCommand::ExtendSelection);
+        return if mode.accepts_text() {
+            arrow_direction_for_key(key).map(EditCommand::ExtendSelection)
+        } else {
+            direction_for_key(key).map(EditCommand::ExtendSelection)
+        };
     }
 
     if !mode.accepts_text()
@@ -953,9 +956,17 @@ mod tests {
             }
         }
         for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
-            assert_ne!(
-                edit_command_for_key(&Key::Character("h".into()), ModifiersState::SHIFT, mode,),
+            assert_eq!(
+                edit_command_for_key(
+                    &Key::Named(NamedKey::ArrowLeft),
+                    ModifiersState::SHIFT,
+                    mode,
+                ),
                 Some(EditCommand::ExtendSelection(Direction::Left))
+            );
+            assert_eq!(
+                edit_command_for_key(&Key::Character("H".into()), ModifiersState::SHIFT, mode,),
+                None
             );
             assert_ne!(
                 edit_command_for_key(&Key::Character("h".into()), ModifiersState::ALT, mode,),
