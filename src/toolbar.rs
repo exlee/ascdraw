@@ -11,7 +11,9 @@ use crate::{
 
 mod menu_layout;
 mod selections;
+mod toggles;
 pub use selections::DurableMenuSelections;
+pub use toggles::ToggleKind;
 
 pub const TOOLBAR_ROW_GAP: usize = 0;
 
@@ -263,6 +265,7 @@ pub enum Tooltip {
     Text,
     Replace,
     Export,
+    Toggles,
     Selection,
 }
 
@@ -316,6 +319,7 @@ impl Tooltip {
             Self::Export => {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
+            Self::Toggles => "Toggles: Dark Mode reverses theme colors",
             Self::Selection => {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
             }
@@ -329,6 +333,7 @@ impl Tooltip {
                 | Self::SingleReplace
                 | Self::LineStroke
                 | Self::Export
+                | Self::Toggles
                 | Self::Selection
         ) {
             return primary.to_string();
@@ -356,6 +361,7 @@ pub enum PendingShortcut {
     ExportCategory,
     ExportOption(usize),
     ExportFlat(usize),
+    Toggles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +380,8 @@ pub struct ToolbarState {
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
     export_open: bool,
+    toggles_open: bool,
+    toggles: [bool; 3],
     active_export_category: Option<usize>,
     pending_export_action: Option<ExportAction>,
     successful_export_action: Option<ExportAction>,
@@ -395,6 +403,8 @@ pub enum ToolbarAction {
     SelectMain(MainMode),
     SelectSubmenu { submenu: usize, option: usize },
     ToggleExportMenu,
+    ToggleTogglesMenu,
+    Toggle(ToggleKind),
     SelectExportCategory(usize),
     RunExport(ExportAction),
 }
@@ -429,9 +439,10 @@ struct MenuLayout<'a> {
 impl ToolbarState {
     pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
         if matches!(key, Key::Named(NamedKey::Escape))
-            && (self.shortcut_prefix.is_some() || self.export_open)
+            && (self.shortcut_prefix.is_some() || self.export_open || self.toggles_open)
         {
             self.close_export_menu();
+            self.close_toggles_menu();
             return true;
         }
 
@@ -449,6 +460,10 @@ impl ToolbarState {
             self.close_export_menu();
             return true;
         }
+        if digit == 9 && self.toggles_open {
+            self.close_toggles_menu();
+            return true;
+        }
 
         match self.shortcut_prefix.take() {
             None => {
@@ -456,6 +471,10 @@ impl ToolbarState {
                     self.toggle_export_menu();
                 } else if self.export_open {
                     self.select_export_mode_digit(digit);
+                } else if digit == 9 {
+                    self.toggle_toggles_menu();
+                } else if self.toggles_open {
+                    self.select_toggle_digit(digit);
                 } else if self.main_mode == MainMode::Utilities
                     && let Some(option) = digit
                         .checked_sub(2)
@@ -528,6 +547,13 @@ impl ToolbarState {
             Some(PendingShortcut::ExportFlat(_)) => {
                 self.select_export_mode_digit(digit);
             }
+            Some(PendingShortcut::Toggles) => {
+                if digit == 0 {
+                    self.toggle_export_menu();
+                } else {
+                    self.select_toggle_digit(digit);
+                }
+            }
         }
         true
     }
@@ -584,6 +610,7 @@ impl ToolbarState {
         if self.export_open {
             self.close_export_menu();
         } else {
+            self.close_toggles_menu();
             self.export_open = true;
             self.active_export_category = None;
             self.shortcut_prefix = Some(PendingShortcut::ExportCategory);
@@ -643,6 +670,9 @@ impl ToolbarState {
         if self.export_open {
             return 2;
         }
+        if self.toggles_open {
+            return 1;
+        }
         if self.main_mode == MainMode::Utilities {
             return 1;
         }
@@ -670,6 +700,8 @@ impl ToolbarState {
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
                 if self.export_open {
                     self.export_menu_spans(row)
+                } else if self.toggles_open {
+                    self.toggles_menu_spans(row)
                 } else if self.main_mode == MainMode::Utilities {
                     self.utilities_menu_spans(row)
                 } else {
@@ -678,55 +710,6 @@ impl ToolbarState {
             }
             _ => Vec::new(),
         }
-    }
-
-    fn main_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let mut spans = if row == MAIN_LABEL_ROW {
-            vec![bold_prefix_span("Mode: ".to_string(), "Mode:")]
-        } else {
-            let mut prefix = bold_span("1.".to_string());
-            prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Mode);
-            vec![
-                plain_span("   ".to_string()),
-                prefix,
-                plain_span(" ".to_string()),
-            ]
-        };
-        for (index, mode) in MainMode::ALL.iter().enumerate() {
-            if index > 0 {
-                spans.push(plain_span(" ".to_string()));
-            }
-            let contents = if row == MAIN_LABEL_ROW {
-                if index + 1 == MainMode::ALL.len() {
-                    (index + 1).to_string()
-                } else {
-                    aligned_shortcut(index + 1, mode.label())
-                }
-            } else {
-                mode.label().to_string()
-            };
-            spans.push(ToolbarSpan {
-                contents,
-                bold_prefix: 0,
-                selected: row == MAIN_SHORTCUT_ROW && *mode == self.main_mode && !self.export_open,
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::SelectMain(*mode)),
-                right_aligned: false,
-            });
-        }
-        if row == MAIN_LABEL_ROW {
-            spans.push(ToolbarSpan {
-                contents: "0. Save/Load/Export".to_string(),
-                bold_prefix: UnicodeWidthStr::width("0."),
-                selected: self.export_open,
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::ToggleExportMenu),
-                right_aligned: true,
-            });
-        }
-        spans
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
@@ -834,6 +817,9 @@ impl ToolbarState {
         if self.export_open {
             return Tooltip::Export;
         }
+        if self.toggles_open {
+            return Tooltip::Toggles;
+        }
         if self.main_mode == MainMode::Utilities {
             return match self.utility_kind() {
                 UtilityKind::Move => Tooltip::UtilitiesMove,
@@ -914,11 +900,13 @@ impl ToolbarState {
         match action {
             ToolbarAction::SelectMain(mode) => {
                 self.close_export_menu();
+                self.close_toggles_menu();
                 self.main_mode = mode;
                 true
             }
             ToolbarAction::SelectSubmenu { submenu, option } => {
                 self.close_export_menu();
+                self.close_toggles_menu();
                 let option_count = match self.main_mode {
                     MainMode::Line => LINE_OPTIONS.get(submenu),
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
@@ -946,6 +934,14 @@ impl ToolbarState {
             }
             ToolbarAction::ToggleExportMenu => {
                 self.toggle_export_menu();
+                true
+            }
+            ToolbarAction::ToggleTogglesMenu => {
+                self.toggle_toggles_menu();
+                true
+            }
+            ToolbarAction::Toggle(toggle) => {
+                self.toggle_setting(toggle);
                 true
             }
             ToolbarAction::SelectExportCategory(category) => self.select_export_category(category),
@@ -1243,7 +1239,7 @@ mod tests {
     fn only_structural_labels_and_numeric_paths_are_bold() {
         let mut toolbar = ToolbarState::default();
         let main_labels = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        assert_eq!(bold_contents(&main_labels), ["Mode:", "0."]);
+        assert_eq!(bold_contents(&main_labels), ["Mode:", "9.", "0."]);
         assert!(main_labels.iter().any(|span| {
             span.contents.contains("Save/Load/Export")
                 && span.bold_prefix == UnicodeWidthStr::width("0.")
@@ -1363,7 +1359,7 @@ mod tests {
     #[test]
     fn toolbar_box_has_exact_light_borders_and_consistent_width() {
         let toolbar = ToolbarState::default();
-        let width = 36;
+        let width = 64;
         let top = spans_text(&toolbar_border_spans(width, true));
         let contents = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
         let bottom = spans_text(&toolbar_border_spans(width, false));
@@ -2174,8 +2170,8 @@ mod tests {
 
         press(&mut toolbar, "9");
         assert_eq!(toolbar.utility_kind(), UtilityKind::View);
-        assert_eq!(toolbar.pending_shortcut(), None);
-        assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Toggles));
+        assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
     }
 
     #[test]

@@ -79,6 +79,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Enter or leave continuous Replace mode | Return or Shift + `R` |
 | Copy / cut / paste | Ctrl/Cmd + `C` / `X` / `V` |
 | Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
+| Open Toggles | `9` |
 | Open Save/Load/Export | `0` |
 
 The first key of a toolbar path selects its group. Press `1`, then a mode number:
@@ -93,6 +94,9 @@ The first key of a toolbar path selects its group. Press `1`, then a mode number
 The toolbar displays every remaining path. Short groups use `group option`; long groups add a page,
 as in `2 1 3`. On a page, `1` through `9` choose the first nine entries and `0` chooses the tenth.
 Pending prefixes are highlighted, and Escape cancels an unfinished path.
+
+Press `9` to open Toggles. Dark Mode (`9 1`) reverses the configured foreground and background
+colors. Multi Color Mode (`9 2`) and Multi Layer Mode (`9 3`) currently expose menu state only.
 
 ### Faster movement and editing
 

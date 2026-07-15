@@ -59,6 +59,19 @@ struct ShapePreview {
     end: Coord,
 }
 
+fn reverse_theme_colors(theme: &mut ThemeConfig) {
+    for face in [
+        &mut theme.default,
+        &mut theme.selection,
+        &mut theme.selection_highlight,
+        &mut theme.cursor_drawing,
+        &mut theme.cursor_block,
+        &mut theme.tooltip,
+    ] {
+        std::mem::swap(&mut face.fg, &mut face.bg);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSnapshot {
     lines: Vec<Vec<Atom>>,
@@ -162,9 +175,11 @@ impl EditorState {
     }
 
     pub fn apply_theme(&mut self, theme: &ThemeConfig) {
-        self.grid.default_face = theme.default.clone();
-        self.grid.cursor_face = theme.cursor_block.clone();
         self.theme = theme.clone();
+        if self.toolbar.dark_mode() {
+            reverse_theme_colors(&mut self.theme);
+        }
+        self.sync_theme_faces();
     }
 
     pub fn restore_menu_selections(&mut self, selections: &DurableMenuSelections) {
@@ -179,8 +194,8 @@ impl EditorState {
     }
 
     pub fn tooltip(&self) -> Tooltip {
-        if self.toolbar.export_menu_open() {
-            return Tooltip::Export;
+        if self.toolbar.export_menu_open() || self.toolbar.toggles_menu_open() {
+            return self.toolbar.tooltip();
         }
         if self.move_lift.is_some() {
             return if self.move_lift_plain_direction_confirms() {
@@ -216,6 +231,7 @@ impl EditorState {
             && self.toolbar.main_mode() == MainMode::Utilities
             && self.toolbar.utility_kind() == UtilityKind::View
             && !self.toolbar.export_menu_open()
+            && !self.toolbar.toggles_menu_open()
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
@@ -224,13 +240,22 @@ impl EditorState {
             return false;
         }
         let export_was_open = self.toolbar.export_menu_open();
+        let toggles_was_open = self.toolbar.toggles_menu_open();
+        let dark_was_enabled = self.toolbar.dark_mode();
         let old_mode = self.toolbar.main_mode();
         let old_utility = self.toolbar.utility_kind();
         if !self.toolbar.handle_shortcut(key, modifiers) {
             return false;
         }
-        if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open {
+        if matches!(key, Key::Named(NamedKey::Escape))
+            && !export_was_open
+            && !toggles_was_open
+        {
             self.collapse_selection();
+        }
+        if self.toolbar.dark_mode() != dark_was_enabled {
+            reverse_theme_colors(&mut self.theme);
+            self.sync_theme_faces();
         }
         if self.toolbar.main_mode() != old_mode {
             self.end_stroke();
@@ -240,6 +265,7 @@ impl EditorState {
         }
         if self.move_lift.is_some()
             && (self.toolbar.export_menu_open()
+                || self.toolbar.toggles_menu_open()
                 || self.toolbar.main_mode() != MainMode::Utilities
                 || self.toolbar.utility_kind() != old_utility
                 || self.toolbar.utility_kind() != UtilityKind::Move)
@@ -254,12 +280,20 @@ impl EditorState {
         if self.move_lift.is_some() {
             self.cancel_move_lift();
         }
+        let dark_was_enabled = self.toolbar.dark_mode();
         if !self.toolbar.apply_action(action) {
             return false;
         }
+        if self.toolbar.dark_mode() != dark_was_enabled {
+            reverse_theme_colors(&mut self.theme);
+            self.sync_theme_faces();
+        }
         if matches!(
             action,
-            ToolbarAction::ToggleExportMenu | ToolbarAction::RunExport(_)
+            ToolbarAction::ToggleExportMenu
+                | ToolbarAction::ToggleTogglesMenu
+                | ToolbarAction::Toggle(_)
+                | ToolbarAction::RunExport(_)
         ) {
             return true;
         }
@@ -268,6 +302,11 @@ impl EditorState {
         self.move_lift = None;
         self.sync_cursor_mode_with_toolbar();
         true
+    }
+
+    fn sync_theme_faces(&mut self) {
+        self.grid.default_face = self.theme.default.clone();
+        self.grid.cursor_face = self.theme.cursor_block.clone();
     }
 
     pub fn toggle_text_entry(&mut self) {
@@ -1117,10 +1156,29 @@ fn index_for_column(atoms: &[Atom], column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::UtilityKind;
+    use crate::toolbar::{ToggleKind, UtilityKind};
 
     fn state() -> EditorState {
         EditorState::new(&ThemeConfig::default(), "ascdraw")
+    }
+
+    #[test]
+    fn dark_mode_reverses_every_configured_face_and_reapplies_on_theme_reload() {
+        let source = ThemeConfig::default();
+        let mut reversed = source.clone();
+        reverse_theme_colors(&mut reversed);
+        let mut state = EditorState::new(&source, "ascdraw");
+
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode)));
+        assert_eq!(state.theme, reversed);
+        assert_eq!(state.grid.default_face, reversed.default);
+        assert_eq!(state.grid.cursor_face, reversed.cursor_block);
+
+        state.apply_theme(&source);
+        assert_eq!(state.theme, reversed);
+
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode)));
+        assert_eq!(state.theme, source);
     }
 
     #[test]
