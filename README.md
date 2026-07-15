@@ -162,7 +162,8 @@ one typed or pasted grapheme, replaces the selected rectangle, and immediately r
 tool.
 
 Shift + direction expands the selection from its anchor. With an expanded selection, Alt + direction
-lifts and moves the rectangle; a plain direction, Space, or Return confirms it, while Escape cancels.
+lifts and moves the edited cells in the rectangle; blank cells remain transparent. A plain direction,
+Space, or Return confirms it, while Escape cancels.
 Mouse drag crosses cells through these same direction commands: Shift-drag expands the selection and
 Alt-drag moves an expanded selection (or erases when it is collapsed).
 Clipboard paste overwrites a rectangle from the selection's top-left corner, preserves ragged rows

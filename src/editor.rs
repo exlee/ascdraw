@@ -3240,7 +3240,7 @@ mod tests {
     }
 
     #[test]
-    fn move_lift_previews_without_mutation_then_overwrites_as_one_literal_rectangle() {
+    fn move_lift_previews_without_mutation_then_composes_edited_cells() {
         let mut state = utility_state(&["abXX", "cdYY"], UtilityKind::Push, Coord::default());
         let configured_face = state.theme.tooltip.clone();
         state.grid.lines[0][0].face = configured_face.clone();
@@ -3273,6 +3273,32 @@ mod tests {
                 bottom: 1,
             }
         );
+    }
+
+    #[test]
+    fn move_lift_treats_unedited_cells_as_transparent() {
+        let mut state = utility_state(&["A C", "x─z"], UtilityKind::Push, Coord::default());
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 2 });
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 1, column: 1 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "─".into(),
+        });
+
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Down));
+        let preview = state
+            .lines_with_shape_preview()
+            .expect("lifted selection has a composited preview");
+        assert_eq!(contents(&preview[0]), "   ");
+        assert_eq!(contents(&preview[1]), "A─C");
+
+        assert!(state.confirm_move_lift());
+        assert_eq!(line_contents(&state), vec!["   ", "A─C"]);
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 1 });
     }
 
     #[test]

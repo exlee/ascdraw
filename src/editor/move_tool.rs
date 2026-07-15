@@ -1,4 +1,6 @@
-use crate::model::{Coord, Direction};
+use unicode_width::UnicodeWidthStr;
+
+use crate::model::{Atom, Coord, Direction};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_atoms,
@@ -14,8 +16,16 @@ pub(super) struct MoveLift {
     source_bounds: SelectionBounds,
     origin: Coord,
     rectangle: TextRectangle,
+    edited_atoms: Vec<LiftedAtom>,
     markers: Vec<PlacedLineMarker>,
     rendered_lines: Vec<Vec<crate::model::Atom>>,
+}
+
+#[derive(Debug, Clone)]
+struct LiftedAtom {
+    offset: Coord,
+    width: usize,
+    atom: Atom,
 }
 
 impl EditorState {
@@ -43,10 +53,15 @@ impl EditorState {
             rows: selected_atoms(&self.grid.lines, source_bounds),
             width: source_bounds.width(),
         };
+        let edited_atoms = lifted_edited_atoms(&rectangle);
+        let source_origin = Coord {
+            line: source_bounds.top,
+            column: source_bounds.left,
+        };
         let markers = self
             .line_markers
             .iter()
-            .filter(|marker| source_bounds.contains(marker.coord))
+            .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
             .cloned()
             .map(|mut marker| {
                 marker.coord.line -= source_bounds.top;
@@ -64,6 +79,7 @@ impl EditorState {
                 column: source_bounds.left,
             },
             rectangle,
+            edited_atoms,
             markers,
             rendered_lines: Vec::new(),
         });
@@ -129,12 +145,20 @@ impl EditorState {
         }
         let before_lines = self.grid.lines.clone();
         let before_markers = self.line_markers.clone();
-        let destination = lift.rectangle.bounds_at(lift.origin);
-        replace_range(&mut self.grid.lines, lift.source_bounds, None);
+        let source_origin = Coord {
+            line: lift.source_bounds.top,
+            column: lift.source_bounds.left,
+        };
         self.line_markers.retain(|marker| {
-            !lift.source_bounds.contains(marker.coord) && !destination.contains(marker.coord)
+            !lifted_atoms_cover(&lift.edited_atoms, source_origin, marker.coord)
+                && !lifted_atoms_cover(&lift.edited_atoms, lift.origin, marker.coord)
         });
-        overwrite_rectangle(&mut self.grid.lines, lift.origin, &lift.rectangle);
+        compose_sparse_move(
+            &mut self.grid.lines,
+            source_origin,
+            lift.origin,
+            &lift.edited_atoms,
+        );
         self.line_markers
             .extend(lift.markers.into_iter().map(|mut marker| {
                 marker.coord.line = marker.coord.line.saturating_add(lift.origin.line);
@@ -181,12 +205,88 @@ impl EditorState {
             return;
         };
         let mut lines = self.grid.lines.clone();
-        replace_range(&mut lines, lift.source_bounds, None);
-        overwrite_rectangle(&mut lines, lift.origin, &lift.rectangle);
+        compose_sparse_move(
+            &mut lines,
+            Coord {
+                line: lift.source_bounds.top,
+                column: lift.source_bounds.left,
+            },
+            lift.origin,
+            &lift.edited_atoms,
+        );
         self.move_lift
             .as_mut()
             .expect("move lift remains active while composing")
             .rendered_lines = lines;
+    }
+}
+
+fn lifted_edited_atoms(rectangle: &TextRectangle) -> Vec<LiftedAtom> {
+    let mut lifted = Vec::new();
+    for (line, row) in rectangle.rows.iter().enumerate() {
+        let mut column = 0;
+        for atom in row {
+            let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
+            if !atom.contents.chars().all(char::is_whitespace) {
+                lifted.push(LiftedAtom {
+                    offset: Coord { line, column },
+                    width,
+                    atom: atom.clone(),
+                });
+            }
+            column = column.saturating_add(width);
+        }
+    }
+    lifted
+}
+
+fn lifted_atoms_cover(atoms: &[LiftedAtom], origin: Coord, coord: Coord) -> bool {
+    atoms.iter().any(|atom| {
+        coord.line == origin.line.saturating_add(atom.offset.line)
+            && (origin.column.saturating_add(atom.offset.column)
+                ..origin
+                    .column
+                    .saturating_add(atom.offset.column)
+                    .saturating_add(atom.width))
+                .contains(&coord.column)
+    })
+}
+
+fn compose_sparse_move(
+    lines: &mut Vec<Vec<Atom>>,
+    source_origin: Coord,
+    destination_origin: Coord,
+    atoms: &[LiftedAtom],
+) {
+    for atom in atoms {
+        replace_range(lines, lifted_atom_bounds(source_origin, atom), None);
+    }
+    for atom in atoms {
+        overwrite_rectangle(
+            lines,
+            offset_origin(destination_origin, atom.offset),
+            &TextRectangle {
+                rows: vec![vec![atom.atom.clone()]],
+                width: atom.width,
+            },
+        );
+    }
+}
+
+fn lifted_atom_bounds(origin: Coord, atom: &LiftedAtom) -> SelectionBounds {
+    let origin = offset_origin(origin, atom.offset);
+    SelectionBounds {
+        left: origin.column,
+        right: origin.column.saturating_add(atom.width.saturating_sub(1)),
+        top: origin.line,
+        bottom: origin.line,
+    }
+}
+
+fn offset_origin(origin: Coord, offset: Coord) -> Coord {
+    Coord {
+        line: origin.line.saturating_add(offset.line),
+        column: origin.column.saturating_add(offset.column),
     }
 }
 
