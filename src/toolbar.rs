@@ -268,7 +268,7 @@ pub enum Tooltip {
 
 impl Tooltip {
     pub fn text(self) -> String {
-        const MISC_TIP: [&str; 5] = [
+        const MISC_TIP: [&str; 6] = [
             "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
             "Direction keys are ←→↓↑ and hjkl",
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
@@ -309,7 +309,7 @@ impl Tooltip {
                 "Space anchors; Space again confirms; Backspace removes the last anchor"
             }
             Self::ShapePreview => "Shape preview: Space confirms",
-            Self::SingleReplace => "Replace selection: type one character",
+            Self::SingleReplace => "Replace selection: type or paste one character",
             Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Esc> to exit replace mode",

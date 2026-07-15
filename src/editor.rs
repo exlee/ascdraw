@@ -2341,7 +2341,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(state.begin_single_replace());
         assert_eq!(state.tooltip(), Tooltip::SingleReplace);
-        assert!(state.tooltip().text().contains("type one character"));
+        assert!(state.tooltip().text().contains("type or paste one character"));
 
         state.cancel_text_entry();
         state.clear_canvas();

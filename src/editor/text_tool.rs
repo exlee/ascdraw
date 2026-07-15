@@ -45,6 +45,18 @@ impl EditorState {
         }
     }
 
+    pub fn paste_text(&mut self, text: &str) -> bool {
+        if self.single_replace_pending {
+            if UnicodeSegmentation::graphemes(text, true).next().is_none() {
+                return false;
+            }
+            self.replace_once(text);
+            true
+        } else {
+            self.paste_text_rectangle(text)
+        }
+    }
+
     fn replace_once(&mut self, text: &str) {
         let Some(grapheme) = UnicodeSegmentation::graphemes(text, true).next() else {
             return;

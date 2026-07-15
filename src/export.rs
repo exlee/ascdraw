@@ -172,7 +172,7 @@ pub fn paste_selection(
     platform: &mut impl ExportPlatform,
 ) -> Result<bool> {
     let text = platform.clipboard_text()?;
-    Ok(state.paste_text_rectangle(&text))
+    Ok(state.paste_text(&text))
 }
 
 fn file_kind_details(kind: FileKind) -> (&'static str, &'static str) {

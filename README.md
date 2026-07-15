@@ -152,7 +152,8 @@ over the canvas, Backspace removes the preceding grapheme, Delete removes the fo
 and Tab inserts four spaces. Escape or Ctrl + `G` returns to the active toolbar mode.
 
 Continuous Replace overwrites cells and extends rows when needed. In any drawing mode, `r` waits for
-one grapheme, replaces the selected rectangle, and immediately returns to the active tool.
+one typed or pasted grapheme, replaces the selected rectangle, and immediately returns to the active
+tool.
 
 Ctrl + direction expands the selection from its anchor. With an expanded selection, Alt + direction
 lifts and moves the rectangle; a plain direction, Space, or Return confirms it, while Escape cancels.

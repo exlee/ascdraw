@@ -1877,23 +1877,25 @@ mod tests {
         }
 
         let mut one_shot = EditorState::new(&config.theme, "test");
+        one_shot.extend_selection(Direction::Right);
+        one_shot.extend_selection(Direction::Down);
         assert!(one_shot.begin_single_replace());
         let mut platform = ClipboardPlatform {
-            text: "paste".into(),
+            text: "█ignored".into(),
             ..ClipboardPlatform::default()
         };
         assert!(
             handle_clipboard_shortcut(
                 &mut one_shot,
                 &Key::Character("v".into()),
-                ModifiersState::CONTROL,
+                ModifiersState::SUPER,
                 &mut platform,
             )
             .unwrap()
             .unwrap()
         );
-        assert_eq!(one_shot.selected_text(), "paste");
-        assert_eq!(one_shot.cursor_mode, CursorMode::Replace);
+        assert_eq!(one_shot.selected_text(), "██\n██");
+        assert_eq!(one_shot.cursor_mode, CursorMode::Stamp);
 
         for prefix in ["2", "0"] {
             let mut state = EditorState::new(&config.theme, "test");
