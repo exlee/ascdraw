@@ -73,7 +73,7 @@ pub fn line_preview_command(
     {
         return Some(LinePreviewCommand::Cancel);
     }
-    if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() {
+    if modifiers.shift_key() || modifiers.alt_key() || modifiers.super_key() {
         return None;
     }
     if active && matches!(key, Key::Named(NamedKey::Backspace)) {
@@ -227,9 +227,9 @@ pub fn ordered_direction_command(
     let direction = direction_for_key(key)?;
     let (primary, secondary) = ordered.primary_and_secondary()?;
     let command = match primary {
-        DirectionModifier::Shift => shift_direction_command(direction, mode),
+        DirectionModifier::Shift => EditCommand::ExtendSelection(direction),
         DirectionModifier::Alt => EditCommand::Erase(direction),
-        DirectionModifier::Control => EditCommand::ExtendSelection(direction),
+        DirectionModifier::Control => tool_direction_command(direction, mode),
     };
     let steps = match (primary, secondary) {
         (_, None) => 1,
@@ -245,7 +245,7 @@ pub fn ordered_direction_command(
     Some(OrderedDirectionCommand { command, steps })
 }
 
-fn shift_direction_command(direction: Direction, mode: CursorMode) -> EditCommand {
+fn tool_direction_command(direction: Direction, mode: CursorMode) -> EditCommand {
     match mode {
         CursorMode::MoveDraw => EditCommand::Draw(direction),
         CursorMode::Stamp => EditCommand::DrawStamp(direction),
@@ -351,9 +351,9 @@ fn edit_command_for_key(
     }
 
     if !mode.accepts_text()
-        && modifiers.control_key()
+        && modifiers.shift_key()
         && !modifiers.alt_key()
-        && !modifiers.shift_key()
+        && !modifiers.control_key()
         && !modifiers.super_key()
     {
         return direction_for_key(key).map(EditCommand::ExtendSelection);
@@ -368,11 +368,15 @@ fn edit_command_for_key(
         return direction_for_key(key).map(EditCommand::Erase);
     }
 
-    if modifiers.control_key() || modifiers.super_key() || modifiers.alt_key() {
+    if modifiers.super_key()
+        || modifiers.alt_key()
+        || (mode.accepts_text() && modifiers.control_key())
+        || (!mode.accepts_text() && modifiers.shift_key())
+    {
         return None;
     }
 
-    if !modifiers.shift_key()
+    if modifiers == ModifiersState::empty()
         && matches!(key, Key::Character(text) if text == "r")
         && !matches!(
             mode,
@@ -386,7 +390,7 @@ fn edit_command_for_key(
         return match key {
             _ if is_space_key(key) => None,
             _ => direction_for_key(key).map(|direction| {
-                if modifiers.shift_key() {
+                if modifiers.control_key() {
                     EditCommand::Draw(direction)
                 } else {
                     EditCommand::Move(direction)
@@ -407,7 +411,7 @@ fn edit_command_for_key(
         return match key {
             _ if is_space_key(key) => Some(EditCommand::PlaceStamp),
             _ => direction_for_key(key).map(|direction| {
-                if modifiers.shift_key() {
+                if modifiers.control_key() {
                     EditCommand::DrawStamp(direction)
                 } else {
                     EditCommand::Move(direction)
@@ -425,7 +429,7 @@ fn edit_command_for_key(
 
     if mode == CursorMode::Utilities {
         return direction_for_key(key).map(|direction| {
-            if modifiers.shift_key() {
+            if modifiers.control_key() {
                 EditCommand::ApplyUtility(direction)
             } else {
                 EditCommand::Move(direction)
@@ -847,6 +851,24 @@ mod tests {
         );
         assert_eq!(
             line_preview_command(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::CONTROL,
+                mode,
+                true,
+            ),
+            Some(LinePreviewCommand::Move(Direction::Right))
+        );
+        assert_eq!(
+            line_preview_command(
+                &Key::Named(NamedKey::ArrowRight),
+                ModifiersState::SHIFT,
+                mode,
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            line_preview_command(
                 &Key::Named(NamedKey::Backspace),
                 ModifiersState::empty(),
                 mode,
@@ -875,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_hjkl_and_shifted_movement_to_move_draw_commands() {
+    fn maps_hjkl_and_control_movement_to_move_draw_commands() {
         assert_eq!(
             edit_command_for_key(
                 &Key::Character("h".into()),
@@ -887,15 +909,15 @@ mod tests {
         assert_eq!(
             edit_command_for_key(
                 &Key::Named(NamedKey::ArrowDown),
-                ModifiersState::SHIFT,
+                ModifiersState::CONTROL,
                 CursorMode::MoveDraw,
             ),
             Some(EditCommand::Draw(Direction::Down))
         );
         assert_eq!(
             edit_command_for_key(
-                &Key::Character("L".into()),
-                ModifiersState::SHIFT,
+                &Key::Character("l".into()),
+                ModifiersState::CONTROL,
                 CursorMode::MoveDraw,
             ),
             Some(EditCommand::Draw(Direction::Right))
@@ -903,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_control_directions_to_selection_and_alt_directions_to_erasing_in_canvas_modes() {
+    fn maps_shift_directions_to_selection_and_alt_directions_to_erasing_in_canvas_modes() {
         for mode in [
             CursorMode::MoveDraw,
             CursorMode::Stamp,
@@ -921,7 +943,7 @@ mod tests {
                 (Key::Named(NamedKey::ArrowRight), Direction::Right),
             ] {
                 assert_eq!(
-                    edit_command_for_key(&key, ModifiersState::CONTROL, mode),
+                    edit_command_for_key(&key, ModifiersState::SHIFT, mode),
                     Some(EditCommand::ExtendSelection(direction))
                 );
                 assert_eq!(
@@ -932,7 +954,7 @@ mod tests {
         }
         for mode in [CursorMode::Insert, CursorMode::Replace, CursorMode::Text] {
             assert_ne!(
-                edit_command_for_key(&Key::Character("h".into()), ModifiersState::CONTROL, mode,),
+                edit_command_for_key(&Key::Character("h".into()), ModifiersState::SHIFT, mode,),
                 Some(EditCommand::ExtendSelection(Direction::Left))
             );
             assert_ne!(
@@ -1027,7 +1049,7 @@ mod tests {
                 CursorMode::MoveDraw,
             ),
             Some(OrderedDirectionCommand {
-                command: EditCommand::Draw(Direction::Right),
+                command: EditCommand::ExtendSelection(Direction::Right),
                 steps: 10,
             })
         );
@@ -1045,7 +1067,7 @@ mod tests {
                 CursorMode::MoveDraw,
             ),
             Some(OrderedDirectionCommand {
-                command: EditCommand::ExtendSelection(Direction::Down),
+                command: EditCommand::Draw(Direction::Down),
                 steps: 5,
             })
         );
@@ -1057,19 +1079,19 @@ mod tests {
             (
                 DirectionModifier::Shift,
                 DirectionModifier::Control,
-                EditCommand::Draw(Direction::Right),
+                EditCommand::ExtendSelection(Direction::Right),
                 5,
             ),
             (
                 DirectionModifier::Control,
                 DirectionModifier::Shift,
-                EditCommand::ExtendSelection(Direction::Right),
+                EditCommand::Draw(Direction::Right),
                 10,
             ),
             (
                 DirectionModifier::Shift,
                 DirectionModifier::Alt,
-                EditCommand::Draw(Direction::Right),
+                EditCommand::ExtendSelection(Direction::Right),
                 10,
             ),
             (
@@ -1087,7 +1109,7 @@ mod tests {
             (
                 DirectionModifier::Control,
                 DirectionModifier::Alt,
-                EditCommand::ExtendSelection(Direction::Right),
+                EditCommand::Draw(Direction::Right),
                 5,
             ),
         ];
@@ -1121,8 +1143,8 @@ mod tests {
     #[test]
     fn ordered_directions_support_hjkl_mode_routing_and_exclude_text_modes() {
         let ordered = tracker(&[
-            ModifiersState::SHIFT,
-            ModifiersState::SHIFT | ModifiersState::CONTROL,
+            ModifiersState::CONTROL,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
         ]);
         for (mode, command) in [
             (CursorMode::Stamp, EditCommand::DrawStamp(Direction::Left)),
@@ -1139,7 +1161,7 @@ mod tests {
                     &ordered,
                     mode,
                 ),
-                Some(OrderedDirectionCommand { command, steps: 5 })
+                Some(OrderedDirectionCommand { command, steps: 10 })
             );
         }
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
@@ -1218,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn utilities_route_shift_directions_to_tools_without_changing_other_modes() {
+    fn utilities_route_control_directions_to_tools_without_changing_other_modes() {
         for key in [
             Key::Character("h".into()),
             Key::Character("j".into()),
@@ -1231,7 +1253,7 @@ mod tests {
         ] {
             let direction = direction_for_key(&key).unwrap();
             assert_eq!(
-                edit_command_for_key(&key, ModifiersState::SHIFT, CursorMode::Utilities),
+                edit_command_for_key(&key, ModifiersState::CONTROL, CursorMode::Utilities),
                 Some(EditCommand::ApplyUtility(direction))
             );
             assert_eq!(
@@ -1242,7 +1264,7 @@ mod tests {
         assert_eq!(
             edit_command_for_key(
                 &Key::Named(NamedKey::ArrowRight),
-                ModifiersState::SHIFT,
+                ModifiersState::CONTROL,
                 CursorMode::MoveDraw,
             ),
             Some(EditCommand::Draw(Direction::Right))
@@ -1735,13 +1757,13 @@ mod tests {
     }
 
     #[test]
-    fn shift_direction_draws_stamps() {
+    fn control_direction_draws_stamps() {
         for (key, direction) in [
             (Key::Character("l".into()), Direction::Right),
             (Key::Named(NamedKey::ArrowDown), Direction::Down),
         ] {
             assert_eq!(
-                edit_command_for_key(&key, ModifiersState::SHIFT, CursorMode::Stamp),
+                edit_command_for_key(&key, ModifiersState::CONTROL, CursorMode::Stamp),
                 Some(EditCommand::DrawStamp(direction))
             );
         }

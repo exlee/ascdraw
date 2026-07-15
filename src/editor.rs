@@ -2348,7 +2348,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         state.move_or_draw(Direction::Right, true);
         assert_eq!(state.tooltip(), Tooltip::LineStroke);
-        assert!(state.tooltip().text().contains("release Shift to finish"));
+        assert!(state.tooltip().text().contains("release Ctrl to finish"));
     }
 
     #[test]

@@ -68,9 +68,9 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Action | Key |
 | --- | --- |
 | Move the cursor | direction |
-| Draw or apply the active Line/Stamp/Utils operation | Shift + direction |
+| Draw or apply the active Line/Stamp/Utils operation | Ctrl + direction |
 | Place the active stamp | Space |
-| Grow the rectangular selection | Ctrl + direction |
+| Grow the rectangular selection | Shift + direction |
 | Erase while moving | Alt + direction |
 | Collapse the selection to one cell | Escape |
 | Clear selected cells | Backspace |
@@ -100,21 +100,21 @@ The first held modifier chooses an operation. The second chooses how far it trav
 
 | First modifier | Operation | Add for 5 cells | Add for 10 cells |
 | --- | --- | --- | --- |
-| Shift | Draw or apply the active tool | Ctrl | Alt |
+| Shift | Grow the selection | Ctrl | Alt |
 | Alt | Erase | Ctrl | Shift |
-| Ctrl | Grow the selection | Alt | Shift |
+| Ctrl | Draw or apply the active tool | Alt | Shift |
 
 ## Drawing modes
 
 ### Stamp
 
-Space fills the current selection with the active stamp. Shift + direction stamps continuously
+Space fills the current selection with the active stamp. Ctrl + direction stamps continuously
 while moving. The bundled inventory includes decorators, directional arrows, grey fills, and
 quadrant blocks.
 
 ### Line
 
-Shift + direction draws connected lines immediately. Starting on an existing segment extends the
+Ctrl + direction draws connected lines immediately. Starting on an existing segment extends the
 connection; corners, tees, and crossings update automatically.
 
 Space starts an orthogonal preview. Move to size the current segment, then:
@@ -155,7 +155,7 @@ Continuous Replace overwrites cells and extends rows when needed. In any drawing
 one typed or pasted grapheme, replaces the selected rectangle, and immediately returns to the active
 tool.
 
-Ctrl + direction expands the selection from its anchor. With an expanded selection, Alt + direction
+Shift + direction expands the selection from its anchor. With an expanded selection, Alt + direction
 lifts and moves the rectangle; a plain direction, Space, or Return confirms it, while Escape cancels.
 Clipboard paste overwrites a rectangle from the selection's top-left corner, preserves ragged rows
 and trailing blanks, and selects the pasted result.

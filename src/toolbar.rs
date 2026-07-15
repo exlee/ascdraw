@@ -273,7 +273,7 @@ impl Tooltip {
             "Direction keys are ←→↓↑ and hjkl",
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
             "Alt-direction erases",
-            "Ctrl-direction selects",
+            "Shift-direction selects",
             "Esc cancels most modes",
         ];
         let timestamp = std::time::SystemTime::now()
@@ -285,18 +285,18 @@ impl Tooltip {
         let primary = match self {
             Self::None => "",
             Self::Line => {
-                "Line: Space starts a preview; Shift-direction draws"
+                "Line: Space starts a preview; Ctrl-direction draws"
             }
             Self::Stamp => {
-                "Stamp: Space places; Shift-direction draws continuously"
+                "Stamp: Space places; Ctrl-direction draws continuously"
             }
             Self::Shapes => {
                 "Shape: Space starts a preview"
             }
             Self::UtilitiesPush => {
-                "Push: Shift-direction inserts a blank row or column"
+                "Push: Ctrl-direction inserts a blank row or column"
             }
-            Self::UtilitiesPull => "Pull: Shift-direction pulls",
+            Self::UtilitiesPull => "Pull: Ctrl-direction pulls",
             Self::UtilitiesView => "View: directions pan; Space centers",
             Self::UtilitiesMove => {
                 "Move: Space lifts the current cell"
@@ -310,14 +310,14 @@ impl Tooltip {
             }
             Self::ShapePreview => "Shape preview: Space confirms",
             Self::SingleReplace => "Replace selection: type or paste one character",
-            Self::LineStroke => "Line stroke: Shift-direction continues; release Shift to finish",
+            Self::LineStroke => "Line stroke: Ctrl-direction continues; release Ctrl to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Esc> to exit replace mode",
             Self::Export => {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
             Self::Selection => {
-                "Selection: Alt-direction lifts and moves; Ctrl-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
+                "Selection: Alt-direction lifts and moves; Shift-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
             }
         };
         if matches!(

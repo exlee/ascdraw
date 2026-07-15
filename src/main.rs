@@ -203,11 +203,11 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
-                            let released_shift =
-                                editor.modifiers.shift_key() && !modifiers.state().shift_key();
+                            let released_control =
+                                editor.modifiers.control_key() && !modifiers.state().control_key();
                             editor.modifiers = modifiers.state();
                             editor.ordered_modifiers.update(editor.modifiers);
-                            if released_shift {
+                            if released_control {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
                                 editor.request_redraw();
@@ -1178,12 +1178,12 @@ mod tests {
         let mut state = EditorState::new(&config.theme, "test");
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         let mut ordered = input::OrderedModifierTracker::default();
-        ordered.update(ModifiersState::SHIFT);
+        ordered.update(ModifiersState::CONTROL);
         assert_eq!(
             history_group_for_key(
                 &state,
                 &Key::Named(NamedKey::ArrowRight),
-                ModifiersState::SHIFT,
+                ModifiersState::CONTROL,
                 &ordered,
             ),
             Some(HistoryGroup::LineStroke)
@@ -1236,10 +1236,10 @@ mod tests {
         apply_navigation_command(&mut state, EditCommand::Move(Direction::Right), 1);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
 
-        let mut control = input::OrderedModifierTracker::default();
-        control.update(ModifiersState::CONTROL);
+        let mut shift = input::OrderedModifierTracker::default();
+        shift.update(ModifiersState::SHIFT);
         assert_eq!(
-            change_policy_for_key(&state, &key, false, ModifiersState::CONTROL, &control),
+            change_policy_for_key(&state, &key, false, ModifiersState::SHIFT, &shift),
             ChangePolicy::Navigation {
                 command: EditCommand::ExtendSelection(Direction::Right),
                 steps: 1,
@@ -1606,7 +1606,7 @@ mod tests {
                 &Key::Character("l".into()),
                 None,
                 false,
-                ModifiersState::CONTROL,
+                ModifiersState::SHIFT,
             ),
             Some(false)
         );
@@ -1633,15 +1633,15 @@ mod tests {
     }
 
     #[test]
-    fn ordered_shift_draws_connected_five_and_ten_cell_paths() {
-        for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
+    fn ordered_control_draws_connected_five_and_ten_cell_paths() {
+        for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
             let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
-            let combined = ModifiersState::SHIFT | secondary;
+            let combined = ModifiersState::CONTROL | secondary;
             assert_eq!(
                 dispatch_ordered(
                     &mut state,
                     Key::Named(NamedKey::ArrowRight),
-                    &[ModifiersState::SHIFT, combined],
+                    &[ModifiersState::CONTROL, combined],
                 ),
                 Some(true)
             );
@@ -1676,15 +1676,15 @@ mod tests {
     }
 
     #[test]
-    fn ordered_control_grows_from_the_anchor_by_five_and_ten_without_document_change() {
-        for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
+    fn ordered_shift_grows_from_the_anchor_by_five_and_ten_without_document_change() {
+        for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
             let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
-            let combined = ModifiersState::CONTROL | secondary;
+            let combined = ModifiersState::SHIFT | secondary;
             assert_eq!(
                 dispatch_ordered(
                     &mut state,
                     Key::Character("l".into()),
-                    &[ModifiersState::CONTROL, combined],
+                    &[ModifiersState::SHIFT, combined],
                 ),
                 Some(false)
             );
@@ -1700,10 +1700,10 @@ mod tests {
     }
 
     #[test]
-    fn ordered_shift_preserves_stamp_shape_and_utility_routing() {
+    fn ordered_control_preserves_stamp_shape_and_utility_routing() {
         let states = [
-            ModifiersState::SHIFT,
-            ModifiersState::SHIFT | ModifiersState::CONTROL,
+            ModifiersState::CONTROL,
+            ModifiersState::CONTROL | ModifiersState::ALT,
         ];
 
         let mut stamp = EditorState::new(&app::ThemeConfig::default(), "test");
@@ -1745,8 +1745,8 @@ mod tests {
     }
 
     #[test]
-    fn ordered_shift_pull_all_repeats_five_or_ten_times_as_one_document_change() {
-        for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
+    fn ordered_control_pull_all_repeats_five_or_ten_times_as_one_document_change() {
+        for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
             let source = "abcdefghijkl";
             let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
             state.insert(source);
@@ -1760,13 +1760,13 @@ mod tests {
                 edit: state.edit_snapshot(),
                 viewport: layout::ViewportOffset::default(),
             };
-            let combined = ModifiersState::SHIFT | secondary;
+            let combined = ModifiersState::CONTROL | secondary;
 
             assert_eq!(
                 dispatch_ordered(
                     &mut state,
                     Key::Character("h".into()),
-                    &[ModifiersState::SHIFT, combined],
+                    &[ModifiersState::CONTROL, combined],
                 ),
                 Some(true)
             );
@@ -1795,8 +1795,8 @@ mod tests {
                 &mut state,
                 Key::Named(NamedKey::ArrowLeft),
                 &[
-                    ModifiersState::SHIFT,
-                    ModifiersState::SHIFT | ModifiersState::CONTROL,
+                    ModifiersState::CONTROL,
+                    ModifiersState::CONTROL | ModifiersState::ALT,
                 ],
             ),
             Some(true)
