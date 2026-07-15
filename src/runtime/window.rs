@@ -13,8 +13,9 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
-use crate::editor::{ContentIndex, EditorState, PointerDragMode};
+use crate::editor::{ContentIndex, EditorState};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
+use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
     LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
@@ -145,10 +146,16 @@ pub struct EditorWindow {
 struct MouseDrag {
     previous_state: EditorState,
     previous_viewport: ViewportOffset,
-    last: Coord,
+    last_pointer: Coord,
     active: bool,
     document_changed: bool,
-    mode: PointerDragMode,
+    input_override: Option<MouseDragOverride>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseDragOverride {
+    Control,
+    Space,
 }
 
 impl EditorWindow {
@@ -157,15 +164,21 @@ impl EditorWindow {
     }
 
     pub fn begin_mouse_drag(&mut self, coord: Coord) {
-        let mode = if self.modifiers.alt_key() {
-            PointerDragMode::Erase
-        } else if self.modifiers.shift_key() {
-            PointerDragMode::Select
+        let input_override = if self.modifiers == ModifiersState::empty() {
+            match self.state.cursor_mode {
+                crate::app::CursorMode::MoveDraw => Some(MouseDragOverride::Control),
+                crate::app::CursorMode::Stamp | crate::app::CursorMode::Shapes => {
+                    Some(MouseDragOverride::Space)
+                }
+                _ => None,
+            }
         } else {
-            PointerDragMode::Tool
+            None
         };
         let target = self.state.cursor_target_for_coord(coord);
-        if let Some(origin) = self.navigation_origin_for(target) {
+        let preserve_selection =
+            self.modifiers == ModifiersState::ALT && !self.state.selection.is_collapsed();
+        if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
             self.finish_history_transaction();
             self.state.move_to(coord);
             self.finish_navigation(origin);
@@ -174,10 +187,10 @@ impl EditorWindow {
         self.mouse_drag = Some(MouseDrag {
             previous_state: self.state.clone(),
             previous_viewport: self.viewport,
-            last: self.state.grid.cursor_pos,
+            last_pointer: target,
             active: false,
             document_changed: false,
-            mode,
+            input_override,
         });
     }
 
@@ -189,16 +202,68 @@ impl EditorWindow {
         let Some(mut drag) = self.mouse_drag.take() else {
             return;
         };
-        if target == drag.last {
+        if target == drag.last_pointer {
             self.mouse_drag = Some(drag);
             return;
         }
         if !drag.active {
-            drag.document_changed |= self.state.begin_pointer_drag(drag.mode);
+            if drag.input_override == Some(MouseDragOverride::Space) {
+                let command = match self.state.cursor_mode {
+                    crate::app::CursorMode::Stamp => Some(EditCommand::PlaceStamp),
+                    crate::app::CursorMode::Shapes => Some(EditCommand::StartOrConfirmShape),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    drag.document_changed |= crate::apply_edit_command(&mut self.state, command);
+                }
+            }
             drag.active = true;
         }
-        drag.document_changed |= self.state.drag_pointer_to(target, drag.mode);
-        drag.last = self.state.grid.cursor_pos;
+        let (modifiers, space_held) = match drag.input_override {
+            Some(MouseDragOverride::Control) => (ModifiersState::CONTROL, false),
+            Some(MouseDragOverride::Space) => (ModifiersState::empty(), true),
+            None => (self.modifiers, false),
+        };
+        while drag.last_pointer.column != target.column {
+            let direction = if drag.last_pointer.column < target.column {
+                Direction::Right
+            } else {
+                Direction::Left
+            };
+            drag.document_changed |= crate::handle_cursor_direction(
+                &mut self.state,
+                direction,
+                modifiers,
+                None,
+                space_held,
+            )
+            .unwrap_or(false);
+            drag.last_pointer.column = match direction {
+                Direction::Right => drag.last_pointer.column.saturating_add(1),
+                Direction::Left => drag.last_pointer.column.saturating_sub(1),
+                _ => unreachable!(),
+            };
+        }
+        while drag.last_pointer.line != target.line {
+            let direction = if drag.last_pointer.line < target.line {
+                Direction::Down
+            } else {
+                Direction::Up
+            };
+            drag.document_changed |= crate::handle_cursor_direction(
+                &mut self.state,
+                direction,
+                modifiers,
+                None,
+                space_held,
+            )
+            .unwrap_or(false);
+            drag.last_pointer.line = match direction {
+                Direction::Down => drag.last_pointer.line.saturating_add(1),
+                Direction::Up => drag.last_pointer.line.saturating_sub(1),
+                _ => unreachable!(),
+            };
+        }
         if drag.document_changed {
             self.content_index.invalidate();
         }
@@ -213,7 +278,15 @@ impl EditorWindow {
         if !drag.active {
             return;
         }
-        let finished_document = self.state.finish_pointer_drag(drag.mode);
+        let finished_document = if drag.input_override == Some(MouseDragOverride::Space)
+            && self.state.cursor_mode == crate::app::CursorMode::Shapes
+            && self.state.has_shape_preview()
+        {
+            crate::apply_edit_command(&mut self.state, EditCommand::StartOrConfirmShape)
+        } else {
+            false
+        };
+        self.state.end_stroke();
         let document_changed = drag.document_changed || finished_document;
         let recorded = self.finish_state_change(
             drag.previous_state,

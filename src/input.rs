@@ -106,6 +106,19 @@ pub fn move_selection_command(
             return (modifiers == ModifiersState::empty()).then_some(MoveSelectionCommand::Confirm);
         }
         let direction = direction_for_key(key)?;
+        return move_selection_direction_command(direction, modifiers, active, selection_expanded);
+    }
+    let direction = direction_for_key(key)?;
+    move_selection_direction_command(direction, modifiers, active, selection_expanded)
+}
+
+pub fn move_selection_direction_command(
+    direction: Direction,
+    modifiers: ModifiersState,
+    active: bool,
+    selection_expanded: bool,
+) -> Option<MoveSelectionCommand> {
+    if active {
         return match modifiers {
             _ if modifiers == ModifiersState::ALT => Some(MoveSelectionCommand::Step(direction)),
             _ if modifiers == ModifiersState::empty() => {
@@ -114,10 +127,8 @@ pub fn move_selection_command(
             _ => None,
         };
     }
-    if selection_expanded && modifiers == ModifiersState::ALT {
-        return direction_for_key(key).map(MoveSelectionCommand::BeginAndStep);
-    }
-    None
+    (selection_expanded && modifiers == ModifiersState::ALT)
+        .then_some(MoveSelectionCommand::BeginAndStep(direction))
 }
 
 /// Resolves viewport-only commands for the Utilities View tool. These are
@@ -210,10 +221,19 @@ pub fn ordered_direction_command(
     ordered: &OrderedModifierTracker,
     mode: CursorMode,
 ) -> Option<OrderedDirectionCommand> {
+    let direction = direction_for_key(key)?;
+    ordered_direction_command_for_direction(direction, modifiers, ordered, mode)
+}
+
+pub fn ordered_direction_command_for_direction(
+    direction: Direction,
+    modifiers: ModifiersState,
+    ordered: &OrderedModifierTracker,
+    mode: CursorMode,
+) -> Option<OrderedDirectionCommand> {
     if mode.accepts_text() || modifiers.super_key() {
         return None;
     }
-    let direction = direction_for_key(key)?;
     let (primary, secondary) = ordered.primary_and_secondary()?;
     let command = match primary {
         DirectionModifier::Shift => EditCommand::ExtendSelection(direction),
@@ -339,25 +359,10 @@ fn edit_command_for_key(
         };
     }
 
-    if modifiers.shift_key()
-        && !modifiers.alt_key()
-        && !modifiers.control_key()
-        && !modifiers.super_key()
+    if let Some(direction) = cursor_direction_for_key(key, mode)
+        && let Some(command) = edit_direction_command(direction, modifiers, mode, false)
     {
-        return if mode.accepts_text() {
-            arrow_direction_for_key(key).map(EditCommand::ExtendSelection)
-        } else {
-            direction_for_key(key).map(EditCommand::ExtendSelection)
-        };
-    }
-
-    if !mode.accepts_text()
-        && modifiers.alt_key()
-        && !modifiers.control_key()
-        && !modifiers.shift_key()
-        && !modifiers.super_key()
-    {
-        return direction_for_key(key).map(EditCommand::Erase);
+        return Some(command);
     }
 
     if modifiers.super_key()
@@ -379,61 +384,36 @@ fn edit_command_for_key(
     }
 
     if mode == CursorMode::MoveDraw {
-        return match key {
-            _ if is_space_key(key) => None,
-            _ => direction_for_key(key).map(|direction| {
-                if modifiers.control_key() {
-                    EditCommand::Draw(direction)
-                } else {
-                    EditCommand::Move(direction)
-                }
-            }),
-        };
+        return None;
     }
 
     if mode == CursorMode::Text {
         return match key {
             Key::Named(NamedKey::Delete) => Some(EditCommand::Delete),
             Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
-            _ => arrow_direction_for_key(key).map(EditCommand::Move),
+            _ => None,
         };
     }
 
     if mode == CursorMode::Stamp {
         return match key {
             _ if is_space_key(key) => Some(EditCommand::PlaceStamp),
-            _ => direction_for_key(key).map(|direction| {
-                if modifiers.control_key() {
-                    EditCommand::DrawStamp(direction)
-                } else {
-                    EditCommand::Move(direction)
-                }
-            }),
+            _ => None,
         };
     }
 
     if mode == CursorMode::Shapes {
         return match key {
             _ if is_space_key(key) => Some(EditCommand::StartOrConfirmShape),
-            _ => direction_for_key(key).map(EditCommand::Move),
+            _ => None,
         };
     }
 
     if mode == CursorMode::Utilities {
-        return direction_for_key(key).map(|direction| {
-            if modifiers.control_key() {
-                EditCommand::ApplyUtility(direction)
-            } else {
-                EditCommand::Move(direction)
-            }
-        });
+        return None;
     }
 
     match key {
-        Key::Named(NamedKey::ArrowLeft) => Some(EditCommand::Move(Direction::Left)),
-        Key::Named(NamedKey::ArrowRight) => Some(EditCommand::Move(Direction::Right)),
-        Key::Named(NamedKey::ArrowUp) => Some(EditCommand::Move(Direction::Up)),
-        Key::Named(NamedKey::ArrowDown) => Some(EditCommand::Move(Direction::Down)),
         Key::Named(NamedKey::Home) => Some(EditCommand::Home),
         Key::Named(NamedKey::End) => Some(EditCommand::End),
         Key::Named(NamedKey::Backspace) => Some(EditCommand::Backspace),
@@ -442,6 +422,52 @@ fn edit_command_for_key(
         Key::Named(NamedKey::Tab) => Some(EditCommand::InsertTab),
         _ => None,
     }
+}
+
+pub fn cursor_direction_for_key(key: &Key, mode: CursorMode) -> Option<Direction> {
+    if mode.accepts_text() {
+        arrow_direction_for_key(key)
+    } else {
+        direction_for_key(key)
+    }
+}
+
+pub fn edit_direction_command(
+    direction: Direction,
+    modifiers: ModifiersState,
+    mode: CursorMode,
+    space_held: bool,
+) -> Option<EditCommand> {
+    if modifiers.shift_key()
+        && !modifiers.alt_key()
+        && !modifiers.control_key()
+        && !modifiers.super_key()
+    {
+        return Some(EditCommand::ExtendSelection(direction));
+    }
+    if !mode.accepts_text()
+        && modifiers.alt_key()
+        && !modifiers.control_key()
+        && !modifiers.shift_key()
+        && !modifiers.super_key()
+    {
+        return Some(EditCommand::Erase(direction));
+    }
+    if modifiers.super_key()
+        || modifiers.alt_key()
+        || (mode.accepts_text() && modifiers.control_key())
+        || (!mode.accepts_text() && modifiers.shift_key())
+    {
+        return None;
+    }
+    if space_held && mode == CursorMode::Stamp {
+        return Some(EditCommand::DrawStamp(direction));
+    }
+    Some(if modifiers.control_key() {
+        tool_direction_command(direction, mode)
+    } else {
+        EditCommand::Move(direction)
+    })
 }
 
 fn is_space_key(key: &Key) -> bool {

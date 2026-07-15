@@ -68,7 +68,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Action | Key |
 | --- | --- |
 | Move the cursor | direction |
-| Draw with the mouse | click-drag (Line connects, Stamp paints, Shape commits on release) |
+| Use the active tool with the mouse | click-drag (unmodified Line holds Ctrl; Stamp/Shape hold Space) |
 | Draw or apply the active Line/Stamp/Utils operation | Ctrl + direction |
 | Place the active stamp | Space |
 | Grow the rectangular selection | Shift + direction |
@@ -163,6 +163,8 @@ tool.
 
 Shift + direction expands the selection from its anchor. With an expanded selection, Alt + direction
 lifts and moves the rectangle; a plain direction, Space, or Return confirms it, while Escape cancels.
+Mouse drag crosses cells through these same direction commands: Shift-drag expands the selection and
+Alt-drag moves an expanded selection (or erases when it is collapsed).
 Clipboard paste overwrites a rectangle from the selection's top-left corner, preserves ragged rows
 and trailing blanks, and selects the pasted result.
 

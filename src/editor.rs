@@ -21,14 +21,12 @@ mod grid;
 mod line_preview;
 mod line_tool;
 mod move_tool;
-mod pointer_tool;
 mod text_tool;
 mod utility;
 pub(crate) use grid::{ContentIndex, compact_blank_runs, compacted_blank_runs};
 use line_preview::LinePreview;
 use line_tool::{ActiveStroke, PlacedLineMarker};
 use move_tool::MoveLift;
-pub(crate) use pointer_tool::PointerDragMode;
 
 #[derive(Debug, Clone)]
 pub struct GridState {

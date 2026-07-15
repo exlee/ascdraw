@@ -40,9 +40,11 @@ use editor::EditorState;
 use export::{ExportOutcome, NativeExportPlatform};
 use history::HistoryGroup;
 use input::{
-    ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, edit_command,
-    history_command, line_preview_command, move_selection_command, ordered_direction_command,
-    pointer_position_to_coord, pointer_position_to_toolbar_position, view_command,
+    ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, cursor_direction_for_key,
+    edit_command, edit_direction_command, history_command, line_preview_command,
+    move_selection_command, move_selection_direction_command,
+    ordered_direction_command_for_direction, pointer_position_to_coord,
+    pointer_position_to_toolbar_position, view_command,
 };
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 #[cfg(test)]
@@ -613,6 +615,12 @@ fn handle_editor_key_with_order(
     modifiers: ModifiersState,
     ordered_modifiers: &input::OrderedModifierTracker,
 ) -> Option<bool> {
+    if let Some(direction) = cursor_direction_for_key(key, state.cursor_mode)
+        && let Some(changed) =
+            handle_cursor_direction(state, direction, modifiers, Some(ordered_modifiers), false)
+    {
+        return Some(changed);
+    }
     if let Some(command) = move_selection_command(
         key,
         modifiers,
@@ -621,26 +629,7 @@ fn handle_editor_key_with_order(
     ) {
         state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
-        return Some(match command {
-            input::MoveSelectionCommand::BeginAndStep(direction) => {
-                state.begin_selected_move_lift();
-                state.move_lift(direction);
-                false
-            }
-            input::MoveSelectionCommand::Step(direction) => {
-                state.move_lift(direction);
-                false
-            }
-            input::MoveSelectionCommand::ConfirmAndMove(direction) => {
-                let changed = state.confirm_move_lift();
-                changed | state.move_cursor(direction)
-            }
-            input::MoveSelectionCommand::Confirm => state.confirm_move_lift(),
-            input::MoveSelectionCommand::Cancel => {
-                state.cancel_move_lift();
-                false
-            }
-        });
+        return Some(apply_move_selection_command(state, command));
     }
     if let Some(command) =
         line_preview_command(key, modifiers, state.cursor_mode, state.has_line_preview())
@@ -655,32 +644,6 @@ fn handle_editor_key_with_order(
                 false
             }
         });
-    }
-    if let Some(command) =
-        ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
-    {
-        state.cancel_line_preview();
-        state.cancel_move_lift();
-        state.toolbar.cancel_shortcut();
-        let mut document_changed = false;
-        for _ in 0..command.steps {
-            document_changed |= apply_edit_command(state, command.command);
-        }
-        if matches!(command.command, EditCommand::ExtendSelection(_)) {
-            document_changed = false;
-        }
-        return Some(document_changed);
-    }
-    if let Some(command @ (EditCommand::ExtendSelection(_) | EditCommand::Erase(_))) =
-        edit_command(key, repeat, modifiers, state.cursor_mode)
-    {
-        state.cancel_line_preview();
-        state.cancel_move_lift();
-        state.toolbar.cancel_shortcut();
-        if matches!(command, EditCommand::ExtendSelection(_)) && state.cursor_mode.accepts_text() {
-            state.cancel_text_entry();
-        }
-        return Some(apply_edit_command(state, command));
     }
     if state.handle_toolbar_shortcut(key, modifiers) {
         return Some(false);
@@ -705,6 +668,83 @@ fn handle_editor_key_with_order(
     None
 }
 
+fn apply_move_selection_command(
+    state: &mut EditorState,
+    command: input::MoveSelectionCommand,
+) -> bool {
+    match command {
+        input::MoveSelectionCommand::BeginAndStep(direction) => {
+            state.begin_selected_move_lift();
+            state.move_lift(direction);
+            false
+        }
+        input::MoveSelectionCommand::Step(direction) => {
+            state.move_lift(direction);
+            false
+        }
+        input::MoveSelectionCommand::ConfirmAndMove(direction) => {
+            let changed = state.confirm_move_lift();
+            changed | state.move_cursor(direction)
+        }
+        input::MoveSelectionCommand::Confirm => state.confirm_move_lift(),
+        input::MoveSelectionCommand::Cancel => {
+            state.cancel_move_lift();
+            false
+        }
+    }
+}
+
+pub(crate) fn handle_cursor_direction(
+    state: &mut EditorState,
+    direction: model::Direction,
+    modifiers: ModifiersState,
+    ordered_modifiers: Option<&input::OrderedModifierTracker>,
+    space_held: bool,
+) -> Option<bool> {
+    if let Some(command) = move_selection_direction_command(
+        direction,
+        modifiers,
+        state.move_lift_active(),
+        !state.selection.is_collapsed(),
+    ) {
+        state.cancel_line_preview();
+        state.toolbar.cancel_shortcut();
+        return Some(apply_move_selection_command(state, command));
+    }
+    if state.has_line_preview()
+        && state.cursor_mode == app::CursorMode::MoveDraw
+        && !modifiers.shift_key()
+        && !modifiers.alt_key()
+        && !modifiers.super_key()
+    {
+        state.toolbar.cancel_shortcut();
+        return Some(state.move_line_preview(direction));
+    }
+    if let Some(command) = ordered_modifiers.and_then(|ordered| {
+        ordered_direction_command_for_direction(direction, modifiers, ordered, state.cursor_mode)
+    }) {
+        state.cancel_line_preview();
+        state.cancel_move_lift();
+        state.toolbar.cancel_shortcut();
+        let mut document_changed = false;
+        for _ in 0..command.steps {
+            document_changed |= apply_edit_command(state, command.command);
+        }
+        if matches!(command.command, EditCommand::ExtendSelection(_)) {
+            document_changed = false;
+        }
+        return Some(document_changed);
+    }
+    let command = edit_direction_command(direction, modifiers, state.cursor_mode, space_held)?;
+    state.cancel_line_preview();
+    state.cancel_move_lift();
+    state.toolbar.cancel_shortcut();
+    if matches!(command, EditCommand::ExtendSelection(_)) && state.cursor_mode.accepts_text() {
+        state.cancel_text_entry();
+    }
+    Some(apply_edit_command(state, command))
+}
+
 #[cfg(test)]
 fn handle_editor_key(
     state: &mut EditorState,
@@ -718,7 +758,7 @@ fn handle_editor_key(
     handle_editor_key_with_order(state, key, text, repeat, modifiers, &ordered)
 }
 
-fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
+pub(crate) fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => {
@@ -1496,6 +1536,78 @@ mod tests {
             assert_eq!(state.grid.cursor_pos.column, 2, "mode={mode:?}");
             assert_eq!(line_contents(&state.grid.lines[0]), "  ab", "mode={mode:?}");
         }
+    }
+
+    #[test]
+    fn shared_cursor_direction_moves_a_shift_drag_selection_with_alt() {
+        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        state.insert("abcd");
+        state.move_home();
+
+        for direction in [Direction::Right, Direction::Right] {
+            assert_eq!(
+                handle_cursor_direction(&mut state, direction, ModifiersState::SHIFT, None, false,),
+                Some(false)
+            );
+        }
+        assert_eq!(state.selection_bounds().left, 0);
+        assert_eq!(state.selection_bounds().right, 2);
+        let unchanged = state.grid.lines.clone();
+
+        assert_eq!(
+            handle_cursor_direction(
+                &mut state,
+                Direction::Right,
+                ModifiersState::ALT,
+                None,
+                false,
+            ),
+            Some(false)
+        );
+        assert!(state.move_lift_active());
+        assert_eq!(state.selection_bounds().left, 1);
+        assert_eq!(state.selection_bounds().right, 3);
+        assert_eq!(state.grid.lines, unchanged);
+    }
+
+    #[test]
+    fn shared_cursor_direction_applies_space_and_control_drag_overrides() {
+        let mut stamp = EditorState::new(&AppConfig::default().theme, "test");
+        stamp.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        stamp.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 0,
+        });
+        assert!(apply_edit_command(&mut stamp, EditCommand::PlaceStamp));
+        for _ in 0..3 {
+            assert_eq!(
+                handle_cursor_direction(
+                    &mut stamp,
+                    Direction::Right,
+                    ModifiersState::empty(),
+                    None,
+                    true,
+                ),
+                Some(true)
+            );
+        }
+        assert_eq!(line_contents(&stamp.grid.lines[0]), "░░░░");
+
+        let mut line = EditorState::new(&AppConfig::default().theme, "test");
+        line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        for _ in 0..3 {
+            assert_eq!(
+                handle_cursor_direction(
+                    &mut line,
+                    Direction::Right,
+                    ModifiersState::CONTROL,
+                    None,
+                    false,
+                ),
+                Some(true)
+            );
+        }
+        assert_eq!(line_contents(&line.grid.lines[0]), "╶──╴");
     }
 
     #[test]
