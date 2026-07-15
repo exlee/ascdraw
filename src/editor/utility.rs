@@ -6,7 +6,6 @@ impl EditorState {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
         super::grid::expand_blank_runs(&mut self.grid.lines);
         match self.toolbar.utility_kind() {
-            UtilityKind::Move => false,
             UtilityKind::Push => self.push_blank(direction),
             UtilityKind::Pull => self.pull_all(direction),
             UtilityKind::View => false,

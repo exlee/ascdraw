@@ -200,11 +200,7 @@ impl EditorState {
             return self.toolbar.tooltip();
         }
         if self.move_lift.is_some() {
-            return if self.move_lift_plain_direction_confirms() {
-                Tooltip::SelectionMoveLift
-            } else {
-                Tooltip::MoveLift
-            };
+            return Tooltip::SelectionMoveLift;
         }
         if self.line_preview.is_some() {
             return Tooltip::LinePreview;
@@ -288,9 +284,9 @@ impl EditorState {
         if self.move_lift.is_some()
             && (self.toolbar.export_menu_open()
                 || self.toolbar.toggles_menu_open()
-                || self.toolbar.main_mode() != MainMode::Utilities
+                || self.toolbar.main_mode() != old_mode
                 || self.toolbar.utility_kind() != old_utility
-                || self.toolbar.utility_kind() != UtilityKind::Move)
+            )
         {
             self.cancel_move_lift();
         }
@@ -1265,7 +1261,7 @@ mod tests {
         selected.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         selected.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         });
         let selections = selected.durable_selections();
 
@@ -2411,7 +2407,8 @@ mod tests {
         let mut state = EditorState::new(&ThemeConfig::default(), "test");
         state.insert("abcd");
         state.move_home();
-        assert!(state.tooltip().text().contains("Alt-direction erases"));
+        assert_eq!(state.tooltip(), Tooltip::Stamp);
+        assert!(state.tooltip().text().starts_with("Stamp:"));
 
         state.extend_selection(Direction::Right);
         assert_eq!(state.tooltip(), Tooltip::Selection);
@@ -2430,12 +2427,6 @@ mod tests {
                 .text()
                 .contains("direction confirms and moves")
         );
-        assert!(state.cancel_move_lift());
-
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        assert!(state.begin_move_lift());
-        assert_eq!(state.tooltip(), Tooltip::MoveLift);
-        assert!(state.tooltip().text().contains("directions reposition"));
         assert!(state.cancel_move_lift());
 
         state.move_to(Coord::default());
@@ -2763,11 +2754,11 @@ mod tests {
         assert!(line.prepare_history_command());
         assert!(line.active_stroke.is_none());
 
-        let mut lift = utility_state(&["abc"], UtilityKind::Move, Coord::default());
+        let mut lift = utility_state(&["abc"], UtilityKind::Push, Coord::default());
         lift.selection
             .select(Coord::default(), Coord { line: 0, column: 1 });
         let before_lift = lift.edit_snapshot();
-        assert!(lift.begin_move_lift());
+        assert!(lift.begin_selected_move_lift());
         assert!(lift.move_lift(Direction::Right));
         assert!(lift.prepare_history_command());
         assert!(!lift.move_lift_active());
@@ -3116,7 +3107,7 @@ mod tests {
 
     #[test]
     fn move_lift_previews_without_mutation_then_overwrites_as_one_literal_rectangle() {
-        let mut state = utility_state(&["abXX", "cdYY"], UtilityKind::Move, Coord::default());
+        let mut state = utility_state(&["abXX", "cdYY"], UtilityKind::Push, Coord::default());
         let configured_face = state.theme.tooltip.clone();
         state.grid.lines[0][0].face = configured_face.clone();
         state
@@ -3124,7 +3115,7 @@ mod tests {
             .select(Coord::default(), Coord { line: 1, column: 1 });
         let before = state.edit_snapshot();
 
-        assert!(state.begin_move_lift());
+        assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
         assert!(state.move_lift(Direction::Right));
         assert_eq!(state.edit_snapshot().lines, before.lines);
@@ -3152,13 +3143,13 @@ mod tests {
 
     #[test]
     fn move_lift_cancel_restores_exact_cursor_selection_and_document() {
-        let mut state = utility_state(&["abc"], UtilityKind::Move, Coord { line: 0, column: 2 });
+        let mut state = utility_state(&["abc"], UtilityKind::Push, Coord { line: 0, column: 2 });
         state
             .selection
             .select(Coord { line: 0, column: 2 }, Coord { line: 0, column: 1 });
         let before = state.edit_snapshot();
 
-        assert!(state.begin_move_lift());
+        assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Down));
         assert!(state.move_lift(Direction::Right));
         assert!(state.cancel_move_lift());
@@ -3169,16 +3160,16 @@ mod tests {
 
     #[test]
     fn move_lift_handles_overlap_wide_atoms_and_line_marker_metadata() {
-        let mut overlap = utility_state(&["abcd"], UtilityKind::Move, Coord { line: 0, column: 2 });
+        let mut overlap = utility_state(&["abcd"], UtilityKind::Push, Coord { line: 0, column: 2 });
         overlap
             .selection
             .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
-        assert!(overlap.begin_move_lift());
+        assert!(overlap.begin_selected_move_lift());
         assert!(overlap.move_lift(Direction::Right));
         assert!(overlap.confirm_move_lift());
         assert_eq!(line_contents(&overlap), vec!["a bc"]);
 
-        let mut wide = utility_state(&["a界z"], UtilityKind::Move, Coord { line: 0, column: 1 });
+        let mut wide = utility_state(&["a界z"], UtilityKind::Push, Coord { line: 0, column: 1 });
         wide.selection
             .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
         wide.line_markers.push(PlacedLineMarker {
@@ -3186,7 +3177,7 @@ mod tests {
             ending: LineEnding::Fixed('◆'),
             base_glyph: "界".into(),
         });
-        assert!(wide.begin_move_lift());
+        assert!(wide.begin_selected_move_lift());
         assert!(wide.move_lift(Direction::Down));
         assert!(wide.confirm_move_lift());
         assert_eq!(line_contents(&wide), vec!["a  z", " 界"]);
@@ -3196,13 +3187,13 @@ mod tests {
 
     #[test]
     fn confirming_a_stationary_move_lift_is_an_exact_document_no_op() {
-        let mut state = utility_state(&["abc"], UtilityKind::Move, Coord { line: 0, column: 1 });
+        let mut state = utility_state(&["abc"], UtilityKind::Push, Coord { line: 0, column: 1 });
         state
             .selection
             .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
         let before = state.edit_snapshot();
 
-        assert!(state.begin_move_lift());
+        assert!(state.begin_selected_move_lift());
         assert!(!state.confirm_move_lift());
 
         assert_eq!(state.edit_snapshot(), before);
@@ -3225,10 +3216,9 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: match utility {
-                UtilityKind::Move => 0,
-                UtilityKind::Push => 1,
-                UtilityKind::Pull => 2,
-                UtilityKind::View => 3,
+                UtilityKind::Push => 0,
+                UtilityKind::Pull => 1,
+                UtilityKind::View => 2,
             },
         });
         state.grid.cursor_pos = cursor;

@@ -1590,7 +1590,7 @@ mod tests {
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         }));
         assert!(!grid_cursor_is_visible(&state));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {

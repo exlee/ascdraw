@@ -1242,7 +1242,7 @@ mod tests {
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         }));
 
         let mut anchor = None;
@@ -1291,7 +1291,7 @@ mod tests {
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         }));
         let mut anchor = None;
         let mut view_viewport = initial_viewport;
@@ -1664,7 +1664,7 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         toolbar.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         });
         let menu = toolbar.durable_selections();
         let mut writes = 0;
@@ -2007,7 +2007,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 1,
+            option: 0,
         });
         let previous = state.clone();
         assert!(state.apply_utility(Direction::Left));

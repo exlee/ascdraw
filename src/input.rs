@@ -41,7 +41,6 @@ pub enum ViewCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveSelectionCommand {
-    Begin,
     BeginAndStep(Direction),
     Step(Direction),
     ConfirmAndMove(Direction),
@@ -88,15 +87,12 @@ pub fn line_preview_command(
         .map(LinePreviewCommand::Move)
 }
 
-/// Resolves the modal keyboard interaction for the Utilities Move tool.
+/// Resolves the modal keyboard interaction for moving an expanded selection.
 /// Clipboard/history shortcuts are routed before this command by the runtime.
 pub fn move_selection_command(
     key: &Key,
     modifiers: ModifiersState,
-    mode: CursorMode,
-    utility: UtilityKind,
     active: bool,
-    plain_direction_confirms: bool,
     selection_expanded: bool,
 ) -> Option<MoveSelectionCommand> {
     if active {
@@ -112,11 +108,8 @@ pub fn move_selection_command(
         let direction = direction_for_key(key)?;
         return match modifiers {
             _ if modifiers == ModifiersState::ALT => Some(MoveSelectionCommand::Step(direction)),
-            _ if modifiers == ModifiersState::empty() && plain_direction_confirms => {
-                Some(MoveSelectionCommand::ConfirmAndMove(direction))
-            }
             _ if modifiers == ModifiersState::empty() => {
-                Some(MoveSelectionCommand::Step(direction))
+                Some(MoveSelectionCommand::ConfirmAndMove(direction))
             }
             _ => None,
         };
@@ -124,11 +117,7 @@ pub fn move_selection_command(
     if selection_expanded && modifiers == ModifiersState::ALT {
         return direction_for_key(key).map(MoveSelectionCommand::BeginAndStep);
     }
-    if mode != CursorMode::Utilities || utility != UtilityKind::Move {
-        return None;
-    }
-    (modifiers == ModifiersState::empty() && is_space_key(key))
-        .then_some(MoveSelectionCommand::Begin)
+    None
 }
 
 /// Resolves viewport-only commands for the Utilities View tool. These are
@@ -1341,44 +1330,19 @@ mod tests {
     }
 
     #[test]
-    fn utilities_move_resolves_lift_navigation_confirmation_and_cancel_only() {
-        let mode = CursorMode::Utilities;
-        let utility = UtilityKind::Move;
-        assert_eq!(
-            move_selection_command(
-                &Key::Named(NamedKey::Space),
-                ModifiersState::empty(),
-                mode,
-                utility,
-                false,
-                false,
-                false,
-            ),
-            Some(MoveSelectionCommand::Begin)
-        );
+    fn active_selection_move_resolves_navigation_confirmation_and_cancel_only() {
         assert_eq!(
             move_selection_command(
                 &Key::Named(NamedKey::ArrowRight),
                 ModifiersState::empty(),
-                mode,
-                utility,
                 true,
                 false,
-                false,
             ),
-            Some(MoveSelectionCommand::Step(Direction::Right))
+            Some(MoveSelectionCommand::ConfirmAndMove(Direction::Right))
         );
         for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::Enter)] {
             assert_eq!(
-                move_selection_command(
-                    &key,
-                    ModifiersState::empty(),
-                    mode,
-                    utility,
-                    true,
-                    false,
-                    false,
-                ),
+                move_selection_command(&key, ModifiersState::empty(), true, false),
                 Some(MoveSelectionCommand::Confirm)
             );
         }
@@ -1387,7 +1351,7 @@ mod tests {
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             assert_eq!(
-                move_selection_command(&key, modifiers, mode, utility, true, false, false),
+                move_selection_command(&key, modifiers, true, false),
                 Some(MoveSelectionCommand::Cancel)
             );
         }
@@ -1395,10 +1359,7 @@ mod tests {
             move_selection_command(
                 &Key::Character("c".into()),
                 ModifiersState::CONTROL,
-                mode,
-                utility,
                 true,
-                false,
                 false,
             ),
             None,
@@ -1408,9 +1369,6 @@ mod tests {
             move_selection_command(
                 &Key::Named(NamedKey::Enter),
                 ModifiersState::empty(),
-                mode,
-                utility,
-                false,
                 false,
                 false,
             ),
@@ -1421,9 +1379,6 @@ mod tests {
             move_selection_command(
                 &Key::Named(NamedKey::Space),
                 ModifiersState::empty(),
-                mode,
-                UtilityKind::View,
-                false,
                 false,
                 false,
             ),
@@ -1445,9 +1400,6 @@ mod tests {
                 move_selection_command(
                     &Key::Named(NamedKey::ArrowDown),
                     ModifiersState::ALT,
-                    mode,
-                    UtilityKind::View,
-                    false,
                     false,
                     true,
                 ),
@@ -1458,9 +1410,6 @@ mod tests {
                 move_selection_command(
                     &Key::Named(NamedKey::ArrowDown),
                     ModifiersState::ALT,
-                    mode,
-                    UtilityKind::View,
-                    true,
                     true,
                     true,
                 ),
@@ -1473,9 +1422,6 @@ mod tests {
             move_selection_command(
                 &Key::Named(NamedKey::ArrowDown),
                 ModifiersState::ALT,
-                CursorMode::Stamp,
-                UtilityKind::View,
-                false,
                 false,
                 false,
             ),
@@ -1486,9 +1432,6 @@ mod tests {
             move_selection_command(
                 &Key::Named(NamedKey::ArrowRight),
                 ModifiersState::empty(),
-                CursorMode::Stamp,
-                UtilityKind::View,
-                true,
                 true,
                 true,
             ),

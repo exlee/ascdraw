@@ -144,10 +144,9 @@ Utils keeps its operations on direct keys:
 
 | Key | Tool | Behavior |
 | --- | --- | --- |
-| `2` | Move | Lift the current cell or selection, reposition it, then confirm or cancel |
-| `3` | Push | Insert a blank neighboring row or column |
-| `4` | Pull | Remove and pull a neighboring row or column |
-| `5` | View | Pan the viewport or center it on the drawing |
+| `2` | Push | Insert a blank neighboring row or column |
+| `3` | Pull | Remove and pull a neighboring row or column |
+| `4` | View | Pan the viewport or center it on the drawing |
 
 Operations that would split a wide grapheme are rejected.
 

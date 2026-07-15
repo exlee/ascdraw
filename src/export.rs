@@ -889,8 +889,10 @@ mod tests {
             submenu: 0,
             option: 0,
         }));
-        assert!(lifted.begin_move_lift());
+        lifted.extend_selection(crate::model::Direction::Right);
+        assert!(lifted.begin_selected_move_lift());
         assert!(lifted.move_lift(crate::model::Direction::Right));
+        lifted.selection.collapse(crate::model::Coord::default());
         perform(
             ExportAction::ClipboardPng,
             &mut lifted,
@@ -1201,7 +1203,7 @@ mod tests {
         source.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         source.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         });
         let source_menu = source.toolbar.durable_selections();
         let source_viewport = ViewportOffset { x: -12, y: 34 };
@@ -1400,7 +1402,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         });
         let menu_selections = state.toolbar.durable_selections();
         let mut platform = MockPlatform {

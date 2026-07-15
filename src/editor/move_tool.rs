@@ -1,10 +1,8 @@
-use crate::app::CursorMode;
 use crate::model::{Coord, Direction};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_atoms,
 };
-use crate::toolbar::UtilityKind;
 
 use super::{EditorState, PlacedLineMarker, index_for_column};
 
@@ -17,7 +15,6 @@ pub(super) struct MoveLift {
     origin: Coord,
     rectangle: TextRectangle,
     markers: Vec<PlacedLineMarker>,
-    plain_direction_confirms: bool,
     rendered_lines: Vec<Vec<crate::model::Atom>>,
 }
 
@@ -26,23 +23,14 @@ impl EditorState {
         self.move_lift.is_some()
     }
 
-    pub fn begin_move_lift(&mut self) -> bool {
-        if self.cursor_mode != CursorMode::Utilities
-            || self.toolbar.utility_kind() != UtilityKind::Move
-        {
-            return false;
-        }
-        self.begin_move_lift_inner(false)
-    }
-
     pub fn begin_selected_move_lift(&mut self) -> bool {
         if self.selection.is_collapsed() {
             return false;
         }
-        self.begin_move_lift_inner(true)
+        self.begin_move_lift_inner()
     }
 
-    fn begin_move_lift_inner(&mut self, plain_direction_confirms: bool) -> bool {
+    fn begin_move_lift_inner(&mut self) -> bool {
         if self.move_lift.is_some() {
             return false;
         }
@@ -77,17 +65,10 @@ impl EditorState {
             },
             rectangle,
             markers,
-            plain_direction_confirms,
             rendered_lines: Vec::new(),
         });
         self.refresh_move_lift_render();
         true
-    }
-
-    pub fn move_lift_plain_direction_confirms(&self) -> bool {
-        self.move_lift
-            .as_ref()
-            .is_some_and(|lift| lift.plain_direction_confirms)
     }
 
     pub fn move_lift(&mut self, direction: Direction) -> bool {

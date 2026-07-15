@@ -307,7 +307,7 @@ mod tests {
             submenu: 0,
             option: 0,
         });
-        assert_eq!(source.utility_kind(), UtilityKind::Move);
+        assert_eq!(source.utility_kind(), UtilityKind::Push);
         let expected = source.durable_selections();
 
         source.handle_shortcut(&Key::Character("0".into()), ModifiersState::empty());

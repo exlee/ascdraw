@@ -325,7 +325,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 1,
+            option: 0,
         });
         let before = HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -344,7 +344,7 @@ mod tests {
         state.restore_edit_snapshot(restored.edit.clone());
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 2,
+            option: 1,
         });
         state.grid.cursor_pos.column = 99;
         state.selection.collapse(state.grid.cursor_pos);
@@ -372,7 +372,7 @@ mod tests {
             edit: state.edit_snapshot(),
             viewport: ViewportOffset::default(),
         };
-        assert!(state.begin_move_lift());
+        assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
         assert!(state.move_lift(Direction::Right));
         assert!(state.confirm_move_lift());
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(history.lengths(), (0, 1));
 
         state.restore_edit_snapshot(before.edit.clone());
-        assert!(state.begin_move_lift());
+        assert!(state.begin_selected_move_lift());
         assert!(!state.confirm_move_lift());
         let stationary = HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -441,7 +441,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         });
         let menu_selections = state.toolbar.durable_selections();
         let before = HistorySnapshot {

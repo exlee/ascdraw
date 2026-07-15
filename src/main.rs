@@ -616,19 +616,12 @@ fn handle_editor_key_with_order(
     if let Some(command) = move_selection_command(
         key,
         modifiers,
-        state.cursor_mode,
-        state.toolbar.utility_kind(),
         state.move_lift_active(),
-        state.move_lift_plain_direction_confirms(),
         !state.selection.is_collapsed(),
     ) {
         state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
         return Some(match command {
-            input::MoveSelectionCommand::Begin => {
-                state.begin_move_lift();
-                false
-            }
             input::MoveSelectionCommand::BeginAndStep(direction) => {
                 state.begin_selected_move_lift();
                 state.move_lift(direction);
@@ -1414,7 +1407,7 @@ mod tests {
     }
 
     #[test]
-    fn utils_move_routes_space_arrows_enter_and_escape_without_stealing_other_enter_behavior() {
+    fn utilities_space_no_longer_starts_a_move_lift() {
         let config = AppConfig::default();
         let mut state = EditorState::new(&config.theme, "test");
         state.insert("abcd");
@@ -1435,71 +1428,10 @@ mod tests {
                 false,
                 ModifiersState::empty(),
             ),
-            Some(false)
-        );
-        assert_eq!(
-            handle_editor_key(
-                &mut state,
-                &Key::Named(NamedKey::ArrowRight),
-                None,
-                false,
-                ModifiersState::empty(),
-            ),
-            Some(false)
-        );
-        assert_eq!(state.grid.lines, unchanged);
-        assert_eq!(
-            handle_editor_key(
-                &mut state,
-                &Key::Named(NamedKey::Escape),
-                None,
-                false,
-                ModifiersState::empty(),
-            ),
-            Some(false)
+            None
         );
         assert!(!state.move_lift_active());
         assert_eq!(state.grid.lines, unchanged);
-
-        handle_editor_key(
-            &mut state,
-            &Key::Named(NamedKey::Space),
-            None,
-            false,
-            ModifiersState::empty(),
-        );
-        handle_editor_key(
-            &mut state,
-            &Key::Named(NamedKey::ArrowRight),
-            None,
-            false,
-            ModifiersState::empty(),
-        );
-        assert!(state.move_lift_active());
-        assert!(!state.selection.is_collapsed());
-        assert_eq!(
-            handle_editor_key(
-                &mut state,
-                &Key::Named(NamedKey::Enter),
-                None,
-                false,
-                ModifiersState::empty(),
-            ),
-            Some(true)
-        );
-        assert_eq!(line_contents(&state.grid.lines[0]), " abd");
-
-        assert_eq!(
-            handle_editor_key(
-                &mut state,
-                &Key::Named(NamedKey::Enter),
-                None,
-                false,
-                ModifiersState::empty(),
-            ),
-            Some(false)
-        );
-        assert_eq!(state.cursor_mode, app::CursorMode::Replace);
     }
 
     #[test]
@@ -1778,7 +1710,7 @@ mod tests {
         assert!(utility.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert!(utility.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 1,
+            option: 0,
         }));
         assert_eq!(
             dispatch_ordered(&mut utility, Key::Character("l".into()), &states),
@@ -1798,7 +1730,7 @@ mod tests {
             assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
             assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
                 submenu: 0,
-                option: 2,
+                option: 1,
             }));
             let before = history::HistorySnapshot {
                 edit: state.edit_snapshot(),

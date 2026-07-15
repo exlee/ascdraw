@@ -196,7 +196,7 @@ const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["─", "━", "═"],
     &[" ", "░", "▒", "▓", "█"],
 ];
-const UTILITY_OPTIONS: [&[&str]; 1] = [["Move", "Push", "Pull", "View"].as_slice()];
+const UTILITY_OPTIONS: [&[&str]; 1] = [["Push", "Pull", "View"].as_slice()];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MainMode {
@@ -217,7 +217,6 @@ pub enum ShapeKind {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UtilityKind {
     #[default]
-    Move,
     Push,
     Pull,
     View,
@@ -240,7 +239,7 @@ impl MainMode {
             Self::Line => Tooltip::Line,
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
-            Self::Utilities => Tooltip::UtilitiesMove,
+            Self::Utilities => Tooltip::UtilitiesPush,
         }
     }
 }
@@ -255,8 +254,6 @@ pub enum Tooltip {
     UtilitiesPush,
     UtilitiesPull,
     UtilitiesView,
-    UtilitiesMove,
-    MoveLift,
     SelectionMoveLift,
     LinePreview,
     ShapePreview,
@@ -301,12 +298,8 @@ impl Tooltip {
             }
             Self::UtilitiesPull => "Pull: Ctrl-direction pulls",
             Self::UtilitiesView => "View: directions pan; Space centers",
-            Self::UtilitiesMove => {
-                "Move: Space lifts the current cell"
-            }
-            Self::MoveLift => "Space/Enter confirms",
             Self::SelectionMoveLift => {
-                "Selection move: Alt-direction repositions; Space/Enter confirms"
+                "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms"
             }
             Self::LinePreview => {
                 "Space anchors; Space again confirms; Backspace removes the last anchor"
@@ -326,8 +319,7 @@ impl Tooltip {
         };
         if matches!(
             self,
-            Self::MoveLift
-                | Self::SelectionMoveLift
+            Self::SelectionMoveLift
                 | Self::LinePreview
                 | Self::ShapePreview
                 | Self::SingleReplace
@@ -822,7 +814,6 @@ impl ToolbarState {
         }
         if self.main_mode == MainMode::Utilities {
             return match self.utility_kind() {
-                UtilityKind::Move => Tooltip::UtilitiesMove,
                 UtilityKind::Push => Tooltip::UtilitiesPush,
                 UtilityKind::Pull => Tooltip::UtilitiesPull,
                 UtilityKind::View => Tooltip::UtilitiesView,
@@ -875,10 +866,9 @@ impl ToolbarState {
 
     pub fn utility_kind(&self) -> UtilityKind {
         match self.utility_selected {
-            0 => UtilityKind::Move,
-            1 => UtilityKind::Push,
-            2 => UtilityKind::Pull,
-            3 => UtilityKind::View,
+            0 => UtilityKind::Push,
+            1 => UtilityKind::Pull,
+            2 => UtilityKind::View,
             _ => unreachable!("utility selection is always normalized"),
         }
     }
@@ -1277,7 +1267,7 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
-            ["Move:", "Push:", "Pull:", "View:"]
+            ["Push:", "Pull:", "View:"]
         );
         assert!(toolbar.toolbar_spans(MENU_FIRST_ROW + 1).is_empty());
     }
@@ -2067,7 +2057,7 @@ mod tests {
     #[test]
     fn utils_tools_are_keyboard_and_mouse_selectable() {
         let mut toolbar = ToolbarState::default();
-        for key in ["1", "4", "3"] {
+        for key in ["1", "4", "2"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
@@ -2075,7 +2065,7 @@ mod tests {
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
         assert_eq!(
             row(&toolbar, MENU_FIRST_ROW),
-            "Move: 2  Push: 3  Pull: 4  View: 5"
+            "Push: 2  Pull: 3  View: 4"
         );
         assert!(row(&toolbar, 2).is_empty());
         assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Tool"));
@@ -2085,7 +2075,7 @@ mod tests {
 
         let expected = ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 2,
+            option: 1,
         };
         let pull_column = (0..80)
             .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(expected))
@@ -2111,7 +2101,7 @@ mod tests {
 
         let view_action = ToolbarAction::SelectSubmenu {
             submenu: 0,
-            option: 3,
+            option: 2,
         };
         let column = (0..80)
             .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(view_action))
@@ -2126,22 +2116,22 @@ mod tests {
         assert_eq!(toolbar.utility_kind(), UtilityKind::View);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesView);
 
-        let move_action = ToolbarAction::SelectSubmenu {
+        let push_action = ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 0,
         };
         let column = (0..80)
-            .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(move_action))
-            .expect("Move label and shortcut are visible and clickable");
+            .find(|column| toolbar.action_at(MENU_FIRST_ROW, *column, 80) == Some(push_action))
+            .expect("Push label and shortcut are visible and clickable");
         assert!(
             toolbar.apply_action(
                 toolbar
                     .action_at(MENU_FIRST_ROW, column, 80)
-                    .expect("Move hit tests")
+                    .expect("Push hit tests")
             )
         );
-        assert_eq!(toolbar.utility_kind(), UtilityKind::Move);
-        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesMove);
+        assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
+        assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
     }
 
     #[test]
@@ -2152,10 +2142,9 @@ mod tests {
         }
 
         for (key, utility, tooltip) in [
-            ("2", UtilityKind::Move, Tooltip::UtilitiesMove),
-            ("3", UtilityKind::Push, Tooltip::UtilitiesPush),
-            ("4", UtilityKind::Pull, Tooltip::UtilitiesPull),
-            ("5", UtilityKind::View, Tooltip::UtilitiesView),
+            ("2", UtilityKind::Push, Tooltip::UtilitiesPush),
+            ("3", UtilityKind::Pull, Tooltip::UtilitiesPull),
+            ("4", UtilityKind::View, Tooltip::UtilitiesView),
         ] {
             press(&mut toolbar, key);
             assert_eq!(toolbar.utility_kind(), utility);
@@ -2639,7 +2628,7 @@ mod tests {
             Tooltip::Stamp,
             Tooltip::Line,
             Tooltip::Shapes,
-            Tooltip::UtilitiesMove,
+            Tooltip::UtilitiesPush,
         ];
         for (mode, tooltip) in MainMode::ALL.into_iter().zip(expected) {
             assert_eq!(mode.tooltip(), tooltip);
@@ -2649,17 +2638,16 @@ mod tests {
 
         assert_ne!(Tooltip::Line.text(), Tooltip::Stamp.text());
         assert_ne!(Tooltip::Stamp.text(), Tooltip::Shapes.text());
-        assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesMove.text());
-        for tooltip in [
-            Tooltip::Line,
-            Tooltip::Stamp,
-            Tooltip::Shapes,
-            Tooltip::UtilitiesPush,
-            Tooltip::UtilitiesPull,
-            Tooltip::UtilitiesView,
-            Tooltip::UtilitiesMove,
+        assert_ne!(Tooltip::Shapes.text(), Tooltip::UtilitiesPush.text());
+        for (tooltip, prefix) in [
+            (Tooltip::Line, "Line:"),
+            (Tooltip::Stamp, "Stamp:"),
+            (Tooltip::Shapes, "Shape:"),
+            (Tooltip::UtilitiesPush, "Push:"),
+            (Tooltip::UtilitiesPull, "Pull:"),
+            (Tooltip::UtilitiesView, "View:"),
         ] {
-            assert!(tooltip.text().contains("Alt-direction erases"));
+            assert!(tooltip.text().starts_with(prefix));
         }
 
         toolbar.apply_action(ToolbarAction::ToggleExportMenu);
