@@ -27,7 +27,7 @@ mod export_png;
 #[cfg(target_os = "macos")]
 mod metal;
 mod window_surface;
-pub use export_png::{CanvasImage, render_canvas_image};
+pub use export_png::{CanvasImage, render_canvas_image, render_canvas_layers_image};
 pub use window_surface::WindowSurface;
 
 const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
@@ -219,27 +219,39 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         .is_none()
         .then(|| state.lines_with_shape_preview())
         .flatten();
-    let lines = state
+    let active_lines = state
         .preview_render_lines()
         .or(preview_lines.as_deref())
         .unwrap_or(&state.grid.lines);
-    for (row_index, line) in lines
-        .iter()
-        .enumerate()
-        .skip(first_row)
-        .take(max_row.saturating_sub(first_row))
+    let active_layer = state.active_layer_id();
+    for layer in state
+        .layer_views()
+        .into_iter()
+        .filter(|layer| layer.visible)
     {
-        render_line(
-            canvas,
-            row_index,
-            line,
-            &state.grid.default_face,
-            first_column..max_column,
-            metrics,
-            DrawOrigin::Grid {
-                top_padding: layout.grid_top,
-            },
-        );
+        let lines = if layer.id == active_layer {
+            active_lines
+        } else {
+            layer.lines
+        };
+        for (row_index, line) in lines
+            .iter()
+            .enumerate()
+            .skip(first_row)
+            .take(max_row.saturating_sub(first_row))
+        {
+            render_overlay_line(
+                canvas,
+                row_index,
+                line,
+                &state.grid.default_face,
+                first_column..max_column,
+                metrics,
+                DrawOrigin::Grid {
+                    top_padding: layout.grid_top,
+                },
+            );
+        }
     }
 
     render_canvas_selection(canvas, state, metrics, layout.grid_top);
@@ -247,7 +259,7 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         render_grid_cursor(
             canvas,
             state,
-            lines,
+            active_lines,
             &config.display.cursor_shape,
             grid_layout,
             metrics,
@@ -745,6 +757,31 @@ fn render_line(
         default_face,
         metrics,
         origin,
+        false,
+    );
+}
+
+fn render_overlay_line(
+    canvas: &Canvas,
+    row: usize,
+    line: &[Atom],
+    default_face: &Face,
+    columns: std::ops::Range<usize>,
+    metrics: &CellMetrics,
+    origin: DrawOrigin,
+) {
+    render_line_at(
+        canvas,
+        LineRenderPosition {
+            row,
+            first_column: columns.start,
+            max_column: columns.end,
+        },
+        line,
+        default_face,
+        metrics,
+        origin,
+        true,
     );
 }
 
@@ -755,6 +792,7 @@ fn render_line_at(
     default_face: &Face,
     metrics: &CellMetrics,
     origin: DrawOrigin,
+    transparent_default_background: bool,
 ) {
     let top = line_top(origin, position.row, metrics);
     let root_face = resolve_root_face(default_face, FALLBACK_FG, FALLBACK_BG);
@@ -793,7 +831,8 @@ fn render_line_at(
             && resolved.bg == root_face.bg
             && resolved.underline_style.is_none()
             && !resolved.strikethrough;
-        if !is_plain_blank {
+        let paints_background = !transparent_default_background || !face_is_default(&atom.face);
+        if !is_plain_blank && paints_background {
             fill_cells(
                 canvas,
                 visible_start,
@@ -1080,7 +1119,7 @@ fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> Cursor
         CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities => {
             config.move_draw.unwrap_or(CursorShape::Block)
         }
-        CursorMode::Text => config.insert.unwrap_or(CursorShape::Block),
+        CursorMode::Text | CursorMode::Navigation => config.insert.unwrap_or(CursorShape::Block),
     }
 }
 

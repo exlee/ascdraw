@@ -459,17 +459,18 @@ fn try_main() -> Result<ExitCode> {
                                 editor
                                     .mouse_toolbar_position
                                     .and_then(|(row, column, width)| {
-                                        editor.state.toolbar.action_at(row, column, width)
+                                        editor.state.toolbar_action_at(row, column, width)
                                     });
                             if let Some(action) = toolbar_action {
                                 editor.note_keypress(Instant::now());
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 editor.state.apply_toolbar_action(action);
+                                let document_changed = editor.state.take_toolbar_document_change();
                                 editor.finish_state_change(
                                     previous_state,
                                     previous_viewport,
-                                    false,
+                                    document_changed,
                                 );
                                 perform_pending_export(editor, &config);
                                 editor.request_redraw();
@@ -646,7 +647,7 @@ fn handle_editor_key_with_order(
         });
     }
     if state.handle_toolbar_shortcut(key, modifiers) {
-        return Some(false);
+        return Some(state.take_toolbar_document_change());
     }
     if let Some(command) = edit_command(key, repeat, modifiers, state.cursor_mode) {
         state.cancel_line_preview();

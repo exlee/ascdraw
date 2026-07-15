@@ -36,6 +36,29 @@ pub struct Coord {
     pub column: usize,
 }
 
+pub const MAX_LAYERS: usize = 6;
+pub const LAYER_SYMBOLS: [&str; 10] = ["⍺", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct LayerId(pub u8);
+
+impl LayerId {
+    pub fn symbol(self) -> &'static str {
+        LAYER_SYMBOLS[usize::from(self.0)]
+    }
+
+    pub fn is_valid(self) -> bool {
+        usize::from(self.0) < LAYER_SYMBOLS.len()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerSummary {
+    pub id: LayerId,
+    pub visible: bool,
+    pub active: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Up,

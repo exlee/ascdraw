@@ -1,17 +1,16 @@
-use crate::model::Atom;
+use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
+
+use crate::model::{Atom, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
 
 use super::{PlacedLineMarker, blank_atom};
 
-pub const MAX_LAYERS: usize = 6;
-pub const LAYER_SYMBOLS: [&str; 10] = ["⍺", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LayerId(pub u8);
-
-impl LayerId {
-    pub fn symbol(self) -> &'static str {
-        LAYER_SYMBOLS[usize::from(self.0)]
-    }
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PersistedLayer {
+    pub id: LayerId,
+    pub visible: bool,
+    pub lines: Vec<Vec<Atom>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,13 +30,6 @@ impl CanvasLayer {
             line_markers: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayerSummary {
-    pub id: LayerId,
-    pub visible: bool,
-    pub active: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +55,49 @@ impl Default for LayerStack {
 }
 
 impl LayerStack {
+    pub(super) fn from_persisted(
+        persisted: Vec<PersistedLayer>,
+        active_id: LayerId,
+    ) -> Result<(Self, Vec<Vec<Atom>>)> {
+        if persisted.is_empty() || persisted.len() > MAX_LAYERS {
+            bail!("project must contain between 1 and {MAX_LAYERS} layers");
+        }
+        if persisted[0].id != LayerId(0) {
+            bail!("the base layer must be first");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for layer in &persisted {
+            if !layer.id.is_valid() {
+                bail!(
+                    "layer symbol id {} is outside the supported pool",
+                    layer.id.0
+                );
+            }
+            if !seen.insert(layer.id) {
+                bail!("layer symbol {} is duplicated", layer.id.symbol());
+            }
+        }
+        let active = persisted
+            .iter()
+            .position(|layer| layer.id == active_id)
+            .ok_or_else(|| anyhow::anyhow!("active layer is not present in the layer stack"))?;
+        let mut layers = persisted
+            .into_iter()
+            .map(|layer| CanvasLayer {
+                id: layer.id,
+                visible: layer.visible,
+                lines: if layer.lines.is_empty() {
+                    vec![Vec::new()]
+                } else {
+                    layer.lines
+                },
+                line_markers: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let active_lines = std::mem::replace(&mut layers[active].lines, vec![Vec::new()]);
+        Ok((Self { layers, active }, active_lines))
+    }
+
     pub fn active_index(&self) -> usize {
         self.active
     }

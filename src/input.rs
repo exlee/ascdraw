@@ -329,6 +329,19 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
+    if mode == CursorMode::Navigation {
+        if modifiers.shift_key()
+            && !modifiers.alt_key()
+            && !modifiers.control_key()
+            && !modifiers.super_key()
+        {
+            return direction_for_key(key).map(EditCommand::ExtendSelection);
+        }
+        return (modifiers == ModifiersState::empty())
+            .then(|| direction_for_key(key).map(EditCommand::Move))
+            .flatten();
+    }
+
     if !mode.accepts_text() && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("i"))
     {
         return Some(EditCommand::ToggleTextEntry);

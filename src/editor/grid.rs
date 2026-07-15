@@ -2,6 +2,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::model::{Atom, Coord, Face};
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct ContentIndex {
     cells: Vec<Coord>,
@@ -11,6 +12,7 @@ pub(crate) struct ContentIndex {
     rebuilds: usize,
 }
 
+#[cfg(test)]
 impl ContentIndex {
     pub(crate) fn new(lines: &[Vec<Atom>]) -> Self {
         Self {

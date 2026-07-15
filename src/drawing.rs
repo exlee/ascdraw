@@ -129,11 +129,7 @@ pub fn glyph_for_connection_pair(
     style: LineStyle,
     corner_style: CornerStyle,
 ) -> char {
-    glyph_for_connections(
-        connection(first) | connection(second),
-        style,
-        corner_style,
-    )
+    glyph_for_connections(connection(first) | connection(second), style, corner_style)
 }
 
 pub fn glyph_without_connection(glyph: &str, direction: Direction) -> Option<char> {

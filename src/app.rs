@@ -97,6 +97,7 @@ pub enum CursorMode {
     Stamp,
     Shapes,
     Utilities,
+    Navigation,
 }
 
 impl CursorMode {

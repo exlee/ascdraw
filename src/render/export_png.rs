@@ -11,7 +11,7 @@ use skia_safe::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{DrawOrigin, FALLBACK_BG, Renderer, render_line, resolve_root_face};
+use super::{DrawOrigin, FALLBACK_BG, Renderer, resolve_root_face};
 use crate::app::MacosColorSpace;
 use crate::model::{Atom, Face};
 
@@ -31,20 +31,37 @@ pub fn render_canvas_image(
     scale_factor: f64,
     color_space: MacosColorSpace,
 ) -> Result<CanvasImage> {
+    render_canvas_layers_image(
+        renderer,
+        &[lines.to_vec()],
+        default_face,
+        scale_factor,
+        color_space,
+    )
+}
+
+pub fn render_canvas_layers_image(
+    renderer: &Renderer,
+    layers: &[Vec<Vec<Atom>>],
+    default_face: &Face,
+    scale_factor: f64,
+    color_space: MacosColorSpace,
+) -> Result<CanvasImage> {
     let metrics = renderer.metrics(scale_factor);
-    let columns = lines
+    let columns = layers
         .iter()
+        .flat_map(|lines| lines.iter())
         .map(|line| display_width(line))
         .max()
         .unwrap_or(0);
-    if columns == 0 || lines.is_empty() {
+    let rows = layers.iter().map(Vec::len).max().unwrap_or(0);
+    if columns == 0 || rows == 0 {
         bail!("cannot render an empty canvas region as PNG");
     }
     let width = columns
         .checked_mul(metrics.cell_width)
         .context("PNG canvas width overflowed")?;
-    let height = lines
-        .len()
+    let height = rows
         .checked_mul(metrics.cell_height)
         .context("PNG canvas height overflowed")?;
     let dimensions = (
@@ -82,16 +99,18 @@ pub fn render_canvas_image(
 
     canvas.save();
     canvas.translate((-(super::PADDING as f32), 0.0));
-    for (row, line) in lines.iter().enumerate() {
-        render_line(
-            canvas,
-            row,
-            line,
-            default_face,
-            0..columns,
-            &metrics,
-            DrawOrigin::Grid { top_padding: 0 },
-        );
+    for lines in layers {
+        for (row, line) in lines.iter().enumerate() {
+            super::render_overlay_line(
+                canvas,
+                row,
+                line,
+                default_face,
+                0..columns,
+                &metrics,
+                DrawOrigin::Grid { top_padding: 0 },
+            );
+        }
     }
     canvas.restore();
 

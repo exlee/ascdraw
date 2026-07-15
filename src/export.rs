@@ -8,15 +8,15 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::MacosColorSpace;
-use crate::editor::EditorState;
+use crate::editor::{EditorState, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
-use crate::model::{Atom, Face};
-use crate::render::{CanvasImage, Renderer, render_canvas_image};
+use crate::model::{Atom, Face, LayerId};
+use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
 use crate::selection::{CanvasRegion, CanvasSelection, region_atoms};
 use crate::toolbar::DurableMenuSelections;
 
 const PROJECT_FORMAT: &str = "ascdraw";
-const PROJECT_VERSION: u32 = 1;
+const PROJECT_VERSION: u32 = 2;
 const LEGACY_SELECTION_VERSION: u32 = 1;
 const MAX_PROJECT_COORDINATE: usize = 1_000_000;
 
@@ -52,6 +52,17 @@ pub trait ExportPlatform {
         _default_face: &Face,
     ) -> Result<CanvasImage> {
         bail!("PNG rendering is unavailable")
+    }
+    fn render_canvas_layers_image(
+        &mut self,
+        layers: &[Vec<Vec<Atom>>],
+        default_face: &Face,
+    ) -> Result<CanvasImage> {
+        if let [lines] = layers {
+            self.render_canvas_image(lines, default_face)
+        } else {
+            bail!("layered PNG rendering is unavailable")
+        }
     }
     fn set_clipboard_image(&mut self, _image: &CanvasImage) -> Result<()> {
         bail!("PNG clipboard support is unavailable")
@@ -142,6 +153,21 @@ impl ExportPlatform for NativeExportPlatform<'_> {
         )
     }
 
+    fn render_canvas_layers_image(
+        &mut self,
+        layers: &[Vec<Vec<Atom>>],
+        default_face: &Face,
+    ) -> Result<CanvasImage> {
+        let context = self.png.as_ref().context("PNG renderer is unavailable")?;
+        render_canvas_layers_image(
+            context.renderer,
+            layers,
+            default_face,
+            context.scale_factor,
+            context.color_space,
+        )
+    }
+
     fn set_clipboard_image(&mut self, image: &CanvasImage) -> Result<()> {
         arboard::Clipboard::new()
             .context("failed to open the system clipboard")?
@@ -219,8 +245,8 @@ pub fn perform(
             Ok(ExportOutcome::Unchanged)
         }
         ExportAction::ClipboardPng => {
-            let lines = canvas_atoms_for_export(state, visible_canvas);
-            let image = platform.render_canvas_image(&lines, &state.grid.default_face)?;
+            let layers = canvas_layers_for_export(state, visible_canvas);
+            let image = platform.render_canvas_layers_image(&layers, &state.grid.default_face)?;
             platform.set_clipboard_image(&image)?;
             Ok(ExportOutcome::Unchanged)
         }
@@ -228,8 +254,8 @@ pub fn perform(
             let Some(path) = platform.choose_save_path(FileKind::Png) else {
                 return Ok(ExportOutcome::Cancelled);
             };
-            let lines = canvas_atoms_for_export(state, visible_canvas);
-            let image = platform.render_canvas_image(&lines, &state.grid.default_face)?;
+            let layers = canvas_layers_for_export(state, visible_canvas);
+            let image = platform.render_canvas_layers_image(&layers, &state.grid.default_face)?;
             fs::write(&path, &image.png)
                 .with_context(|| format!("failed to write {}", path.display()))?;
             Ok(ExportOutcome::Unchanged)
@@ -253,11 +279,12 @@ pub fn perform(
                 LoadedJson::Project(project) => {
                     let mut staged = state.clone();
                     staged.restore_project(
-                        project.lines,
+                        project.layers,
+                        project.active_layer,
                         project.cursor,
                         project.selection,
                         &project.menu_selections,
-                    );
+                    )?;
                     *state = staged;
                     *viewport = project.viewport;
                     return Ok(ExportOutcome::ProjectLoaded);
@@ -305,10 +332,85 @@ pub fn canvas_atoms_for_export(
     state: &EditorState,
     visible_canvas: VisibleCanvasCells,
 ) -> Vec<Vec<Atom>> {
-    region_atoms(
-        &state.grid.lines,
-        canvas_region_for_export(state, visible_canvas),
-    )
+    flatten_visible_layers(&canvas_layers_for_export(state, visible_canvas))
+}
+
+pub fn canvas_layers_for_export(
+    state: &EditorState,
+    visible_canvas: VisibleCanvasCells,
+) -> Vec<Vec<Vec<Atom>>> {
+    let region = canvas_region_for_export(state, visible_canvas);
+    state
+        .layer_views()
+        .into_iter()
+        .filter(|layer| layer.visible)
+        .map(|layer| region_atoms(layer.lines, region))
+        .collect()
+}
+
+fn flatten_visible_layers(layers: &[Vec<Vec<Atom>>]) -> Vec<Vec<Atom>> {
+    let height = layers.iter().map(Vec::len).max().unwrap_or(0);
+    let width = layers
+        .iter()
+        .flat_map(|layer| layer.iter())
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0);
+    let mut flattened = Vec::with_capacity(height);
+    for row in 0..height {
+        let mut glyphs: Vec<Option<(Atom, usize)>> = vec![None; width];
+        let mut owners = vec![None; width];
+        for layer in layers {
+            let Some(line) = layer.get(row) else {
+                continue;
+            };
+            let mut column: usize = 0;
+            for atom in line {
+                for cluster in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
+                    let cluster_width = UnicodeWidthStr::width(cluster).max(1);
+                    let end = column.saturating_add(cluster_width);
+                    if end <= width && !cluster.chars().all(char::is_whitespace) {
+                        let covered: std::collections::HashSet<usize> = owners[column..end]
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .collect::<std::collections::HashSet<_>>();
+                        for start in covered {
+                            if let Some((_, old_width)) = glyphs[start].take() {
+                                for owner in &mut owners[start..start + old_width] {
+                                    *owner = None;
+                                }
+                            }
+                        }
+                        glyphs[column] = Some((
+                            Atom {
+                                face: atom.face.clone(),
+                                contents: cluster.to_owned(),
+                            },
+                            cluster_width,
+                        ));
+                        for owner in &mut owners[column..end] {
+                            *owner = Some(column);
+                        }
+                    }
+                    column = end;
+                }
+            }
+        }
+        let mut line = Vec::new();
+        let mut column = 0;
+        while column < width {
+            if let Some((atom, glyph_width)) = glyphs[column].take() {
+                line.push(atom);
+                column += glyph_width;
+            } else {
+                line.push(blank_atom());
+                column += 1;
+            }
+        }
+        flattened.push(line);
+    }
+    flattened
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -340,12 +442,22 @@ struct ProjectDocument {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 struct ProjectCanvas {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rows: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    layers: Vec<PersistedLayer>,
+    #[serde(
+        default,
+        rename = "active-layer",
+        skip_serializing_if = "Option::is_none"
+    )]
+    active_layer: Option<LayerId>,
 }
 
 #[derive(Debug)]
 struct RestoredProject {
-    lines: Vec<Vec<Atom>>,
+    layers: Vec<PersistedLayer>,
+    active_layer: LayerId,
     cursor: crate::model::Coord,
     selection: CanvasSelection,
     viewport: ViewportOffset,
@@ -363,12 +475,9 @@ fn project_document(state: &EditorState, viewport: ViewportOffset) -> ProjectDoc
         format: PROJECT_FORMAT.to_owned(),
         version: PROJECT_VERSION,
         canvas: ProjectCanvas {
-            rows: state
-                .grid
-                .lines
-                .iter()
-                .map(|line| line.iter().map(|atom| atom.contents.as_str()).collect())
-                .collect(),
+            rows: Vec::new(),
+            layers: state.persisted_layers(),
+            active_layer: Some(state.active_layer_id()),
         },
         cursor: state.grid.cursor_pos,
         selection: state.selection,
@@ -422,33 +531,84 @@ fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject
     if document.format != PROJECT_FORMAT {
         bail!("unsupported project format {:?}", document.format);
     }
-    if document.version != PROJECT_VERSION {
+    if !matches!(document.version, 1 | PROJECT_VERSION) {
         bail!("unsupported ascdraw project version {}", document.version);
     }
     validate_coordinate("cursor", document.cursor)?;
     validate_coordinate("selection anchor", document.selection.anchor())?;
     validate_coordinate("selection active", document.selection.active())?;
-    let mut lines: Vec<Vec<Atom>> = document
-        .canvas
-        .rows
-        .iter()
-        .map(|row| row_atoms(row))
-        .collect();
-    lines = nonempty_lines(lines);
+    let (mut layers, active_layer) = if document.version == 1 {
+        (
+            vec![PersistedLayer {
+                id: LayerId(0),
+                visible: true,
+                lines: nonempty_lines(
+                    document
+                        .canvas
+                        .rows
+                        .iter()
+                        .map(|row| row_atoms(row))
+                        .collect(),
+                ),
+            }],
+            LayerId(0),
+        )
+    } else {
+        let active_layer = document
+            .canvas
+            .active_layer
+            .context("project has no active layer")?;
+        validate_persisted_layers(&document.canvas.layers, active_layer)?;
+        (document.canvas.layers, active_layer)
+    };
+    let active_lines = &mut layers
+        .iter_mut()
+        .find(|layer| layer.id == active_layer)
+        .context("active layer is not present in the project")?
+        .lines;
     for (name, coord) in [
         ("cursor", document.cursor),
         ("selection anchor", document.selection.anchor()),
         ("selection active", document.selection.active()),
     ] {
-        pad_to_coordinate(&mut lines, name, coord)?;
+        pad_to_coordinate(active_lines, name, coord)?;
     }
     Ok(RestoredProject {
-        lines,
+        layers,
+        active_layer,
         cursor: document.cursor,
         selection: document.selection,
         viewport: document.viewport,
         menu_selections: document.menu_selections,
     })
+}
+
+fn validate_persisted_layers(layers: &[PersistedLayer], active_layer: LayerId) -> Result<()> {
+    if layers.is_empty() || layers.len() > crate::model::MAX_LAYERS {
+        bail!(
+            "project must contain between 1 and {} layers",
+            crate::model::MAX_LAYERS
+        );
+    }
+    if layers[0].id != LayerId(0) {
+        bail!("the base layer must be first");
+    }
+    let mut ids = std::collections::HashSet::new();
+    for layer in layers {
+        if !layer.id.is_valid() {
+            bail!(
+                "layer symbol id {} is outside the supported pool",
+                layer.id.0
+            );
+        }
+        if !ids.insert(layer.id) {
+            bail!("layer symbol {} is duplicated", layer.id.symbol());
+        }
+    }
+    if !ids.contains(&active_layer) {
+        bail!("active layer is not present in the project");
+    }
+    Ok(())
 }
 
 fn validate_coordinate(name: &str, coord: crate::model::Coord) -> Result<()> {
@@ -589,6 +749,7 @@ mod tests {
         clipboard: Option<String>,
         clipboard_image: Option<CanvasImage>,
         rendered_lines: Option<Vec<Vec<Atom>>>,
+        rendered_layers: Option<Vec<Vec<Vec<Atom>>>>,
         image: Option<CanvasImage>,
         fail_clipboard_read: bool,
         fail_clipboard_write: bool,
@@ -624,6 +785,20 @@ mod tests {
             _default_face: &Face,
         ) -> Result<CanvasImage> {
             self.rendered_lines = Some(lines.to_vec());
+            if self.fail_image_render {
+                bail!("mock PNG render failed");
+            }
+            self.image.clone().context("mock PNG image is missing")
+        }
+        fn render_canvas_layers_image(
+            &mut self,
+            layers: &[Vec<Vec<Atom>>],
+            _default_face: &Face,
+        ) -> Result<CanvasImage> {
+            self.rendered_layers = Some(layers.to_vec());
+            if let [lines] = layers {
+                self.rendered_lines = Some(lines.clone());
+            }
             if self.fail_image_render {
                 bail!("mock PNG render failed");
             }
@@ -766,6 +941,64 @@ mod tests {
     }
 
     #[test]
+    fn txt_flattens_the_highest_visible_glyph_without_splitting_wide_graphemes() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("😀");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.grid.lines = lines_from_text(" x");
+        let visible = VisibleCanvasCells {
+            origin: (0, 0),
+            columns: 2,
+            rows: 1,
+        };
+
+        assert_eq!(text_export(&state, visible), " x");
+        assert!(state.toggle_layer_visibility(upper));
+        assert_eq!(text_export(&state, visible), "😀");
+    }
+
+    #[test]
+    fn png_export_passes_every_visible_layer_in_bottom_to_top_order() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("◯");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        state.grid.lines = lines_from_text("○");
+        let middle = state.active_layer_id();
+        assert!(state.add_layer_above(middle));
+        state.grid.lines = lines_from_text("•");
+        let top = state.active_layer_id();
+        assert!(state.select_layer(middle));
+        let mut platform = MockPlatform {
+            image: Some(sample_image()),
+            ..MockPlatform::default()
+        };
+
+        perform(
+            ExportAction::ClipboardPng,
+            &mut state,
+            &mut ViewportOffset::default(),
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 1,
+                rows: 1,
+            },
+            &mut platform,
+        )
+        .unwrap();
+
+        let rendered = platform.rendered_layers.unwrap();
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(contents(&rendered[0][0]), "◯");
+        assert_eq!(contents(&rendered[1][0]), "○");
+        assert_eq!(contents(&rendered[2][0]), "•");
+        assert_eq!(state.active_layer_id(), middle);
+        assert_ne!(top, middle);
+    }
+
+    #[test]
     fn json_save_remains_whole_project_when_selection_and_viewport_are_smaller() {
         let path = temp_path("json");
         let mut state = state_with_selection();
@@ -792,7 +1025,7 @@ mod tests {
         let LoadedJson::Project(project) = project_from_json(&saved).unwrap() else {
             panic!("expected project document");
         };
-        assert_eq!(contents(project.lines.last().unwrap()), "outside");
+        assert_eq!(contents(project.layers[0].lines.last().unwrap()), "outside");
         let _ = fs::remove_file(path);
     }
 
@@ -1132,7 +1365,7 @@ mod tests {
     }
 
     #[test]
-    fn project_json_is_human_readable_and_contains_no_cell_styles() {
+    fn project_json_is_human_readable_and_preserves_cell_styles() {
         let mut state = state_with_selection();
         state.grid.lines[1][2].face = state.theme.selection.clone();
         let json = serde_json::to_string_pretty(&project_document(
@@ -1144,10 +1377,77 @@ mod tests {
 
         assert_eq!(value["format"], PROJECT_FORMAT);
         assert_eq!(value["version"], PROJECT_VERSION);
-        assert_eq!(value["canvas"]["rows"][1], "  ab   ");
-        for forbidden in ["face", "fg", "bg", "underline", "attributes", "contents"] {
-            assert!(!json.contains(&format!("\"{forbidden}\"")));
-        }
+        assert_eq!(value["canvas"]["layers"][0]["id"], 0);
+        assert_eq!(value["canvas"]["layers"][0]["lines"][1][2]["contents"], "a");
+        assert_eq!(
+            value["canvas"]["layers"][0]["lines"][1][2]["face"],
+            serde_json::to_value(&state.theme.selection).unwrap()
+        );
+    }
+
+    #[test]
+    fn project_v2_round_trips_layer_order_visibility_active_layer_and_faces() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = vec![vec![Atom {
+            face: state.theme.selection.clone(),
+            contents: "a".to_owned(),
+        }]];
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.grid.lines = vec![vec![Atom {
+            face: state.theme.cursor_block.clone(),
+            contents: "b".to_owned(),
+        }]];
+        assert!(state.toggle_layer_visibility(base));
+
+        let json =
+            serde_json::to_string(&project_document(&state, ViewportOffset::default())).unwrap();
+        let LoadedJson::Project(restored) = project_from_json(&json).unwrap() else {
+            panic!("version two project must use project loading")
+        };
+
+        assert_eq!(restored.layers.len(), 2);
+        assert_eq!(restored.layers[0].id, base);
+        assert!(!restored.layers[0].visible);
+        assert_eq!(restored.layers[0].lines[0][0].face, state.theme.selection);
+        assert_eq!(restored.layers[1].id, upper);
+        assert_eq!(
+            restored.layers[1].lines[0][0].face,
+            state.theme.cursor_block
+        );
+        assert_eq!(restored.active_layer, upper);
+    }
+
+    #[test]
+    fn version_one_project_migrates_to_a_default_faced_base_layer() {
+        let json = serde_json::json!({
+            "format": PROJECT_FORMAT,
+            "version": 1,
+            "canvas": {"rows": ["a", "😀"]},
+            "cursor": {"line": 0, "column": 0},
+            "selection": {
+                "anchor": {"line": 0, "column": 0},
+                "active": {"line": 0, "column": 0}
+            },
+            "viewport": {"x": 0, "y": 0},
+            "menu-selections": {}
+        });
+        let LoadedJson::Project(restored) = project_from_json(&json.to_string()).unwrap() else {
+            panic!("version one project must migrate through project loading")
+        };
+
+        assert_eq!(restored.layers.len(), 1);
+        assert_eq!(restored.layers[0].id, LayerId(0));
+        assert!(restored.layers[0].visible);
+        assert_eq!(contents(&restored.layers[0].lines[0]), "a");
+        assert!(
+            restored.layers[0]
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.face == Face::default())
+        );
     }
 
     #[test]
@@ -1250,14 +1550,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["😀x  ", "", " z"]
         );
-        assert!(
-            target
-                .grid
-                .lines
-                .iter()
-                .flatten()
-                .all(|atom| atom.face == Face::default())
-        );
+        assert_eq!(target.grid.lines[0][0].face, source.grid.lines[0][0].face);
         let _ = fs::remove_file(path);
     }
 
@@ -1305,7 +1598,11 @@ mod tests {
         let mut value =
             serde_json::to_value(project_document(&source, ViewportOffset { x: 4, y: -8 }))
                 .unwrap();
-        value["canvas"]["rows"] = serde_json::json!(["😀"]);
+        value["canvas"]["layers"][0]["lines"][0] = serde_json::to_value(vec![Atom {
+            face: Face::default(),
+            contents: "😀".to_owned(),
+        }])
+        .unwrap();
         value["cursor"] = serde_json::json!({"line": 0, "column": 1});
         fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
 

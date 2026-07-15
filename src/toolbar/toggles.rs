@@ -35,14 +35,19 @@ impl ToolbarState {
         } else {
             let mut prefix = bold_span("1.".to_string());
             prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Mode);
-            vec![plain_span("   ".to_string()), prefix, plain_span(" ".to_string())]
+            vec![
+                plain_span("   ".to_string()),
+                prefix,
+                plain_span(" ".to_string()),
+            ]
         };
-        for (index, mode) in MainMode::ALL.iter().enumerate() {
+        let modes = self.available_modes();
+        for (index, mode) in modes.iter().enumerate() {
             if index > 0 {
                 spans.push(plain_span(" ".to_string()));
             }
             let contents = if row == MAIN_LABEL_ROW {
-                if index + 1 == MainMode::ALL.len() {
+                if index + 1 == modes.len() {
                     (index + 1).to_string()
                 } else {
                     aligned_shortcut(index + 1, mode.label())
@@ -116,6 +121,14 @@ impl ToolbarState {
         self.toggles[ToggleKind::DarkMode.index()]
     }
 
+    pub fn multi_layer_mode(&self) -> bool {
+        self.toggles[ToggleKind::MultiLayerMode.index()]
+    }
+
+    pub fn multi_color_mode(&self) -> bool {
+        self.toggles[ToggleKind::MultiColorMode.index()]
+    }
+
     pub(super) fn close_toggles_menu(&mut self) {
         self.toggles_open = false;
         if self.shortcut_prefix == Some(PendingShortcut::Toggles) {
@@ -136,6 +149,9 @@ impl ToolbarState {
     pub(super) fn toggle_setting(&mut self, toggle: ToggleKind) {
         let enabled = &mut self.toggles[toggle.index()];
         *enabled = !*enabled;
+        if toggle == ToggleKind::MultiLayerMode && !*enabled && self.main_mode == MainMode::Layers {
+            self.main_mode = MainMode::Stamp;
+        }
         self.toggles_open = true;
         self.shortcut_prefix = Some(PendingShortcut::Toggles);
     }
@@ -163,8 +179,6 @@ mod tests {
     #[test]
     fn keyboard_opens_toggles_and_changes_each_visible_state() {
         let mut toolbar = ToolbarState::default();
-        let durable = toolbar.durable_selections();
-
         press(&mut toolbar, "9");
         assert!(toolbar.toggles_menu_open());
         assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Toggles));
@@ -176,7 +190,10 @@ mod tests {
         assert_eq!(
             labels,
             [
-                ("Dark Mode: 2".to_string(), ToolbarAction::Toggle(ToggleKind::DarkMode)),
+                (
+                    "Dark Mode: 2".to_string(),
+                    ToolbarAction::Toggle(ToggleKind::DarkMode)
+                ),
                 (
                     "Multi Color Mode: 3".to_string(),
                     ToolbarAction::Toggle(ToggleKind::MultiColorMode),
@@ -192,12 +209,19 @@ mod tests {
             press(&mut toolbar, key);
         }
         assert!(toolbar.dark_mode());
-        assert!(toolbar
-            .toolbar_spans(MENU_FIRST_ROW)
-            .iter()
-            .filter(|span| span.action.is_some())
-            .all(|span| span.selected));
-        assert_eq!(toolbar.durable_selections(), durable);
+        assert!(
+            toolbar
+                .toolbar_spans(MENU_FIRST_ROW)
+                .iter()
+                .filter(|span| span.action.is_some())
+                .all(|span| span.selected)
+        );
+        let durable = toolbar.durable_selections();
+        let mut restored = ToolbarState::default();
+        restored.restore_durable_selections(&durable);
+        assert!(restored.dark_mode());
+        assert!(restored.multi_color_mode());
+        assert!(restored.multi_layer_mode());
     }
 
     #[test]

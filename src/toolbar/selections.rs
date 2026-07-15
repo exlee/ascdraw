@@ -26,6 +26,16 @@ pub struct DurableMenuSelections {
         skip_serializing_if = "Option::is_none"
     )]
     utility: Option<String>,
+    #[serde(default)]
+    toggles: DurableToggleSelections,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+struct DurableToggleSelections {
+    dark_mode: bool,
+    multi_color_mode: bool,
+    multi_layer_mode: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -158,6 +168,11 @@ impl ToolbarState {
                 fill: selected_value(&SHAPE_OPTIONS, 2, self.shape_selected[2]),
             },
             utility: selected_value(&UTILITY_OPTIONS, 0, self.utility_selected),
+            toggles: DurableToggleSelections {
+                dark_mode: self.dark_mode(),
+                multi_color_mode: self.multi_color_mode(),
+                multi_layer_mode: self.multi_layer_mode(),
+            },
         }
     }
 
@@ -223,8 +238,15 @@ impl ToolbarState {
             UTILITY_OPTIONS[0],
             &selections.utility,
         );
+        self.toggles = [
+            selections.toggles.dark_mode,
+            selections.toggles.multi_color_mode,
+            selections.toggles.multi_layer_mode,
+        ];
 
-        if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode) {
+        if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode)
+            && self.available_modes().contains(&main_mode)
+        {
             self.main_mode = main_mode;
         }
     }
@@ -249,7 +271,8 @@ fn restore_line_style(selected: &mut usize, value: &Option<String>) {
     let value = value
         .as_deref()
         .map(|style| if style == "┄" { "╴" } else { style });
-    if let Some(index) = value.and_then(|style| LINE_OPTIONS[2].iter().position(|item| *item == style))
+    if let Some(index) =
+        value.and_then(|style| LINE_OPTIONS[2].iter().position(|item| *item == style))
     {
         *selected = index;
     }
@@ -261,6 +284,7 @@ fn main_mode_name(mode: MainMode) -> &'static str {
         MainMode::Stamp => "stamp",
         MainMode::Shapes => "shapes",
         MainMode::Utilities => "utilities",
+        MainMode::Layers => "layers",
     }
 }
 
@@ -270,6 +294,7 @@ fn parse_main_mode(value: &str) -> Option<MainMode> {
         "stamp" => Some(MainMode::Stamp),
         "shapes" => Some(MainMode::Shapes),
         "utilities" => Some(MainMode::Utilities),
+        "layers" => Some(MainMode::Layers),
         _ => None,
     }
 }

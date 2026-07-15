@@ -99,7 +99,12 @@ The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and do
 
 Press `9` to open Toggles. Dark Mode (`9 2`) reverses the default foreground and background while
 preserving explicit selection, highlight, cursor, and tooltip accent colors. Multi Color Mode (`9 3`)
-and Multi Layer Mode (`9 4`) currently expose menu state only.
+currently exposes menu state only. Multi Layer Mode (`9 4`) adds the Layers mode.
+
+Layers are ordered bottom-to-top. Select, hide/show, reorder, add, or delete them from the Layers
+menu; the base `⍺` layer cannot be moved or deleted. Editing affects only the selected layer.
+TXT export chooses the highest visible nonblank glyph at each position, while PNG preserves every
+visible layer.
 
 ### Faster movement and editing
 

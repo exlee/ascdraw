@@ -3,15 +3,18 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::drawing::{ARROWS, CornerStyle, DECORATORS, LINE_ENDINGS, LineEnding, LineStyle};
 use crate::export::ExportAction;
+use crate::model::{LayerId, LayerSummary};
 #[cfg(test)]
 use crate::{
     drawing::{DIRECTIONAL_ENDINGS, line_ending_glyph},
     model::Direction,
 };
 
+mod layers;
 mod menu_layout;
 mod selections;
 mod toggles;
+pub use layers::LayerOperation;
 pub use selections::DurableMenuSelections;
 pub use toggles::ToggleKind;
 
@@ -205,6 +208,7 @@ pub enum MainMode {
     Line,
     Shapes,
     Utilities,
+    Layers,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -231,6 +235,7 @@ impl MainMode {
             Self::Stamp => "Stamp",
             Self::Shapes => "Shape",
             Self::Utilities => "Utils",
+            Self::Layers => "Layers",
         }
     }
 
@@ -240,6 +245,7 @@ impl MainMode {
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
             Self::Utilities => Tooltip::UtilitiesPush,
+            Self::Layers => Tooltip::Layers,
         }
     }
 }
@@ -263,6 +269,7 @@ pub enum Tooltip {
     Replace,
     Export,
     Toggles,
+    Layers,
     Selection,
 }
 
@@ -281,21 +288,12 @@ impl Tooltip {
             .unwrap()
             .as_secs() as usize;
 
-
         let primary = match self {
             Self::None => "",
-            Self::Line => {
-                "Line: Space starts a preview; Ctrl-direction draws"
-            }
-            Self::Stamp => {
-                "Stamp: Space places; Ctrl-direction draws continuously"
-            }
-            Self::Shapes => {
-                "Shape: Space starts a preview"
-            }
-            Self::UtilitiesPush => {
-                "Push: Ctrl-direction inserts a blank row or column"
-            }
+            Self::Line => "Line: Space starts a preview; Ctrl-direction draws",
+            Self::Stamp => "Stamp: Space places; Ctrl-direction draws continuously",
+            Self::Shapes => "Shape: Space starts a preview",
+            Self::UtilitiesPush => "Push: Ctrl-direction inserts a blank row or column",
             Self::UtilitiesPull => "Pull: Ctrl-direction pulls",
             Self::UtilitiesView => "View: directions pan; Space centers",
             Self::SelectionMoveLift => {
@@ -313,6 +311,7 @@ impl Tooltip {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
             Self::Toggles => "Toggles: Dark Mode reverses theme colors",
+            Self::Layers => "Layers: select, show, reorder, add, or delete a layer",
             Self::Selection => {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
             }
@@ -326,6 +325,7 @@ impl Tooltip {
                 | Self::LineStroke
                 | Self::Export
                 | Self::Toggles
+                | Self::Layers
                 | Self::Selection
         ) {
             return primary.to_string();
@@ -337,9 +337,11 @@ impl Tooltip {
         } else {
             random_tip
         };
-        let secondary = if primary.is_empty() || misc.is_empty() { "" } else { "; " };
-
-
+        let secondary = if primary.is_empty() || misc.is_empty() {
+            ""
+        } else {
+            "; "
+        };
 
         format!("{primary}{secondary}{misc}")
     }
@@ -354,6 +356,7 @@ pub enum PendingShortcut {
     ExportOption(usize),
     ExportFlat(usize),
     Toggles,
+    Layer(LayerId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +380,7 @@ pub struct ToolbarState {
     active_export_category: Option<usize>,
     pending_export_action: Option<ExportAction>,
     successful_export_action: Option<ExportAction>,
+    pending_layer_action: Option<(LayerId, LayerOperation)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,10 +397,17 @@ pub struct ToolbarSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarAction {
     SelectMain(MainMode),
-    SelectSubmenu { submenu: usize, option: usize },
+    SelectSubmenu {
+        submenu: usize,
+        option: usize,
+    },
     ToggleExportMenu,
     ToggleTogglesMenu,
     Toggle(ToggleKind),
+    Layer {
+        layer: LayerId,
+        operation: LayerOperation,
+    },
     SelectExportCategory(usize),
     RunExport(ExportAction),
 }
@@ -429,7 +440,17 @@ struct MenuLayout<'a> {
 }
 
 impl ToolbarState {
+    #[cfg(test)]
     pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+        self.handle_shortcut_with_layers(key, modifiers, &[])
+    }
+
+    pub fn handle_shortcut_with_layers(
+        &mut self,
+        key: &Key,
+        modifiers: ModifiersState,
+        layers: &[LayerSummary],
+    ) -> bool {
         if matches!(key, Key::Named(NamedKey::Escape))
             && (self.shortcut_prefix.is_some() || self.export_open || self.toggles_open)
         {
@@ -473,6 +494,11 @@ impl ToolbarState {
                         .filter(|option| *option < UTILITY_OPTIONS[0].len())
                 {
                     self.apply_action(ToolbarAction::SelectSubmenu { submenu: 0, option });
+                } else if self.main_mode == MainMode::Layers {
+                    self.shortcut_prefix = digit
+                        .checked_sub(2)
+                        .and_then(|index| layers.get(index))
+                        .map(|layer| PendingShortcut::Layer(layer.id));
                 } else {
                     self.shortcut_prefix = if digit == 1 {
                         Some(PendingShortcut::Mode)
@@ -490,9 +516,9 @@ impl ToolbarState {
             Some(PendingShortcut::Mode) => {
                 if let Some(mode) = digit
                     .checked_sub(1)
-                    .and_then(|index| MainMode::ALL.get(index))
+                    .and_then(|index| self.available_modes().get(index).copied())
                 {
-                    self.apply_action(ToolbarAction::SelectMain(*mode));
+                    self.apply_action(ToolbarAction::SelectMain(mode));
                 }
             }
             Some(PendingShortcut::Category(category)) => {
@@ -548,6 +574,11 @@ impl ToolbarState {
                     self.select_toggle_digit(digit);
                 }
             }
+            Some(PendingShortcut::Layer(layer)) => {
+                if let Some(operation) = self.layer_operation_for_digit(layers, layer, digit) {
+                    self.pending_layer_action = Some((layer, operation));
+                }
+            }
         }
         true
     }
@@ -569,6 +600,18 @@ impl ToolbarState {
 
     pub fn take_export_action(&mut self) -> Option<ExportAction> {
         self.pending_export_action.take()
+    }
+
+    pub fn take_layer_action(&mut self) -> Option<(LayerId, LayerOperation)> {
+        self.pending_layer_action.take()
+    }
+
+    pub fn available_modes(&self) -> Vec<MainMode> {
+        let mut modes = MainMode::ALL.to_vec();
+        if self.multi_layer_mode() {
+            modes.push(MainMode::Layers);
+        }
+        modes
     }
 
     fn queue_export(&mut self, action: ExportAction) {
@@ -670,6 +713,9 @@ impl ToolbarState {
         if self.main_mode == MainMode::Utilities {
             return 1;
         }
+        if self.main_mode == MainMode::Layers {
+            return 2;
+        }
         self.layout().map_or(2, |layout| {
             1 + layout
                 .options
@@ -688,7 +734,16 @@ impl ToolbarState {
         self.content_rows() + 2
     }
 
+    #[cfg(test)]
     pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        self.toolbar_spans_with_layers(row, &[])
+    }
+
+    pub fn toolbar_spans_with_layers(
+        &self,
+        row: usize,
+        layers: &[LayerSummary],
+    ) -> Vec<ToolbarSpan> {
         match row {
             MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
@@ -698,6 +753,8 @@ impl ToolbarState {
                     self.toggles_menu_spans(row)
                 } else if self.main_mode == MainMode::Utilities {
                     self.utilities_menu_spans(row)
+                } else if self.main_mode == MainMode::Layers {
+                    self.layer_menu_spans(row, layers)
                 } else {
                     self.menu_spans(row)
                 }
@@ -875,9 +932,20 @@ impl ToolbarState {
         }
     }
 
+    #[cfg(test)]
     pub fn action_at(&self, row: usize, column: usize, box_width: usize) -> Option<ToolbarAction> {
+        self.action_at_with_layers(row, column, box_width, &[])
+    }
+
+    pub fn action_at_with_layers(
+        &self,
+        row: usize,
+        column: usize,
+        box_width: usize,
+        layers: &[LayerSummary],
+    ) -> Option<ToolbarAction> {
         let mut start = 0;
-        for span in boxed_toolbar_spans(&self.toolbar_spans(row), box_width) {
+        for span in boxed_toolbar_spans(&self.toolbar_spans_with_layers(row, layers), box_width) {
             let end = start + UnicodeWidthStr::width(span.contents.as_str());
             if (start..end).contains(&column) {
                 return span.action;
@@ -904,6 +972,7 @@ impl ToolbarState {
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
                     MainMode::Shapes => SHAPE_OPTIONS.get(submenu),
                     MainMode::Utilities => UTILITY_OPTIONS.get(submenu),
+                    MainMode::Layers => None,
                 }
                 .map(|options| options.len());
                 if option_count.is_none_or(|count| option >= count) {
@@ -917,6 +986,7 @@ impl ToolbarState {
                     }
                     MainMode::Shapes => self.shape_selected.get_mut(submenu),
                     MainMode::Utilities => (submenu == 0).then_some(&mut self.utility_selected),
+                    MainMode::Layers => None,
                 };
                 let Some(selected) = selected else {
                     return false;
@@ -934,6 +1004,10 @@ impl ToolbarState {
             }
             ToolbarAction::Toggle(toggle) => {
                 self.toggle_setting(toggle);
+                true
+            }
+            ToolbarAction::Layer { layer, operation } => {
+                self.pending_layer_action = Some((layer, operation));
                 true
             }
             ToolbarAction::SelectExportCategory(category) => self.select_export_category(category),
@@ -972,6 +1046,7 @@ impl ToolbarState {
                 exclusive_submenu: None,
             }),
             MainMode::Utilities => None,
+            MainMode::Layers => None,
         }
     }
 }
@@ -2065,10 +2140,7 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Utilities);
         assert_eq!(toolbar.utility_kind(), UtilityKind::Push);
         assert_eq!(toolbar.tooltip(), Tooltip::UtilitiesPush);
-        assert_eq!(
-            row(&toolbar, MENU_FIRST_ROW),
-            "Push: 2  Pull: 3  View: 4"
-        );
+        assert_eq!(row(&toolbar, MENU_FIRST_ROW), "Push: 2  Pull: 3  View: 4");
         assert!(row(&toolbar, 2).is_empty());
         assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Tool"));
         for obsolete in ["2.1", "2.2", "2.3"] {
@@ -2339,6 +2411,7 @@ mod tests {
                     submenu: 0,
                     option: 2,
                 },
+                MainMode::Layers => unreachable!("feature modes are not in MainMode::ALL"),
             };
             assert!(toolbar.apply_action(action));
             let durable = toolbar.durable_selections();

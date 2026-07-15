@@ -7,14 +7,14 @@ use crate::app::{CursorMode, ThemeConfig};
 #[cfg(test)]
 use crate::drawing::LineEnding;
 use crate::drawing::{LineStyle, glyph_with_connection, is_line_glyph};
-use crate::model::{Atom, Coord, Direction, Face};
+use crate::model::{Atom, Coord, Direction, Face, LayerId, LayerSummary};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_text,
 };
 use crate::toolbar::{
-    DurableMenuSelections, MainMode, ShapeKind, ToolbarAction, ToolbarSpan, ToolbarState, Tooltip,
-    UtilityKind,
+    DurableMenuSelections, LayerOperation, MainMode, ShapeKind, ToolbarAction, ToolbarSpan,
+    ToolbarState, Tooltip, UtilityKind,
 };
 
 mod grid;
@@ -24,8 +24,8 @@ mod line_tool;
 mod move_tool;
 mod text_tool;
 mod utility;
-pub(crate) use grid::{ContentIndex, compact_blank_runs, compacted_blank_runs};
-pub use layers::{LayerId, LayerStack, LayerSummary, LayerView};
+pub(crate) use grid::{compact_blank_runs, compacted_blank_runs};
+pub use layers::{LayerStack, LayerView, PersistedLayer};
 use line_preview::LinePreview;
 use line_tool::{ActiveStroke, PlacedLineMarker};
 use move_tool::MoveLift;
@@ -56,6 +56,7 @@ pub struct EditorState {
     single_replace_pending: bool,
     pending_prepend: (usize, usize),
     canvas_origin: Coord,
+    toolbar_document_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +120,29 @@ impl EditorState {
 
     pub fn active_layer_id(&self) -> LayerId {
         self.layers.active_id()
+    }
+
+    pub fn persisted_layers(&self) -> Vec<PersistedLayer> {
+        self.layer_views()
+            .into_iter()
+            .map(|layer| PersistedLayer {
+                id: layer.id,
+                visible: layer.visible,
+                lines: layer.lines.to_vec(),
+            })
+            .collect()
+    }
+
+    pub fn restore_layers(
+        &mut self,
+        layers: Vec<PersistedLayer>,
+        active_layer: LayerId,
+    ) -> anyhow::Result<()> {
+        let (stack, lines) = LayerStack::from_persisted(layers, active_layer)?;
+        self.layers = stack;
+        self.grid.lines = lines;
+        self.line_markers.clear();
+        Ok(())
     }
 
     pub fn select_layer(&mut self, id: LayerId) -> bool {
@@ -288,6 +312,7 @@ impl EditorState {
             single_replace_pending: false,
             pending_prepend: (0, 0),
             canvas_origin: Coord::default(),
+            toolbar_document_changed: false,
         }
     }
 
@@ -340,7 +365,9 @@ impl EditorState {
     }
 
     pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let mut spans = self.toolbar.toolbar_spans(row);
+        let mut spans = self
+            .toolbar
+            .toolbar_spans_with_layers(row, &self.layer_summaries());
         if row + 1 == self.toolbar.content_rows() {
             let (x, y) = self.cursor_coordinates();
             spans.push(ToolbarSpan {
@@ -363,6 +390,16 @@ impl EditorState {
         )
     }
 
+    pub fn toolbar_action_at(
+        &self,
+        row: usize,
+        column: usize,
+        box_width: usize,
+    ) -> Option<ToolbarAction> {
+        self.toolbar
+            .action_at_with_layers(row, column, box_width, &self.layer_summaries())
+    }
+
     pub fn view_active(&self) -> bool {
         self.cursor_mode == CursorMode::Utilities
             && self.toolbar.main_mode() == MainMode::Utilities
@@ -372,6 +409,7 @@ impl EditorState {
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+        self.toolbar_document_changed = false;
         if self.cursor_mode.accepts_text() {
             self.toolbar.cancel_shortcut();
             return false;
@@ -381,13 +419,14 @@ impl EditorState {
         let dark_was_enabled = self.toolbar.dark_mode();
         let old_mode = self.toolbar.main_mode();
         let old_utility = self.toolbar.utility_kind();
-        if !self.toolbar.handle_shortcut(key, modifiers) {
+        if !self
+            .toolbar
+            .handle_shortcut_with_layers(key, modifiers, &self.layer_summaries())
+        {
             return false;
         }
-        if matches!(key, Key::Named(NamedKey::Escape))
-            && !export_was_open
-            && !toggles_was_open
-        {
+        self.apply_pending_layer_action();
+        if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open && !toggles_was_open {
             self.collapse_selection();
         }
         if self.toolbar.dark_mode() != dark_was_enabled {
@@ -404,8 +443,7 @@ impl EditorState {
             && (self.toolbar.export_menu_open()
                 || self.toolbar.toggles_menu_open()
                 || self.toolbar.main_mode() != old_mode
-                || self.toolbar.utility_kind() != old_utility
-            )
+                || self.toolbar.utility_kind() != old_utility)
         {
             self.cancel_move_lift();
         }
@@ -413,6 +451,7 @@ impl EditorState {
     }
 
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
+        self.toolbar_document_changed = false;
         self.cancel_line_preview();
         if self.move_lift.is_some() {
             self.cancel_move_lift();
@@ -421,6 +460,7 @@ impl EditorState {
         if !self.toolbar.apply_action(action) {
             return false;
         }
+        self.apply_pending_layer_action();
         if self.toolbar.dark_mode() != dark_was_enabled {
             reverse_theme_colors(&mut self.theme);
             self.sync_theme_faces();
@@ -439,6 +479,27 @@ impl EditorState {
         self.move_lift = None;
         self.sync_cursor_mode_with_toolbar();
         true
+    }
+
+    pub fn take_toolbar_document_change(&mut self) -> bool {
+        std::mem::take(&mut self.toolbar_document_changed)
+    }
+
+    fn apply_pending_layer_action(&mut self) {
+        let Some((layer, operation)) = self.toolbar.take_layer_action() else {
+            return;
+        };
+        self.toolbar_document_changed = match operation {
+            LayerOperation::Select => {
+                self.select_layer(layer);
+                false
+            }
+            LayerOperation::Show => self.toggle_layer_visibility(layer),
+            LayerOperation::MoveUp => self.move_layer_up(layer),
+            LayerOperation::MoveDown => self.move_layer_down(layer),
+            LayerOperation::New => self.add_layer_above(layer),
+            LayerOperation::Delete => self.delete_layer(layer),
+        };
     }
 
     fn sync_theme_faces(&mut self) {
@@ -520,6 +581,7 @@ impl EditorState {
             MainMode::Stamp => CursorMode::Stamp,
             MainMode::Shapes => CursorMode::Shapes,
             MainMode::Utilities => CursorMode::Utilities,
+            MainMode::Layers => CursorMode::Navigation,
         };
     }
 
@@ -894,12 +956,22 @@ impl EditorState {
 
     pub fn restore_project(
         &mut self,
-        lines: Vec<Vec<Atom>>,
+        layers: Vec<PersistedLayer>,
+        active_layer: LayerId,
         cursor: Coord,
         selection: CanvasSelection,
         menu_selections: &DurableMenuSelections,
-    ) {
-        self.replace_canvas(lines);
+    ) -> anyhow::Result<()> {
+        self.restore_layers(layers, active_layer)?;
+        self.canvas_origin = self
+            .layer_views()
+            .into_iter()
+            .filter_map(|layer| edited_content_origin(layer.lines))
+            .reduce(|origin, candidate| Coord {
+                line: origin.line.min(candidate.line),
+                column: origin.column.min(candidate.column),
+            })
+            .unwrap_or_default();
         self.restore_menu_selections(menu_selections);
         self.grid.cursor_pos = cursor;
         self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
@@ -912,6 +984,7 @@ impl EditorState {
         self.single_replace_pending = false;
         self.pending_prepend = (0, 0);
         self.sync_cursor_mode_with_toolbar();
+        Ok(())
     }
 
     pub fn clear_canvas(&mut self) {
@@ -1036,7 +1109,15 @@ impl EditorState {
     }
 
     pub fn content_cells(&self) -> Vec<Coord> {
-        grid::content_cells(&self.grid.lines)
+        let mut cells = self
+            .layer_views()
+            .into_iter()
+            .filter(|layer| layer.visible)
+            .flat_map(|layer| grid::content_cells(layer.lines))
+            .collect::<Vec<_>>();
+        cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
+        cells.dedup();
+        cells
     }
 
     pub fn compact_blank_runs_preserving_cursor(&mut self) {
@@ -1103,10 +1184,12 @@ impl EditorState {
 }
 
 fn edited_content_origin(lines: &[Vec<Atom>]) -> Option<Coord> {
-    grid::content_cells(lines).into_iter().reduce(|origin, coord| Coord {
-        line: origin.line.min(coord.line),
-        column: origin.column.min(coord.column),
-    })
+    grid::content_cells(lines)
+        .into_iter()
+        .reduce(|origin, coord| Coord {
+            line: origin.line.min(coord.line),
+            column: origin.column.min(coord.column),
+        })
 }
 
 fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord> {
@@ -1353,7 +1436,10 @@ mod tests {
             highlight.fg,
             crate::face_resolution::Rgba::rgb(0x00, 0x4d, 0xff)
         );
-        assert_eq!(tooltip.fg, crate::face_resolution::Rgba::rgb(0x80, 0x80, 0x80));
+        assert_eq!(
+            tooltip.fg,
+            crate::face_resolution::Rgba::rgb(0x80, 0x80, 0x80)
+        );
         assert_eq!(tooltip.bg, crate::face_resolution::Rgba::rgb(0, 0, 0));
 
         state.apply_theme(&source);
@@ -1463,6 +1549,41 @@ mod tests {
         assert_eq!(state.active_layer_id(), upper);
         assert_eq!(contents(&state.grid.lines[0]), "b");
         assert_eq!(contents(&state.layer_views()[0].lines[0]), "a");
+    }
+
+    #[test]
+    fn layer_limits_base_rules_reordering_deletion_and_symbol_reuse_are_stable() {
+        let mut state = state();
+        let base = state.active_layer_id();
+        let mut created = Vec::new();
+        for _ in 1..crate::model::MAX_LAYERS {
+            let active = state.active_layer_id();
+            assert!(state.add_layer_above(active));
+            created.push(state.active_layer_id());
+        }
+        assert_eq!(state.layer_summaries().len(), crate::model::MAX_LAYERS);
+        assert!(!state.add_layer_above(state.active_layer_id()));
+        assert!(!state.move_layer_up(base));
+        assert!(!state.move_layer_down(base));
+        assert!(!state.delete_layer(base));
+
+        assert!(state.toggle_layer_visibility(base));
+        assert!(!state.layer_summaries()[0].visible);
+        assert!(state.select_layer(base));
+        state.insert("base");
+        assert_eq!(contents(&state.grid.lines[0]), "base");
+
+        let removed = created[2];
+        let preserved_active = *created.last().unwrap();
+        assert!(state.select_layer(preserved_active));
+        assert!(state.delete_layer(removed));
+        assert_eq!(state.active_layer_id(), preserved_active);
+        assert!(state.add_layer_above(base));
+        assert_eq!(state.active_layer_id(), removed);
+
+        let active = state.active_layer_id();
+        assert!(state.delete_layer(active));
+        assert_eq!(state.active_layer_id(), base);
     }
 
     #[test]
@@ -2714,7 +2835,12 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert!(state.begin_single_replace());
         assert_eq!(state.tooltip(), Tooltip::SingleReplace);
-        assert!(state.tooltip().text().contains("type or paste one character"));
+        assert!(
+            state
+                .tooltip()
+                .text()
+                .contains("type or paste one character")
+        );
 
         state.cancel_text_entry();
         state.clear_canvas();

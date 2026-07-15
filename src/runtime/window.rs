@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 #[cfg(test)]
 use anyhow::anyhow;
+use anyhow::{Context, Result};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -13,7 +13,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
-use crate::editor::{ContentIndex, EditorState};
+use crate::editor::EditorState;
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -24,7 +24,7 @@ use crate::layout::{
 };
 #[cfg(target_os = "macos")]
 use crate::macos;
-use crate::model::{Atom, Coord, Direction};
+use crate::model::{Coord, Direction};
 use crate::perf::{FrameTiming, PerfDiagnostics};
 use crate::render::{Renderer, WindowSurface, load_renderer};
 use crate::title_policy::window_attributes;
@@ -128,7 +128,6 @@ pub struct EditorWindow {
     pub viewport: ViewportOffset,
     view_cursor_anchor: Option<ViewCursorAnchor>,
     history: EditHistory,
-    content_index: ContentIndex,
     perf: PerfDiagnostics,
     transparent_menubar: bool,
     document_path: PathBuf,
@@ -281,9 +280,6 @@ impl EditorWindow {
                 Direction::Up => drag.last_pointer.line.saturating_sub(1),
                 _ => unreachable!(),
             };
-        }
-        if drag.document_changed {
-            self.content_index.invalidate();
         }
         self.mouse_drag = Some(drag);
         self.request_redraw();
@@ -442,7 +438,7 @@ impl EditorWindow {
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
-        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        let content = self.state.content_cells();
         resolve_navigation_origin(
             self.viewport.origin(cell_size),
             cursor,
@@ -475,7 +471,6 @@ impl EditorWindow {
 
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.state.restore_edit_snapshot(snapshot.edit);
-        self.content_index.invalidate();
         self.viewport = snapshot.viewport;
         self.ensure_cursor_in_viewport();
         self.mark_document_dirty();
@@ -566,9 +561,6 @@ impl EditorWindow {
             layout.grid_top,
         );
         let prepend = self.state.take_pending_prepend();
-        if document_changed || prepend != (0, 0) {
-            self.content_index.invalidate();
-        }
         self.viewport
             .compensate_for_prepend(prepend.0, prepend.1, cell_size);
 
@@ -591,7 +583,7 @@ impl EditorWindow {
 
         let current = self.viewport.origin(cell_size);
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        let content = self.state.content_cells();
 
         if let Some(origin) = resolve_state_change_origin(
             viewport_policy,
@@ -627,7 +619,6 @@ impl EditorWindow {
         }
 
         self.state = previous_state;
-        self.content_index.invalidate();
         self.viewport = previous_viewport;
         false
     }
@@ -640,7 +631,6 @@ impl EditorWindow {
         self.menu_selections_dirty |=
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
         self.state.compact_blank_runs_preserving_cursor();
-        self.content_index.invalidate();
         self.ensure_cursor_in_viewport();
         let previous = HistorySnapshot {
             edit: previous_state.edit_snapshot(),
@@ -662,7 +652,7 @@ impl EditorWindow {
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let current = self.viewport.origin(cell_size);
-        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        let content = self.state.content_cells();
         let old_cursor = self.state.grid.cursor_pos;
         let (cursor, origin) =
             normalized_cursor_and_origin(current, old_cursor, viewport_cells, &content);
@@ -688,7 +678,7 @@ impl EditorWindow {
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.content_index.cells(&self.state.grid.lines).to_vec();
+        let content = self.state.content_cells();
         self.view_cursor_anchor.get_or_insert_with(|| {
             ViewCursorAnchor::capture(
                 self.state.grid.cursor_pos,
@@ -754,11 +744,13 @@ impl EditorWindow {
     }
 
     pub fn save_document(&mut self) -> Result<bool> {
+        let layers = self.state.persisted_layers();
         save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
             &self.document_path,
-            &self.state.grid.lines,
+            &layers,
+            self.state.active_layer_id(),
             &self.state.toolbar.durable_selections(),
             document::save,
         )
@@ -882,14 +874,20 @@ fn save_document_if_dirty(
     document_dirty: &mut bool,
     menu_selections_dirty: &mut bool,
     path: &Path,
-    lines: &[Vec<Atom>],
+    layers: &[crate::editor::PersistedLayer],
+    active_layer: crate::model::LayerId,
     menu_selections: &crate::toolbar::DurableMenuSelections,
-    save: impl FnOnce(&Path, &[Vec<Atom>], &crate::toolbar::DurableMenuSelections) -> Result<()>,
+    save: impl FnOnce(
+        &Path,
+        &[crate::editor::PersistedLayer],
+        crate::model::LayerId,
+        &crate::toolbar::DurableMenuSelections,
+    ) -> Result<()>,
 ) -> Result<bool> {
     if !*document_dirty && !*menu_selections_dirty {
         return Ok(false);
     }
-    save(path, lines, menu_selections)?;
+    save(path, layers, active_layer, menu_selections)?;
     *document_dirty = false;
     *menu_selections_dirty = false;
     Ok(true)
@@ -974,16 +972,14 @@ pub fn create_editor_window(
 
     let mut state = EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE);
     if let Some(document) = document::load(document_path)? {
-        state.grid.lines = if document.lines.is_empty() {
-            vec![Vec::new()]
-        } else {
-            document.lines
-        };
+        let active_layer = document
+            .active_layer
+            .context("saved document has no active layer")?;
+        state.restore_layers(document.layers, active_layer)?;
         if let Some(menu_selections) = document.menu_selections {
             state.restore_menu_selections(&menu_selections);
         }
     }
-    let content_index = ContentIndex::new(&state.grid.lines);
     let mut editor = EditorWindow {
         window,
         surface,
@@ -997,7 +993,6 @@ pub fn create_editor_window(
         viewport: ViewportOffset::default(),
         view_cursor_anchor: None,
         history: EditHistory::default(),
-        content_index,
         perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
         document_path: document_path.to_path_buf(),
@@ -1695,10 +1690,15 @@ mod tests {
         let mut document_dirty = true;
         let mut menu_dirty = false;
         let path = Path::new("latest-document.toml");
-        let lines = vec![vec![Atom {
-            face: Face::default(),
+        let lines = vec![vec![crate::model::Atom {
+            face: crate::model::Face::default(),
             contents: "latest".into(),
         }]];
+        let layers = vec![crate::editor::PersistedLayer {
+            id: crate::model::LayerId(0),
+            visible: true,
+            lines,
+        }];
         let menu = crate::toolbar::ToolbarState::default().durable_selections();
         let mut writes = 0;
 
@@ -1707,12 +1707,14 @@ mod tests {
                 &mut document_dirty,
                 &mut menu_dirty,
                 path,
-                &lines,
+                &layers,
+                crate::model::LayerId(0),
                 &menu,
-                |saved_path, saved_lines, saved_menu| {
+                |saved_path, saved_layers, active_layer, saved_menu| {
                     writes += 1;
                     assert_eq!(saved_path, path);
-                    assert_eq!(saved_lines, lines);
+                    assert_eq!(saved_layers, layers);
+                    assert_eq!(active_layer, crate::model::LayerId(0));
                     assert_eq!(saved_menu, &menu);
                     Ok(())
                 }
@@ -1737,8 +1739,9 @@ mod tests {
                 &mut menu_dirty,
                 Path::new("clean-document.toml"),
                 &[],
+                crate::model::LayerId(0),
                 &menu,
-                |_, _, _| panic!("clean documents must not be written"),
+                |_, _, _, _| panic!("clean documents must not be written"),
             )
             .unwrap()
         );
@@ -1756,8 +1759,9 @@ mod tests {
             &mut menu_dirty,
             Path::new("failed-document.toml"),
             &[],
+            crate::model::LayerId(0),
             &menu,
-            |_, _, _| Err(anyhow!("disk full")),
+            |_, _, _, _| Err(anyhow!("disk full")),
         )
         .unwrap_err();
 
@@ -1785,10 +1789,11 @@ mod tests {
                 &mut menu_dirty,
                 Path::new("menu-only.toml"),
                 &[],
+                crate::model::LayerId(0),
                 &menu,
-                |_, saved_lines, saved_menu| {
+                |_, saved_layers, _, saved_menu| {
                     writes += 1;
-                    assert!(saved_lines.is_empty());
+                    assert!(saved_layers.is_empty());
                     assert_eq!(saved_menu, &menu);
                     Ok(())
                 },
