@@ -175,11 +175,7 @@ impl ToolbarState {
             LINE_OPTIONS[1],
             &selections.line.end,
         );
-        restore_selected(
-            &mut self.line_selected[2],
-            LINE_OPTIONS[2],
-            &selections.line.style,
-        );
+        restore_line_style(&mut self.line_selected[2], &selections.line.style);
         restore_selected(
             &mut self.line_selected[3],
             LINE_OPTIONS[3],
@@ -244,6 +240,16 @@ fn selected_value(options: &[&[&str]], category: usize, selected: usize) -> Opti
 fn restore_selected(selected: &mut usize, options: &[&str], value: &Option<String>) {
     if let Some(value) = value.as_deref()
         && let Some(index) = options.iter().position(|option| *option == value)
+    {
+        *selected = index;
+    }
+}
+
+fn restore_line_style(selected: &mut usize, value: &Option<String>) {
+    let value = value
+        .as_deref()
+        .map(|style| if style == "┄" { "╴" } else { style });
+    if let Some(index) = value.and_then(|style| LINE_OPTIONS[2].iter().position(|item| *item == style))
     {
         *selected = index;
     }
@@ -369,7 +375,7 @@ width = "┄"
 
         assert_eq!(toolbar.line_style(), crate::drawing::LineStyle::Dashed);
         let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
-        assert!(serialized.contains("style = \"┄\""));
+        assert!(serialized.contains("style = \"╴\""));
         assert!(!serialized.contains("width ="));
     }
 }

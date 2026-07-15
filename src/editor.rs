@@ -2125,17 +2125,17 @@ mod tests {
     }
 
     #[test]
-    fn dashed_style_draws_triple_dash_straights() {
+    fn dashed_style_draws_repeated_half_segments() {
         let mut horizontal = state();
         horizontal.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         horizontal.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 2,
             option: 3,
         });
-        for _ in 0..3 {
+        for _ in 0..4 {
             horizontal.move_or_draw(Direction::Right, true);
         }
-        assert_eq!(contents(&horizontal.grid.lines[0]), "╶┄┄╴");
+        assert_eq!(contents(&horizontal.grid.lines[0]), "╴╴╴╴╴");
 
         let mut vertical = state();
         vertical.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
@@ -2143,13 +2143,14 @@ mod tests {
             submenu: 2,
             option: 3,
         });
-        for _ in 0..3 {
+        for _ in 0..4 {
             vertical.move_or_draw(Direction::Down, true);
         }
-        assert_eq!(contents(&vertical.grid.lines[0]), "╷");
-        assert_eq!(contents(&vertical.grid.lines[1]), "┆");
-        assert_eq!(contents(&vertical.grid.lines[2]), "┆");
+        assert_eq!(contents(&vertical.grid.lines[0]), "╵");
+        assert_eq!(contents(&vertical.grid.lines[1]), "╵");
+        assert_eq!(contents(&vertical.grid.lines[2]), "╵");
         assert_eq!(contents(&vertical.grid.lines[3]), "╵");
+        assert_eq!(contents(&vertical.grid.lines[4]), "╵");
     }
 
     #[test]

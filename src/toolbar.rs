@@ -162,7 +162,7 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
 const LINE_OPTIONS: [&[&str]; 4] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
-    &["─", "━", "═", "┄"],
+    &["─", "━", "═", "╴"],
     &["Smooth", "Sharp"],
 ];
 // Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
@@ -1456,6 +1456,7 @@ mod tests {
             option: 3,
         }));
         assert_eq!(toolbar.line_style(), LineStyle::Dashed);
+        assert_eq!(UnicodeWidthChar::width('╴'), Some(1));
         assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
         assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
@@ -1466,7 +1467,7 @@ mod tests {
 
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ┄"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smooth Sharp"));
     }
 

@@ -250,8 +250,8 @@ fn glyph_for_connections(connections: u8, style: LineStyle, corner_style: Corner
 
 fn dashed_glyph_for_connections(connections: u8, corner_style: CornerStyle) -> char {
     match connections {
-        UP_DOWN => '┆',
-        RIGHT_LEFT => '┄',
+        UP | DOWN | UP_DOWN => '╵',
+        RIGHT | LEFT | RIGHT_LEFT => '╴',
         _ => thin_glyph_for_connections(connections, corner_style),
     }
 }
@@ -385,11 +385,11 @@ mod tests {
         );
         assert_eq!(
             glyph_with_connection("╶", Direction::Left, LineStyle::Dashed),
-            Some('┄')
+            Some('╴')
         );
         assert_eq!(
             glyph_with_connection("╷", Direction::Up, LineStyle::Dashed),
-            Some('┆')
+            Some('╵')
         );
     }
 
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(glyph_without_connection("┴", Direction::Left), Some('╰'));
         assert_eq!(glyph_without_connection("╋", Direction::Left), Some('┣'));
         assert_eq!(glyph_without_connection("═", Direction::Left), Some('╶'));
-        assert_eq!(glyph_without_connection("┄", Direction::Left), Some('╶'));
+        assert_eq!(glyph_without_connection("┄", Direction::Left), Some('╴'));
         assert_eq!(glyph_without_connection("╴", Direction::Left), Some(' '));
     }
 }
