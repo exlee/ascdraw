@@ -124,8 +124,8 @@ Space starts an orthogonal preview. Move to size the current segment, then:
 - press Backspace to remove the latest anchor;
 - press Escape to cancel.
 
-Line options control the start marker, end marker, width (thin, heavy, or double), and thin-line
-corner style.
+Line options control the start marker, end marker, style (thin, heavy, double, or dashed), and
+thin-line corner style. Dashed lines use `┄` horizontally and `┆` vertically.
 
 ### Shape
 

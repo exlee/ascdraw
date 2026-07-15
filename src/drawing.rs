@@ -22,6 +22,7 @@ pub enum LineStyle {
     Thin,
     Heavy,
     Double,
+    Dashed,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -146,7 +147,7 @@ pub fn line_ending_glyph(
                 Direction::Up | Direction::Down => '║',
                 Direction::Right | Direction::Left => '═',
             },
-            LineStyle::Thin | LineStyle::Heavy => {
+            LineStyle::Thin | LineStyle::Heavy | LineStyle::Dashed => {
                 glyph_for_connections(connection(connected_direction), style, CornerStyle::Smooth)
             }
         },
@@ -204,10 +205,10 @@ fn connections_for_glyph(glyph: &str) -> Option<u8> {
         "╷" | "╻" => DOWN,
         "╴" | "╸" => LEFT,
         "└" | "╰" | "┗" | "╚" => UP | RIGHT,
-        "│" | "┃" | "║" => UP | DOWN,
+        "│" | "┃" | "║" | "┆" => UP | DOWN,
         "┘" | "╯" | "┛" | "╝" => UP | LEFT,
         "┌" | "╭" | "┏" | "╔" => RIGHT | DOWN,
-        "─" | "━" | "═" => RIGHT | LEFT,
+        "─" | "━" | "═" | "┄" => RIGHT | LEFT,
         "┐" | "╮" | "┓" | "╗" => DOWN | LEFT,
         "├" | "┣" | "╠" => UP | RIGHT | DOWN,
         "┴" | "┻" | "╩" => UP | RIGHT | LEFT,
@@ -226,6 +227,7 @@ fn style_for_glyph(glyph: &str) -> LineStyle {
         "╚" | "║" | "╝" | "╔" | "═" | "╗" | "╠" | "╩" | "╣" | "╦" | "╬" => {
             LineStyle::Double
         }
+        "┄" | "┆" => LineStyle::Dashed,
         _ => LineStyle::Thin,
     }
 }
@@ -242,6 +244,15 @@ fn glyph_for_connections(connections: u8, style: LineStyle, corner_style: Corner
         LineStyle::Thin => thin_glyph_for_connections(connections, corner_style),
         LineStyle::Heavy => heavy_glyph_for_connections(connections),
         LineStyle::Double => double_glyph_for_connections(connections),
+        LineStyle::Dashed => dashed_glyph_for_connections(connections, corner_style),
+    }
+}
+
+fn dashed_glyph_for_connections(connections: u8, corner_style: CornerStyle) -> char {
+    match connections {
+        UP_DOWN => '┆',
+        RIGHT_LEFT => '┄',
+        _ => thin_glyph_for_connections(connections, corner_style),
     }
 }
 
@@ -372,6 +383,14 @@ mod tests {
             glyph_with_connection("═", Direction::Down, LineStyle::Double),
             Some('╦')
         );
+        assert_eq!(
+            glyph_with_connection("╶", Direction::Left, LineStyle::Dashed),
+            Some('┄')
+        );
+        assert_eq!(
+            glyph_with_connection("╷", Direction::Up, LineStyle::Dashed),
+            Some('┆')
+        );
     }
 
     #[test]
@@ -465,6 +484,7 @@ mod tests {
         assert_eq!(glyph_without_connection("┴", Direction::Left), Some('╰'));
         assert_eq!(glyph_without_connection("╋", Direction::Left), Some('┣'));
         assert_eq!(glyph_without_connection("═", Direction::Left), Some('╶'));
+        assert_eq!(glyph_without_connection("┄", Direction::Left), Some('╶'));
         assert_eq!(glyph_without_connection("╴", Direction::Left), Some(' '));
     }
 }

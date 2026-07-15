@@ -44,11 +44,12 @@ struct DurableLineSelections {
     )]
     pub end: Option<String>,
     #[serde(
+        alias = "width",
         default,
         deserialize_with = "optional_string",
         skip_serializing_if = "Option::is_none"
     )]
-    pub width: Option<String>,
+    pub style: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_string",
@@ -139,7 +140,7 @@ impl ToolbarState {
             line: DurableLineSelections {
                 start: selected_value(&LINE_OPTIONS, 0, self.line_selected[0]),
                 end: selected_value(&LINE_OPTIONS, 1, self.line_selected[1]),
-                width: selected_value(&LINE_OPTIONS, 2, self.line_selected[2]),
+                style: selected_value(&LINE_OPTIONS, 2, self.line_selected[2]),
                 corner: selected_value(&LINE_OPTIONS, 3, self.line_selected[3]),
             },
             stamp: DurableStampSelections {
@@ -177,7 +178,7 @@ impl ToolbarState {
         restore_selected(
             &mut self.line_selected[2],
             LINE_OPTIONS[2],
-            &selections.line.width,
+            &selections.line.style,
         );
         restore_selected(
             &mut self.line_selected[3],
@@ -277,7 +278,7 @@ mod tests {
     fn durable_selections_round_trip_every_field_and_drop_transients() {
         let mut source = ToolbarState::default();
         for (mode, selections) in [
-            (MainMode::Line, [26, 25, 2, 1]),
+            (MainMode::Line, [26, 25, 3, 1]),
             (MainMode::Stamp, [19, 21, 3, 14]),
             (MainMode::Shapes, [1, 2, 4, 0]),
         ] {
@@ -344,11 +345,31 @@ line = "not-a-line"
         assert_eq!(restored.main_mode, defaults.main_mode);
         assert_eq!(restored.line.start.as_deref(), Some("¤"));
         assert_eq!(restored.line.end, defaults.line.end);
+        assert_eq!(restored.line.style, defaults.line.style);
         assert_eq!(restored.stamp.active_family.as_deref(), Some("Arrows"));
         assert_eq!(restored.stamp.arrows.as_deref(), Some("↔"));
         assert_eq!(restored.stamp.blocks, defaults.stamp.blocks);
         assert_eq!(restored.shape.kind.as_deref(), Some("Round"));
         assert_eq!(restored.shape.line, defaults.shape.line);
         assert_eq!(restored.utility.as_deref(), Some("View"));
+    }
+
+    #[test]
+    fn legacy_line_width_restores_as_style_and_serializes_with_the_new_name() {
+        let selections: DurableMenuSelections = toml::from_str(
+            r#"
+[line]
+width = "┄"
+"#,
+        )
+        .unwrap();
+        let mut toolbar = ToolbarState::default();
+
+        toolbar.restore_durable_selections(&selections);
+
+        assert_eq!(toolbar.line_style(), crate::drawing::LineStyle::Dashed);
+        let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
+        assert!(serialized.contains("style = \"┄\""));
+        assert!(!serialized.contains("width ="));
     }
 }

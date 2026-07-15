@@ -148,7 +148,7 @@ fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
     (clipped, width)
 }
 
-const LINE_LABELS: [&str; 4] = ["Start", "End", "Width", "Corner"];
+const LINE_LABELS: [&str; 4] = ["Start", "End", "Style", "Corner"];
 const LINE_START_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     " ", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø",
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
@@ -160,7 +160,7 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
 const LINE_OPTIONS: [&[&str]; 4] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
-    &["─", "━", "═"],
+    &["─", "━", "═", "┄"],
     &["Smooth", "Sharp"],
 ];
 // Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
@@ -1142,7 +1142,8 @@ fn line_style(selected: usize) -> LineStyle {
         0 => LineStyle::Thin,
         1 => LineStyle::Heavy,
         2 => LineStyle::Double,
-        _ => unreachable!("line width selection is always normalized"),
+        3 => LineStyle::Dashed,
+        _ => unreachable!("line style selection is always normalized"),
     }
 }
 
@@ -1442,6 +1443,8 @@ mod tests {
     fn corner_is_available_only_for_thin_lines() {
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Style:"));
+        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Width:"));
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
         for key in ["4", "3"] {
@@ -1454,13 +1457,20 @@ mod tests {
 
         assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 2,
+            option: 3,
+        }));
+        assert_eq!(toolbar.line_style(), LineStyle::Dashed);
+        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
+
+        assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
             option: 0,
         }));
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
 
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ┄"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smooth Sharp"));
     }
 
@@ -2049,11 +2059,11 @@ mod tests {
                         option: 2,
                     })
             })
-            .expect("flattened Width shortcut is clickable");
-        let width = toolbar
+            .expect("flattened Style shortcut is clickable");
+        let style = toolbar
             .action_at(MENU_FIRST_ROW + 1, column + 2, 80)
-            .expect("flattened Width shortcut hit tests");
-        assert!(toolbar.apply_action(width));
+            .expect("flattened Style shortcut hit tests");
+        assert!(toolbar.apply_action(style));
         assert_eq!(toolbar.line_style(), LineStyle::Double);
     }
 
