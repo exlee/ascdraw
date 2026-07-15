@@ -13,7 +13,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
-use crate::editor::{ContentIndex, EditorState};
+use crate::editor::{ContentIndex, EditorState, PointerDragMode};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::layout::{
@@ -148,6 +148,7 @@ struct MouseDrag {
     last: Coord,
     active: bool,
     document_changed: bool,
+    mode: PointerDragMode,
 }
 
 impl EditorWindow {
@@ -156,6 +157,13 @@ impl EditorWindow {
     }
 
     pub fn begin_mouse_drag(&mut self, coord: Coord) {
+        let mode = if self.modifiers.alt_key() {
+            PointerDragMode::Erase
+        } else if self.modifiers.shift_key() {
+            PointerDragMode::Select
+        } else {
+            PointerDragMode::Tool
+        };
         let target = self.state.cursor_target_for_coord(coord);
         if let Some(origin) = self.navigation_origin_for(target) {
             self.finish_history_transaction();
@@ -169,6 +177,7 @@ impl EditorWindow {
             last: self.state.grid.cursor_pos,
             active: false,
             document_changed: false,
+            mode,
         });
     }
 
@@ -185,10 +194,10 @@ impl EditorWindow {
             return;
         }
         if !drag.active {
-            drag.document_changed |= self.state.begin_pointer_drag();
+            drag.document_changed |= self.state.begin_pointer_drag(drag.mode);
             drag.active = true;
         }
-        drag.document_changed |= self.state.drag_pointer_to(target);
+        drag.document_changed |= self.state.drag_pointer_to(target, drag.mode);
         drag.last = self.state.grid.cursor_pos;
         if drag.document_changed {
             self.content_index.invalidate();
@@ -204,7 +213,7 @@ impl EditorWindow {
         if !drag.active {
             return;
         }
-        let finished_document = self.state.finish_pointer_drag();
+        let finished_document = self.state.finish_pointer_drag(drag.mode);
         let document_changed = drag.document_changed || finished_document;
         let recorded = self.finish_state_change(
             drag.previous_state,
