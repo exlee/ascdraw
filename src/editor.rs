@@ -230,8 +230,7 @@ impl EditorState {
             spans.push(ToolbarSpan {
                 contents: format!(
                     "  ({},{})",
-                    self.grid.cursor_pos.column,
-                    -(self.grid.cursor_pos.line as i128)
+                    self.grid.cursor_pos.column, self.grid.cursor_pos.line
                 ),
                 bold_prefix: 0,
                 selected: false,
@@ -1200,6 +1199,27 @@ mod tests {
     }
 
     #[test]
+    fn cursor_coordinates_use_downward_positive_screen_coordinates() {
+        let mut state = state();
+
+        for (coord, expected) in [
+            (Coord { line: 0, column: 0 }, "(0,0)"),
+            (Coord { line: 0, column: 1 }, "(1,0)"),
+            (Coord { line: 1, column: 0 }, "(0,1)"),
+            (Coord { line: 1, column: 1 }, "(1,1)"),
+        ] {
+            state.move_to(coord);
+            let last_row = state.toolbar.content_rows() - 1;
+            let coordinate = state
+                .toolbar_spans(last_row)
+                .into_iter()
+                .find(|span| span.right_aligned && span.contents.contains('('))
+                .expect("last toolbar row contains cursor coordinates");
+            assert_eq!(coordinate.contents.trim(), expected);
+        }
+    }
+
+    #[test]
     fn cursor_coordinates_are_right_aligned_on_the_last_toolbar_content_row() {
         let mut state = state();
         state.move_to(Coord {
@@ -1217,11 +1237,13 @@ mod tests {
                 .into_iter()
                 .find(|span| span.right_aligned && span.contents.contains('('))
                 .expect("last toolbar row contains cursor coordinates");
-            assert_eq!(coordinate.contents.trim(), "(10,-8)");
-            assert!(state
-                .toolbar_spans(last_row - 1)
-                .iter()
-                .all(|span| !span.contents.contains("(10,-8)")));
+            assert_eq!(coordinate.contents.trim(), "(10,8)");
+            assert!(
+                state
+                    .toolbar_spans(last_row - 1)
+                    .iter()
+                    .all(|span| !span.contents.contains("(10,8)"))
+            );
         }
     }
 
