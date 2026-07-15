@@ -714,7 +714,7 @@ impl EditorState {
     pub fn place_stamp(&mut self) {
         self.end_stroke();
         let stamp = self.toolbar.stamp().to_string();
-        self.replace_selection(Some(&stamp));
+        self.replace_selection_literal(Some(&stamp));
     }
 
     pub fn draw_stamp(&mut self, direction: Direction) {
@@ -952,6 +952,11 @@ impl EditorState {
     fn replace_selection(&mut self, replacement: Option<&str>) {
         let bounds = self.selection.bounds();
         self.cleanup_selection_connections(bounds);
+        self.replace_selection_literal(replacement);
+    }
+
+    fn replace_selection_literal(&mut self, replacement: Option<&str>) {
+        let bounds = self.selection.bounds();
         self.line_markers
             .retain(|marker| !bounds.contains(marker.coord));
         replace_range(&mut self.grid.lines, bounds, replacement);
@@ -2481,6 +2486,24 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "█");
         assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn stamp_in_middle_of_line_preserves_the_other_segments() {
+        let mut state = state();
+        state.insert("╷\n│\n╵");
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 1,
+            option: 0,
+        });
+        state.move_to(Coord { line: 1, column: 0 });
+
+        state.place_stamp();
+
+        assert_eq!(contents(&state.grid.lines[0]), "╷");
+        assert_eq!(contents(&state.grid.lines[1]), "△");
+        assert_eq!(contents(&state.grid.lines[2]), "╵");
     }
 
     #[test]
