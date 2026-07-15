@@ -1,3 +1,4 @@
+#[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -19,6 +20,7 @@ mod grid;
 mod line_preview;
 mod line_tool;
 mod move_tool;
+mod text_tool;
 mod utility;
 pub(crate) use grid::{ContentIndex, compact_blank_runs, compacted_blank_runs};
 use line_preview::LinePreview;
@@ -343,114 +345,6 @@ impl EditorState {
             MainMode::Shapes => CursorMode::Shapes,
             MainMode::Utilities => CursorMode::Utilities,
         };
-    }
-
-    pub fn insert(&mut self, text: &str) {
-        self.end_stroke();
-        self.expose_cursor_cells();
-        for part in text.split_inclusive('\n') {
-            let content = part.strip_suffix('\n').unwrap_or(part);
-            let atoms = UnicodeSegmentation::graphemes(content, true).map(|contents| Atom {
-                face: Face::default(),
-                contents: contents.to_string(),
-            });
-            self.grid.lines[self.grid.cursor_pos.line]
-                .splice(self.cursor_index..self.cursor_index, atoms);
-            self.cursor_index = self.grid.lines[self.grid.cursor_pos.line]
-                .len()
-                .min(self.cursor_index + UnicodeSegmentation::graphemes(content, true).count());
-            if part.ends_with('\n') {
-                self.newline();
-            }
-        }
-        self.sync_cursor_column();
-        self.collapse_selection();
-    }
-
-    pub fn write_text(&mut self, text: &str) {
-        if self.single_replace_pending {
-            self.replace_once(text);
-        } else if self.cursor_mode == CursorMode::Replace {
-            self.replace(text);
-        } else {
-            self.insert(text);
-        }
-    }
-
-    fn replace_once(&mut self, text: &str) {
-        let Some(grapheme) = UnicodeSegmentation::graphemes(text, true).next() else {
-            return;
-        };
-        self.end_stroke();
-        self.replace_selection_literal(Some(grapheme));
-        self.sync_cursor_mode_with_toolbar();
-        self.restore_active_cursor_index();
-    }
-
-    fn replace(&mut self, text: &str) {
-        self.end_stroke();
-        self.expose_cursor_cells();
-        for part in text.split_inclusive('\n') {
-            let content = part.strip_suffix('\n').unwrap_or(part);
-            for grapheme in UnicodeSegmentation::graphemes(content, true) {
-                let line = &mut self.grid.lines[self.grid.cursor_pos.line];
-                let atom = Atom {
-                    face: Face::default(),
-                    contents: grapheme.to_string(),
-                };
-                if self.cursor_index < line.len() {
-                    line[self.cursor_index] = atom;
-                } else {
-                    line.push(atom);
-                }
-                self.cursor_index += 1;
-            }
-            if part.ends_with('\n') {
-                self.newline();
-            }
-        }
-        self.sync_cursor_column();
-        self.collapse_selection();
-    }
-
-    pub fn newline(&mut self) {
-        self.end_stroke();
-        let remainder = self.grid.lines[self.grid.cursor_pos.line].split_off(self.cursor_index);
-        self.grid.cursor_pos.line += 1;
-        self.grid.lines.insert(self.grid.cursor_pos.line, remainder);
-        self.cursor_index = 0;
-        self.sync_cursor_column();
-        self.collapse_selection();
-    }
-
-    pub fn backspace(&mut self) {
-        self.end_stroke();
-        self.expose_cursor_cells();
-        if self.cursor_index > 0 {
-            self.cursor_index -= 1;
-            self.grid.lines[self.grid.cursor_pos.line].remove(self.cursor_index);
-        } else if self.grid.cursor_pos.line > 0 {
-            let current = self.grid.lines.remove(self.grid.cursor_pos.line);
-            self.grid.cursor_pos.line -= 1;
-            self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
-            self.grid.lines[self.grid.cursor_pos.line].extend(current);
-        }
-        self.sync_cursor_column();
-        self.collapse_selection();
-    }
-
-    pub fn delete(&mut self) {
-        self.end_stroke();
-        self.expose_cursor_cells();
-        let line = self.grid.cursor_pos.line;
-        if self.cursor_index < self.grid.lines[line].len() {
-            self.grid.lines[line].remove(self.cursor_index);
-        } else if line + 1 < self.grid.lines.len() {
-            let next = self.grid.lines.remove(line + 1);
-            self.grid.lines[line].extend(next);
-        }
-        self.sync_cursor_column();
-        self.collapse_selection();
     }
 
     pub fn move_home(&mut self) {
@@ -1512,6 +1406,87 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
         state.toggle_replace_mode();
         assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
+    fn insert_shifts_line_markers_by_display_width() {
+        let mut state = state();
+        state.insert("a◆");
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 1 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "╴".into(),
+        });
+        state.move_to(Coord::default());
+        state.toggle_text_entry();
+
+        state.write_text("界");
+
+        assert_eq!(contents(&state.grid.lines[0]), "界a◆");
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 3 });
+    }
+
+    #[test]
+    fn replace_removes_overwritten_markers_and_shifts_following_markers() {
+        let mut state = state();
+        state.insert("a◆");
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 1 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "╴".into(),
+        });
+        state.move_to(Coord::default());
+        state.toggle_replace_mode();
+
+        state.write_text("界");
+
+        assert_eq!(contents(&state.grid.lines[0]), "界◆");
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
+
+        state.write_text("x");
+
+        assert_eq!(contents(&state.grid.lines[0]), "界x");
+        assert!(state.line_markers.is_empty());
+    }
+
+    #[test]
+    fn newline_backspace_and_delete_remap_line_markers() {
+        let mut state = state();
+        state.insert("a◆\nb◆");
+        state.line_markers.extend([
+            PlacedLineMarker {
+                coord: Coord { line: 0, column: 1 },
+                ending: LineEnding::Fixed('◆'),
+                base_glyph: "╴".into(),
+            },
+            PlacedLineMarker {
+                coord: Coord { line: 1, column: 1 },
+                ending: LineEnding::Fixed('◆'),
+                base_glyph: "╴".into(),
+            },
+        ]);
+        state.move_to(Coord { line: 0, column: 1 });
+
+        state.newline();
+
+        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 0 });
+        assert_eq!(state.line_markers[1].coord, Coord { line: 2, column: 1 });
+
+        state.backspace();
+
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 1 });
+        assert_eq!(state.line_markers[1].coord, Coord { line: 1, column: 1 });
+
+        state.delete();
+
+        assert_eq!(contents(&state.grid.lines[0]), "a");
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 1 });
+
+        state.delete();
+
+        assert_eq!(contents(&state.grid.lines[0]), "ab◆");
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
     }
 
     #[test]
