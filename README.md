@@ -99,7 +99,11 @@ The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and do
 
 Press `9` to open Toggles. Dark Mode (`9 2`) reverses the default foreground and background while
 preserving explicit selection, highlight, cursor, and tooltip accent colors. Multi Color Mode (`9 3`)
-currently exposes menu state only. Multi Layer Mode (`9 4`) adds the Layers mode.
+adds the Colors mode, and Multi Layer Mode (`9 4`) adds the Layers mode.
+
+Colors provides base and bright eight-color ANSI-style palettes. The selected color applies only to
+future nonblank text, replacements, stamps, lines, shapes, and pasted text. Existing glyph colors
+and colors carried by move/cut operations are preserved. TXT export ignores color; PNG keeps it.
 
 Layers are ordered bottom-to-top. Select, hide/show, reorder, add, or delete them from the Layers
 menu; the base `⍺` layer cannot be moved or deleted. Editing affects only the selected layer.

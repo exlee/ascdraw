@@ -68,6 +68,7 @@ impl ToolbarState {
                     tooltip: false,
                     action: None,
                     right_aligned: false,
+                    foreground: None,
                 });
                 for (position, (label, operation)) in items.iter().enumerate() {
                     spans.push(plain_span(" ".to_owned()));
@@ -86,6 +87,7 @@ impl ToolbarState {
                             operation: *operation,
                         }),
                         right_aligned: false,
+                        foreground: None,
                     });
                     if position + 1 == items.len() {
                         break;

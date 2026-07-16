@@ -66,6 +66,7 @@ impl ToolbarState {
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
                 right_aligned: false,
+                foreground: None,
             });
         }
         if row == MAIN_LABEL_ROW {
@@ -77,6 +78,7 @@ impl ToolbarState {
                 tooltip: false,
                 action: Some(ToolbarAction::ToggleTogglesMenu),
                 right_aligned: true,
+                foreground: None,
             });
             let mut gap = plain_span("  ".to_string());
             gap.right_aligned = true;
@@ -89,6 +91,7 @@ impl ToolbarState {
                 tooltip: false,
                 action: Some(ToolbarAction::ToggleExportMenu),
                 right_aligned: true,
+                foreground: None,
             });
         }
         spans
@@ -108,6 +111,7 @@ impl ToolbarState {
                 tooltip: false,
                 action: Some(ToolbarAction::Toggle(*toggle)),
                 right_aligned: false,
+                foreground: None,
             });
         }
         spans
@@ -150,6 +154,9 @@ impl ToolbarState {
         let enabled = &mut self.toggles[toggle.index()];
         *enabled = !*enabled;
         if toggle == ToggleKind::MultiLayerMode && !*enabled && self.main_mode == MainMode::Layers {
+            self.main_mode = MainMode::Stamp;
+        }
+        if toggle == ToggleKind::MultiColorMode && !*enabled && self.main_mode == MainMode::Colors {
             self.main_mode = MainMode::Stamp;
         }
         self.toggles_open = true;
@@ -267,5 +274,57 @@ mod tests {
         assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
         assert!(toolbar.export_menu_open());
         assert!(!toolbar.toggles_menu_open());
+    }
+
+    #[test]
+    fn feature_modes_append_compactly_with_layers_before_colors() {
+        let mut toolbar = ToolbarState::default();
+        assert_eq!(toolbar.available_modes(), MainMode::ALL);
+
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        assert_eq!(
+            toolbar.available_modes(),
+            [
+                MainMode::Stamp,
+                MainMode::Line,
+                MainMode::Shapes,
+                MainMode::Utilities,
+                MainMode::Colors
+            ]
+        );
+        press(&mut toolbar, "1");
+        press(&mut toolbar, "5");
+        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
+        assert_eq!(
+            toolbar.available_modes(),
+            [
+                MainMode::Stamp,
+                MainMode::Line,
+                MainMode::Shapes,
+                MainMode::Utilities,
+                MainMode::Layers,
+                MainMode::Colors,
+            ]
+        );
+        press(&mut toolbar, "1");
+        press(&mut toolbar, "6");
+        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        assert_eq!(
+            toolbar.available_modes(),
+            [
+                MainMode::Stamp,
+                MainMode::Line,
+                MainMode::Shapes,
+                MainMode::Utilities,
+                MainMode::Layers,
+            ]
+        );
+        press(&mut toolbar, "1");
+        press(&mut toolbar, "5");
+        assert_eq!(toolbar.main_mode(), MainMode::Layers);
     }
 }

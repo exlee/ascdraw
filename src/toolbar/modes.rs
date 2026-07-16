@@ -1,0 +1,151 @@
+use super::TOOLTIP_ROTATION_INTERVAL;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MainMode {
+    #[default]
+    Stamp,
+    Line,
+    Shapes,
+    Utilities,
+    Layers,
+    Colors,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ShapeKind {
+    #[default]
+    Rect,
+    RoundedRect,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UtilityKind {
+    #[default]
+    Push,
+    Pull,
+    View,
+}
+
+impl MainMode {
+    pub const ALL: [Self; 4] = [Self::Stamp, Self::Line, Self::Shapes, Self::Utilities];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+            Self::Stamp => "Stamp",
+            Self::Shapes => "Shape",
+            Self::Utilities => "Utils",
+            Self::Layers => "Layers",
+            Self::Colors => "Colors",
+        }
+    }
+
+    pub fn tooltip(self) -> Tooltip {
+        match self {
+            Self::Line => Tooltip::Line,
+            Self::Stamp => Tooltip::Stamp,
+            Self::Shapes => Tooltip::Shapes,
+            Self::Utilities => Tooltip::UtilitiesPush,
+            Self::Layers => Tooltip::Layers,
+            Self::Colors => Tooltip::Colors,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tooltip {
+    #[default]
+    None,
+    Line,
+    Stamp,
+    Shapes,
+    UtilitiesPush,
+    UtilitiesPull,
+    UtilitiesView,
+    SelectionMoveLift,
+    LinePreview,
+    ShapePreview,
+    SingleReplace,
+    LineStroke,
+    Text,
+    Replace,
+    Export,
+    Toggles,
+    Layers,
+    Colors,
+    Selection,
+}
+
+impl Tooltip {
+    pub fn text(self) -> String {
+        const MISC_TIP: [&str; 6] = [
+            "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
+            "Direction keys are ←→↓↑ and hjkl",
+            "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
+            "Alt-direction erases",
+            "Shift-direction selects",
+            "Esc cancels most modes",
+        ];
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as usize;
+        let primary = match self {
+            Self::None => "",
+            Self::Line => "Line: Space starts a preview; Ctrl-direction draws",
+            Self::Stamp => "Stamp: Space places; Ctrl-direction draws continuously",
+            Self::Shapes => "Shape: Space starts a preview",
+            Self::UtilitiesPush => "Push: Ctrl-direction inserts a blank row or column",
+            Self::UtilitiesPull => "Pull: Ctrl-direction pulls",
+            Self::UtilitiesView => "View: directions pan; Space centers",
+            Self::SelectionMoveLift => {
+                "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms"
+            }
+            Self::LinePreview => {
+                "Space anchors; Space again confirms; Backspace removes the last anchor"
+            }
+            Self::ShapePreview => "Shape preview: Space confirms",
+            Self::SingleReplace => "Replace selection: type or paste one character",
+            Self::LineStroke => "Line stroke: Ctrl-direction continues; release Ctrl to finish",
+            Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
+            Self::Replace => "<Esc> to exit replace mode",
+            Self::Export => {
+                "TXT/PNG export selection or visible viewport; JSON exports the whole project"
+            }
+            Self::Toggles => "Toggles: Dark Mode reverses theme colors",
+            Self::Layers => "Layers: select, show, reorder, add, or delete a layer",
+            Self::Colors => "Colors: select the foreground color for future writes",
+            Self::Selection => {
+                "Selection: Alt-direction lifts and moves; Shift-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
+            }
+        };
+        if matches!(
+            self,
+            Self::SelectionMoveLift
+                | Self::LinePreview
+                | Self::ShapePreview
+                | Self::SingleReplace
+                | Self::LineStroke
+                | Self::Export
+                | Self::Toggles
+                | Self::Layers
+                | Self::Colors
+                | Self::Selection
+        ) {
+            return primary.to_string();
+        }
+        let selector = (timestamp / TOOLTIP_ROTATION_INTERVAL.as_secs() as usize) % MISC_TIP.len();
+        let random_tip = MISC_TIP[selector];
+        let misc = if primary.len() + random_tip.len() > 80 {
+            ""
+        } else {
+            random_tip
+        };
+        let secondary = if primary.is_empty() || misc.is_empty() {
+            ""
+        } else {
+            "; "
+        };
+        format!("{primary}{secondary}{misc}")
+    }
+}

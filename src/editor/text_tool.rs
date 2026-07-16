@@ -1,7 +1,7 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::CursorMode;
-use crate::model::{Atom, Face};
+use crate::model::Atom;
 
 use super::{EditorState, atom_width, display_width};
 
@@ -13,7 +13,7 @@ impl EditorState {
             let content = part.strip_suffix('\n').unwrap_or(part);
             let atoms = UnicodeSegmentation::graphemes(content, true)
                 .map(|contents| Atom {
-                    face: Face::default(),
+                    face: self.write_face(),
                     contents: contents.to_string(),
                 })
                 .collect::<Vec<_>>();
@@ -74,7 +74,7 @@ impl EditorState {
             let content = part.strip_suffix('\n').unwrap_or(part);
             for grapheme in UnicodeSegmentation::graphemes(content, true) {
                 let atom = Atom {
-                    face: Face::default(),
+                    face: self.write_face(),
                     contents: grapheme.to_string(),
                 };
                 let inserted_width = atom_width(&atom);

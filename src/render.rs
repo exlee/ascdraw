@@ -552,11 +552,15 @@ fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &EditorState) -> 
 }
 
 fn toolbar_span_face(span: &crate::toolbar::ToolbarSpan, state: &EditorState) -> Face {
-    if span.tooltip {
+    let mut face = if span.tooltip {
         state.theme.tooltip.clone()
     } else {
         Face::default()
+    };
+    if let Some(foreground) = &span.foreground {
+        face.fg = foreground.clone();
     }
+    face
 }
 
 fn display_width_byte_index(contents: &str, requested_width: usize) -> usize {
@@ -831,7 +835,13 @@ fn render_line_at(
             && resolved.bg == root_face.bg
             && resolved.underline_style.is_none()
             && !resolved.strikethrough;
-        let paints_background = !transparent_default_background || !face_is_default(&atom.face);
+        let paints_background = !transparent_default_background
+            || atom.face.bg != "default"
+            || atom.face.attributes.iter().any(|attribute| {
+                attribute
+                    .trim_start_matches("final:")
+                    .eq_ignore_ascii_case("reverse")
+            });
         if !is_plain_blank && paints_background {
             fill_cells(
                 canvas,
@@ -1601,8 +1611,8 @@ mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::EditorState;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::{Coord, Direction};
-    use crate::toolbar::{MainMode, ToolbarAction};
+    use crate::model::{ColorId, Coord, Direction};
+    use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 
     use super::*;
@@ -1942,6 +1952,29 @@ mod tests {
                 .toolbar
                 .handle_shortcut(&Key::Character("1".into()), ModifiersState::empty())
         );
+    }
+
+    #[test]
+    fn color_menu_blocks_keep_their_explicit_palette_foregrounds() {
+        let config = AppConfig::default();
+        let mut state = EditorState::new(&config.theme, "test");
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Colors));
+        let atoms = toolbar_atoms(
+            &state
+                .toolbar
+                .toolbar_spans(crate::toolbar::MENU_FIRST_ROW + 1),
+            &state,
+        );
+        let blocks = atoms
+            .iter()
+            .filter(|atom| atom.contents == "■")
+            .collect::<Vec<_>>();
+
+        assert_eq!(blocks.len(), ColorId::COUNT);
+        for (index, atom) in blocks.into_iter().enumerate() {
+            assert_eq!(atom.face.fg, ColorId(index as u8).hex().unwrap());
+        }
     }
 
     #[test]

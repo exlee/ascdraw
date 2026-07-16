@@ -260,6 +260,67 @@ mod tests {
     }
 
     #[test]
+    fn foreground_only_overlays_are_transparent_but_explicit_backgrounds_occlude() {
+        let config = AppConfig::default();
+        let renderer = load_renderer(&config);
+        let lower = Face {
+            bg: "#ff0000".to_owned(),
+            ..Face::default()
+        };
+        let foreground_only = Face {
+            fg: "#0000ff".to_owned(),
+            ..Face::default()
+        };
+        let explicit_background = Face {
+            bg: "#00ff00".to_owned(),
+            ..Face::default()
+        };
+        let lower_only = render_canvas_layers_image(
+            &renderer,
+            &[vec![vec![atom(" ", lower.clone())]]],
+            &config.theme.default,
+            1.0,
+            config.macos.color_space,
+        )
+        .unwrap();
+
+        let transparent = render_canvas_layers_image(
+            &renderer,
+            &[
+                vec![vec![atom(" ", lower.clone())]],
+                vec![vec![atom(".", foreground_only)]],
+            ],
+            &config.theme.default,
+            1.0,
+            config.macos.color_space,
+        )
+        .unwrap();
+        assert_eq!(&transparent.rgba[..3], &lower_only.rgba[..3]);
+
+        let upper_only = render_canvas_layers_image(
+            &renderer,
+            &[vec![vec![atom(" ", explicit_background.clone())]]],
+            &config.theme.default,
+            1.0,
+            config.macos.color_space,
+        )
+        .unwrap();
+
+        let occluded = render_canvas_layers_image(
+            &renderer,
+            &[
+                vec![vec![atom(" ", lower)]],
+                vec![vec![atom(".", explicit_background)]],
+            ],
+            &config.theme.default,
+            1.0,
+            config.macos.color_space,
+        )
+        .unwrap();
+        assert_eq!(&occluded.rgba[..3], &upper_only.rgba[..3]);
+    }
+
+    #[test]
     fn encoded_png_declares_the_configured_color_space_and_matches_rgba_pixels() {
         let config = AppConfig::default();
         let renderer = load_renderer(&config);

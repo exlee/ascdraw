@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Face};
+use crate::model::{Atom, Coord, Direction, Face};
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
@@ -62,6 +62,36 @@ pub(crate) fn content_cells(lines: &[Vec<Atom>]) -> Vec<Coord> {
         }
     }
     cells
+}
+
+pub(crate) fn edited_content_origin(lines: &[Vec<Atom>]) -> Option<Coord> {
+    content_cells(lines)
+        .into_iter()
+        .reduce(|origin, coord| Coord {
+            line: origin.line.min(coord.line),
+            column: origin.column.min(coord.column),
+        })
+}
+
+pub(crate) fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord> {
+    match direction {
+        Direction::Up => Some(Coord {
+            line: coord.line.checked_sub(1)?,
+            column: coord.column,
+        }),
+        Direction::Right => Some(Coord {
+            line: coord.line,
+            column: coord.column.checked_add(1)?,
+        }),
+        Direction::Down => Some(Coord {
+            line: coord.line.checked_add(1)?,
+            column: coord.column,
+        }),
+        Direction::Left => Some(Coord {
+            line: coord.line,
+            column: coord.column.checked_sub(1)?,
+        }),
+    }
 }
 
 pub(crate) fn compact_blank_runs(lines: &mut [Vec<Atom>]) {

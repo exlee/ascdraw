@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::model::ColorId;
+
 use super::{
     LINE_OPTIONS, MainMode, SHAPE_OPTIONS, STAMP_LABELS, STAMP_OPTIONS, ToolbarState,
     UTILITY_OPTIONS,
@@ -28,6 +30,14 @@ pub struct DurableMenuSelections {
     utility: Option<String>,
     #[serde(default)]
     toggles: DurableToggleSelections,
+    #[serde(default)]
+    active_color: ColorId,
+}
+
+impl DurableMenuSelections {
+    pub fn active_color(&self) -> ColorId {
+        self.active_color
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -173,6 +183,7 @@ impl ToolbarState {
                 multi_color_mode: self.multi_color_mode(),
                 multi_layer_mode: self.multi_layer_mode(),
             },
+            active_color: self.active_color(),
         }
     }
 
@@ -243,6 +254,9 @@ impl ToolbarState {
             selections.toggles.multi_color_mode,
             selections.toggles.multi_layer_mode,
         ];
+        if selections.active_color.is_valid() {
+            self.active_color = selections.active_color;
+        }
 
         if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode)
             && self.available_modes().contains(&main_mode)
@@ -285,6 +299,7 @@ fn main_mode_name(mode: MainMode) -> &'static str {
         MainMode::Shapes => "shapes",
         MainMode::Utilities => "utilities",
         MainMode::Layers => "layers",
+        MainMode::Colors => "colors",
     }
 }
 
@@ -295,6 +310,7 @@ fn parse_main_mode(value: &str) -> Option<MainMode> {
         "shapes" => Some(MainMode::Shapes),
         "utilities" => Some(MainMode::Utilities),
         "layers" => Some(MainMode::Layers),
+        "colors" => Some(MainMode::Colors),
         _ => None,
     }
 }
@@ -333,6 +349,11 @@ mod tests {
             option: 0,
         });
         assert_eq!(source.utility_kind(), UtilityKind::Push);
+        source.apply_action(ToolbarAction::Toggle(
+            crate::toolbar::ToggleKind::MultiColorMode,
+        ));
+        source.apply_action(ToolbarAction::SelectColor(ColorId(15)));
+        source.apply_action(ToolbarAction::SelectMain(MainMode::Colors));
         let expected = source.durable_selections();
 
         source.handle_shortcut(&Key::Character("0".into()), ModifiersState::empty());
@@ -344,6 +365,8 @@ mod tests {
         assert!(!restored.export_menu_open());
         assert_eq!(restored.pending_shortcut(), None);
         assert_eq!(restored.pending_export_action, None);
+        assert_eq!(restored.active_color(), ColorId(15));
+        assert_eq!(restored.main_mode(), MainMode::Colors);
     }
 
     #[test]

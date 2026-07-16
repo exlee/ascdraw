@@ -118,6 +118,7 @@ impl EditorState {
     }
 
     pub(super) fn remove_connection(&mut self, coord: Coord, direction: Direction) {
+        let foreground = self.write_face().fg;
         if let Some(marker) = self.take_line_marker(coord) {
             self.set_cell_contents(coord, marker.base_glyph);
         }
@@ -133,6 +134,11 @@ impl EditorState {
             && let Some(glyph) = crate::drawing::glyph_without_connection(&atom.contents, direction)
         {
             atom.contents = glyph.to_string();
+            if atom.contents.chars().all(char::is_whitespace) {
+                atom.face = crate::model::Face::default();
+            } else {
+                atom.face.fg = foreground;
+            }
         }
     }
 
@@ -168,6 +174,7 @@ impl EditorState {
         line_style: LineStyle,
         corner_style: CornerStyle,
     ) -> Option<String> {
+        let foreground = self.write_face().fg;
         self.remove_line_marker(coord);
         let (index, column) =
             index_and_column_for_coord(&self.grid.lines[coord.line], coord.column);
@@ -186,6 +193,7 @@ impl EditorState {
                 )
             {
                 atom.contents = glyph.to_string();
+                atom.face.fg = foreground;
                 return Some(atom.contents.clone());
             }
             if grid::is_blank_run(atom) {
@@ -194,6 +202,7 @@ impl EditorState {
                         .expect("blank cells accept line connections")
                         .to_string();
                 replace_cell(&mut self.grid.lines, coord, contents.clone());
+                self.color_written_cell(coord);
                 return Some(contents);
             }
             None
@@ -203,6 +212,7 @@ impl EditorState {
                     .expect("blank cells accept line connections")
                     .to_string();
             replace_cell(&mut self.grid.lines, coord, contents.clone());
+            self.color_written_cell(coord);
             Some(contents)
         }
     }
@@ -230,6 +240,7 @@ impl EditorState {
     }
 
     fn set_cell_contents(&mut self, coord: Coord, contents: String) {
+        let foreground = self.write_face().fg;
         let line = &self.grid.lines[coord.line];
         let (index, column) = index_and_column_for_coord(line, coord.column);
         let blank_run = line.get(index).is_some_and(grid::is_blank_run);
@@ -238,8 +249,10 @@ impl EditorState {
             && atom_width(atom) == 1
         {
             atom.contents = contents;
+            atom.face.fg = foreground;
         } else if blank_run {
             replace_cell(&mut self.grid.lines, coord, contents);
+            self.color_written_cell(coord);
         }
     }
 

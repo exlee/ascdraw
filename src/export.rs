@@ -537,6 +537,9 @@ fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject
     validate_coordinate("cursor", document.cursor)?;
     validate_coordinate("selection anchor", document.selection.anchor())?;
     validate_coordinate("selection active", document.selection.active())?;
+    if !document.menu_selections.active_color().is_valid() {
+        bail!("project active color is outside the supported palette");
+    }
     let (mut layers, active_layer) = if document.version == 1 {
         (
             vec![PersistedLayer {
@@ -742,7 +745,7 @@ mod tests {
     }
     use crate::app::{CursorMode, ThemeConfig};
     use crate::model::Coord;
-    use crate::toolbar::{MainMode, ToolbarAction};
+    use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
 
     #[derive(Default)]
     struct MockPlatform {
@@ -996,6 +999,37 @@ mod tests {
         assert_eq!(contents(&rendered[2][0]), "•");
         assert_eq!(state.active_layer_id(), middle);
         assert_ne!(top, middle);
+    }
+
+    #[test]
+    fn png_export_preserves_canvas_palette_faces() {
+        let color = crate::model::ColorId(13);
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        state.insert("x");
+        let mut platform = MockPlatform {
+            image: Some(sample_image()),
+            ..MockPlatform::default()
+        };
+
+        perform(
+            ExportAction::ClipboardPng,
+            &mut state,
+            &mut ViewportOffset::default(),
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 1,
+                rows: 1,
+            },
+            &mut platform,
+        )
+        .unwrap();
+
+        assert_eq!(
+            platform.rendered_layers.unwrap()[0][0][0].face.fg,
+            color.hex().unwrap()
+        );
     }
 
     #[test]
@@ -1400,6 +1434,8 @@ mod tests {
             contents: "b".to_owned(),
         }]];
         assert!(state.toggle_layer_visibility(base));
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.apply_toolbar_action(ToolbarAction::SelectColor(crate::model::ColorId(14)));
 
         let json =
             serde_json::to_string(&project_document(&state, ViewportOffset::default())).unwrap();
@@ -1417,6 +1453,10 @@ mod tests {
             state.theme.cursor_block
         );
         assert_eq!(restored.active_layer, upper);
+        assert_eq!(
+            restored.menu_selections.active_color(),
+            crate::model::ColorId(14)
+        );
     }
 
     #[test]
@@ -1630,6 +1670,43 @@ mod tests {
         assert_eq!(target.edit_snapshot(), before);
         assert_eq!(target.toolbar.durable_selections(), menus);
         assert_eq!(viewport, ViewportOffset { x: 22, y: -31 });
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_project_color_is_rejected_atomically() {
+        let path = temp_path("json");
+        let source = EditorState::new(&ThemeConfig::default(), "source");
+        let mut value =
+            serde_json::to_value(project_document(&source, ViewportOffset::default())).unwrap();
+        value["menu-selections"]["active-color"] = serde_json::json!(99);
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let mut target = state_with_selection();
+        let before = target.edit_snapshot();
+        let menus = target.toolbar.durable_selections();
+        let mut viewport = ViewportOffset { x: 4, y: -5 };
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        let error = perform(
+            ExportAction::LoadJson,
+            &mut target,
+            &mut viewport,
+            VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
+            &mut platform,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("active color"));
+        assert_eq!(target.edit_snapshot(), before);
+        assert_eq!(target.toolbar.durable_selections(), menus);
+        assert_eq!(viewport, ViewportOffset { x: 4, y: -5 });
         let _ = fs::remove_file(path);
     }
 

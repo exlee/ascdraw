@@ -78,6 +78,13 @@ pub fn load(path: &Path) -> Result<Option<Document>> {
             compact_blank_runs(&mut layer.lines);
         }
     }
+    if document
+        .menu_selections
+        .as_ref()
+        .is_some_and(|selections| !selections.active_color().is_valid())
+    {
+        anyhow::bail!("saved document active color is outside the supported palette");
+    }
     Ok(Some(document))
 }
 
@@ -205,6 +212,12 @@ mod tests {
         let mut toolbar = crate::toolbar::ToolbarState::default();
         toolbar.apply_action(crate::toolbar::ToolbarAction::Toggle(
             crate::toolbar::ToggleKind::MultiLayerMode,
+        ));
+        toolbar.apply_action(crate::toolbar::ToolbarAction::Toggle(
+            crate::toolbar::ToggleKind::MultiColorMode,
+        ));
+        toolbar.apply_action(crate::toolbar::ToolbarAction::SelectColor(
+            crate::model::ColorId(12),
         ));
         let selections = toolbar.durable_selections();
 

@@ -38,6 +38,12 @@ pub struct Coord {
 
 pub const MAX_LAYERS: usize = 6;
 pub const LAYER_SYMBOLS: [&str; 10] = ["⍺", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
+pub const BASE_COLORS: [&str; 8] = [
+    "#000000", "#cd0000", "#00cd00", "#cdcd00", "#0000ee", "#cd00cd", "#00cdcd", "#e5e5e5",
+];
+pub const BRIGHT_COLORS: [&str; 8] = [
+    "#7f7f7f", "#ff0000", "#00ff00", "#ffff00", "#5c5cff", "#ff00ff", "#00ffff", "#ffffff",
+];
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct LayerId(pub u8);
@@ -57,6 +63,26 @@ pub struct LayerSummary {
     pub id: LayerId,
     pub visible: bool,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ColorId(pub u8);
+
+impl ColorId {
+    pub const COUNT: usize = BASE_COLORS.len() + BRIGHT_COLORS.len();
+
+    pub fn hex(self) -> Option<&'static str> {
+        let index = usize::from(self.0);
+        if index < BASE_COLORS.len() {
+            BASE_COLORS.get(index).copied()
+        } else {
+            BRIGHT_COLORS.get(index - BASE_COLORS.len()).copied()
+        }
+    }
+
+    pub fn is_valid(self) -> bool {
+        usize::from(self.0) < Self::COUNT
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -6,24 +6,27 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use crate::app::{CursorMode, ThemeConfig};
 #[cfg(test)]
 use crate::drawing::LineEnding;
-use crate::drawing::{LineStyle, glyph_with_connection, is_line_glyph};
+use crate::drawing::is_line_glyph;
 use crate::model::{Atom, Coord, Direction, Face, LayerId, LayerSummary};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_text,
 };
 use crate::toolbar::{
-    DurableMenuSelections, LayerOperation, MainMode, ShapeKind, ToolbarAction, ToolbarSpan,
-    ToolbarState, Tooltip, UtilityKind,
+    DurableMenuSelections, LayerOperation, MainMode, ToolbarAction, ToolbarSpan, ToolbarState,
+    Tooltip, UtilityKind,
 };
 
+mod color_tool;
 mod grid;
 mod layers;
 mod line_preview;
 mod line_tool;
 mod move_tool;
+mod shape_tool;
 mod text_tool;
 mod utility;
+pub(super) use grid::{adjacent_coord, edited_content_origin};
 pub(crate) use grid::{compact_blank_runs, compacted_blank_runs};
 pub use layers::{LayerStack, LayerView, PersistedLayer};
 use line_preview::LinePreview;
@@ -378,6 +381,7 @@ impl EditorState {
                 tooltip: false,
                 action: None,
                 right_aligned: true,
+                foreground: None,
             });
         }
         spans
@@ -581,7 +585,7 @@ impl EditorState {
             MainMode::Stamp => CursorMode::Stamp,
             MainMode::Shapes => CursorMode::Shapes,
             MainMode::Utilities => CursorMode::Utilities,
-            MainMode::Layers => CursorMode::Navigation,
+            MainMode::Layers | MainMode::Colors => CursorMode::Navigation,
         };
     }
 
@@ -860,44 +864,6 @@ impl EditorState {
         self.place_stamp();
     }
 
-    pub fn toggle_shape_preview(&mut self) {
-        if self.cursor_mode != CursorMode::Shapes {
-            return;
-        }
-        self.end_stroke();
-        self.shape_preview = if self.shape_preview.is_some() {
-            None
-        } else {
-            Some(ShapePreview {
-                anchor: self.grid.cursor_pos,
-                end: self.grid.cursor_pos,
-            })
-        };
-    }
-
-    pub fn start_shape_or_confirm(&mut self) -> bool {
-        let preview = self.shape_preview.take();
-        let had_preview = preview.is_some();
-        let had_selection = !self.selection.is_collapsed();
-        self.end_stroke();
-        self.toolbar.cancel_shortcut();
-        self.collapse_selection();
-
-        if self.cursor_mode != CursorMode::Shapes {
-            return false;
-        }
-
-        if had_preview {
-            self.shape_preview = preview;
-            self.confirm_shape();
-            return true;
-        }
-        if !had_preview && !had_selection {
-            self.toggle_shape_preview();
-        }
-        false
-    }
-
     pub fn selection_bounds(&self) -> SelectionBounds {
         self.selection.bounds()
     }
@@ -922,6 +888,7 @@ impl EditorState {
         self.line_markers
             .retain(|marker| !bounds.contains(marker.coord));
         overwrite_rectangle(&mut self.grid.lines, origin, &rectangle);
+        self.color_written_bounds(bounds);
         let active = Coord {
             line: bounds.bottom,
             column: bounds.right,
@@ -1025,53 +992,9 @@ impl EditorState {
         self.sync_cursor_mode_with_toolbar();
     }
 
-    pub fn confirm_shape(&mut self) {
-        let Some(preview) = self.shape_preview.take() else {
-            dbg!("No preview");
-            return;
-        };
-        for (coord, contents) in self.shape_cells(preview) {
-            self.remove_line_marker(coord);
-            replace_cell(&mut self.grid.lines, coord, contents);
-        }
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
-        self.sync_cursor_column();
-    }
-
-    pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
-        if let Some(lines) = self.lines_with_move_lift_preview() {
-            return Some(lines);
-        }
-        if let Some(lines) = self.lines_with_line_preview() {
-            return Some(lines);
-        }
-        let preview = self.shape_preview?;
-        let mut lines = self.grid.lines.clone();
-        for (coord, contents) in self.shape_cells(preview) {
-            replace_cell(&mut lines, coord, contents);
-        }
-        Some(lines)
-    }
-
     pub fn preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
         self.move_lift_render_lines()
             .or_else(|| self.line_preview_render_lines())
-    }
-
-    fn shape_cells(&self, preview: ShapePreview) -> Vec<(Coord, String)> {
-        let left = preview.anchor.column.min(preview.end.column);
-        let right = preview.anchor.column.max(preview.end.column);
-        let top = preview.anchor.line.min(preview.end.line);
-        let bottom = preview.anchor.line.max(preview.end.line);
-        let style = self.toolbar.shape_line_style();
-        let fill = self.toolbar.shape_fill();
-        match self.toolbar.shape_kind() {
-            ShapeKind::Rect => rectangle_cells(left, right, top, bottom, style, false, fill),
-            ShapeKind::RoundedRect => rectangle_cells(left, right, top, bottom, style, true, fill),
-        }
     }
 
     fn sync_cursor_column(&mut self) {
@@ -1101,6 +1024,9 @@ impl EditorState {
         self.line_markers
             .retain(|marker| !bounds.contains(marker.coord));
         replace_range(&mut self.grid.lines, bounds, replacement);
+        if replacement.is_some() {
+            self.color_written_bounds(bounds);
+        }
         self.restore_active_cursor_index();
     }
 
@@ -1183,36 +1109,6 @@ impl EditorState {
     }
 }
 
-fn edited_content_origin(lines: &[Vec<Atom>]) -> Option<Coord> {
-    grid::content_cells(lines)
-        .into_iter()
-        .reduce(|origin, coord| Coord {
-            line: origin.line.min(coord.line),
-            column: origin.column.min(coord.column),
-        })
-}
-
-fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord> {
-    match direction {
-        Direction::Up => Some(Coord {
-            line: coord.line.checked_sub(1)?,
-            column: coord.column,
-        }),
-        Direction::Right => Some(Coord {
-            line: coord.line,
-            column: coord.column.checked_add(1)?,
-        }),
-        Direction::Down => Some(Coord {
-            line: coord.line.checked_add(1)?,
-            column: coord.column,
-        }),
-        Direction::Left => Some(Coord {
-            line: coord.line,
-            column: coord.column.checked_sub(1)?,
-        }),
-    }
-}
-
 fn blank_atom() -> Atom {
     Atom {
         face: Face::default(),
@@ -1268,93 +1164,6 @@ pub(super) fn replace_cell(lines: &mut Vec<Vec<Atom>>, coord: Coord, contents: S
     prefix.extend(suffix);
     grid::compact_blank_line(&mut prefix);
     *line = prefix;
-}
-
-fn rectangle_cells(
-    left: usize,
-    right: usize,
-    top: usize,
-    bottom: usize,
-    style: LineStyle,
-    rounded: bool,
-    fill: Option<&str>,
-) -> Vec<(Coord, String)> {
-    let mut cells = Vec::new();
-    if left == right && top == bottom {
-        cells.push((
-            Coord {
-                line: top,
-                column: left,
-            },
-            fill.unwrap_or("□").to_string(),
-        ));
-        return cells;
-    }
-    for line in top..=bottom {
-        for column in left..=right {
-            let on_top = line == top;
-            let on_bottom = line == bottom;
-            let on_left = column == left;
-            let on_right = column == right;
-            let glyph = match (on_top, on_right, on_bottom, on_left) {
-                (true, true, _, true) | (true, false, true, true) => {
-                    line_glyph(&[Direction::Right, Direction::Down], style, rounded)
-                }
-                (true, true, true, false) => {
-                    line_glyph(&[Direction::Down, Direction::Left], style, rounded)
-                }
-                (false, true, true, true) => {
-                    line_glyph(&[Direction::Up, Direction::Right], style, rounded)
-                }
-                (true, true, false, false) => {
-                    line_glyph(&[Direction::Down, Direction::Left], style, rounded)
-                }
-                (false, true, true, false) => {
-                    line_glyph(&[Direction::Up, Direction::Left], style, rounded)
-                }
-                (false, false, true, true) => {
-                    line_glyph(&[Direction::Up, Direction::Right], style, rounded)
-                }
-                (true, false, false, true) => {
-                    line_glyph(&[Direction::Right, Direction::Down], style, rounded)
-                }
-                (true, false, _, false) | (false, false, true, false) => {
-                    line_glyph(&[Direction::Left, Direction::Right], style, rounded)
-                }
-                (false, true, false, _) | (false, false, false, true) => {
-                    line_glyph(&[Direction::Up, Direction::Down], style, rounded)
-                }
-                _ => match fill {
-                    Some(fill) => fill.chars().next().unwrap_or(' '),
-                    None => continue,
-                },
-            };
-            cells.push((Coord { line, column }, glyph.to_string()));
-        }
-    }
-    cells
-}
-
-fn line_glyph(directions: &[Direction], style: LineStyle, rounded: bool) -> char {
-    if !rounded && style == LineStyle::Thin && directions.len() == 2 {
-        return match (directions[0], directions[1]) {
-            (Direction::Right, Direction::Down) | (Direction::Down, Direction::Right) => '┌',
-            (Direction::Down, Direction::Left) | (Direction::Left, Direction::Down) => '┐',
-            (Direction::Up, Direction::Right) | (Direction::Right, Direction::Up) => '└',
-            (Direction::Up, Direction::Left) | (Direction::Left, Direction::Up) => '┘',
-            _ => connected_glyph(directions, style),
-        };
-    }
-    connected_glyph(directions, style)
-}
-
-fn connected_glyph(directions: &[Direction], style: LineStyle) -> char {
-    let mut glyph = ' ';
-    for direction in directions {
-        glyph = glyph_with_connection(&glyph.to_string(), *direction, style)
-            .expect("generated line glyph accepts another connection");
-    }
-    glyph
 }
 
 fn index_and_column_for_coord(atoms: &[Atom], target_column: usize) -> (usize, usize) {
@@ -1584,6 +1393,135 @@ mod tests {
         let active = state.active_layer_id();
         assert!(state.delete_layer(active));
         assert_eq!(state.active_layer_id(), base);
+    }
+
+    #[test]
+    fn selected_color_applies_only_to_future_nonblank_writes_in_every_editing_path() {
+        let color = crate::model::ColorId(9);
+        let foreground = color.hex().unwrap();
+
+        let mut text = state();
+        text.insert("a");
+        text.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        text.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        text.insert("b");
+        assert_eq!(text.grid.lines[0][0].face, Face::default());
+        assert_eq!(text.grid.lines[0][1].face.fg, foreground);
+
+        text.move_home();
+        assert!(text.begin_single_replace());
+        text.write_text("r");
+        assert_eq!(text.grid.lines[0][0].face.fg, foreground);
+        text.toggle_replace_mode();
+        text.write_text("z");
+        assert_eq!(text.grid.lines[0][0].face.fg, foreground);
+
+        let mut stamp = state();
+        stamp.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        stamp.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        stamp.place_stamp();
+        assert_eq!(stamp.grid.lines[0][0].face.fg, foreground);
+
+        let mut line = state();
+        line.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        line.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        assert!(line.move_or_draw(Direction::Right, true));
+        assert!(
+            line.grid
+                .lines
+                .iter()
+                .flatten()
+                .filter(|atom| !atom.contents.chars().all(char::is_whitespace))
+                .all(|atom| atom.face.fg == foreground)
+        );
+
+        let mut shape = state();
+        shape.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        shape.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        shape.toggle_shape_preview();
+        shape.move_cursor(Direction::Right);
+        shape.move_cursor(Direction::Down);
+        shape.confirm_shape();
+        assert!(
+            shape
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .filter(|atom| !atom.contents.chars().all(char::is_whitespace))
+                .all(|atom| atom.face.fg == foreground)
+        );
+
+        let mut paste = state();
+        paste.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        paste.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        assert!(paste.paste_text_rectangle("p q"));
+        assert_eq!(paste.grid.lines[0][0].face.fg, foreground);
+        assert_eq!(paste.grid.lines[0][1].face, Face::default());
+        assert_eq!(paste.grid.lines[0][2].face.fg, foreground);
+    }
+
+    #[test]
+    fn disabling_colors_stops_future_coloring_and_moves_preserve_existing_colors() {
+        let color = crate::model::ColorId(10);
+        let foreground = color.hex().unwrap();
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.apply_toolbar_action(ToolbarAction::SelectColor(color));
+        state.insert("x");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        assert!(state.confirm_move_lift());
+        assert_eq!(state.grid.lines[0][1].face.fg, foreground);
+
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.move_to(Coord { line: 0, column: 2 });
+        state.insert("y");
+        assert_eq!(state.grid.lines[0][2].face, Face::default());
+
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode));
+        assert_eq!(state.grid.lines[0][1].face.fg, foreground);
+    }
+
+    #[test]
+    fn line_connection_regeneration_uses_the_current_color() {
+        let first = crate::model::ColorId(1);
+        let second = crate::model::ColorId(6);
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        state.apply_toolbar_action(ToolbarAction::SelectColor(first));
+        assert!(state.move_or_draw(Direction::Right, true));
+        state.end_stroke();
+
+        state.apply_toolbar_action(ToolbarAction::SelectColor(second));
+        assert!(state.move_or_draw(Direction::Down, true));
+
+        assert_eq!(state.grid.lines[0][0].face.fg, first.hex().unwrap());
+        assert_eq!(state.grid.lines[0][1].face.fg, second.hex().unwrap());
+        assert_eq!(
+            state.grid.lines[1]
+                .iter()
+                .find(|atom| !atom.contents.chars().all(char::is_whitespace))
+                .unwrap()
+                .face
+                .fg,
+            second.hex().unwrap()
+        );
+        assert!(state.erase(Direction::Up));
+        assert!(
+            state
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .filter(|atom| atom.contents.chars().all(char::is_whitespace))
+                .all(|atom| atom.face == Face::default())
+        );
     }
 
     #[test]

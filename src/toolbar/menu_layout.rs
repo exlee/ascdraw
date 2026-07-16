@@ -100,6 +100,7 @@ fn push_page(
                 option: option_index,
             }),
             right_aligned: false,
+            foreground: None,
         });
         let padding = widths[position].saturating_sub(UnicodeWidthStr::width(*option));
         if padding > 0 {
