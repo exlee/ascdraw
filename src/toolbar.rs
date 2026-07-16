@@ -351,6 +351,8 @@ impl ToolbarState {
                     self.toggle_toggles_menu();
                 } else if self.toggles_open {
                     self.select_toggle_digit(digit);
+                } else if digit == 1 {
+                    self.shortcut_prefix = Some(PendingShortcut::Mode);
                 } else if self.main_mode == MainMode::Utilities
                     && let Some(option) = digit
                         .checked_sub(2)
@@ -368,17 +370,13 @@ impl ToolbarState {
                         .filter(|group| *group < 2)
                         .map(PendingShortcut::ColorGroup);
                 } else {
-                    self.shortcut_prefix = if digit == 1 {
-                        Some(PendingShortcut::Mode)
-                    } else {
-                        digit
-                            .checked_sub(2)
-                            .filter(|category| {
-                                self.layout()
-                                    .is_some_and(|layout| *category < layout.labels.len())
-                            })
-                            .map(PendingShortcut::Category)
-                    };
+                    self.shortcut_prefix = digit
+                        .checked_sub(2)
+                        .filter(|category| {
+                            self.layout()
+                                .is_some_and(|layout| *category < layout.labels.len())
+                        })
+                        .map(PendingShortcut::Category);
                 }
             }
             Some(PendingShortcut::Mode) => {

@@ -210,4 +210,21 @@ mod tests {
             Some((LayerId(1), LayerOperation::MoveDown))
         );
     }
+
+    #[test]
+    fn mode_shortcut_leaves_layers_mode() {
+        let layers = [LayerSummary {
+            id: LayerId(0),
+            visible: true,
+            active: true,
+        }];
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Layers));
+
+        press(&mut toolbar, &layers, "1");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
+        press(&mut toolbar, &layers, "1");
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+    }
 }
