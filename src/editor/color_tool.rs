@@ -1,9 +1,9 @@
 use crate::model::{Atom, Coord, Face};
 use crate::selection::SelectionBounds;
 
-use super::{EditorState, index_and_column_for_coord};
+use super::{Editor, index_and_column_for_coord};
 
-impl EditorState {
+impl Editor {
     pub(super) fn write_face(&self) -> Face {
         let mut face = Face::default();
         if self.toolbar.multi_color_mode()

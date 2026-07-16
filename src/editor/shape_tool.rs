@@ -4,9 +4,9 @@ use crate::model::{Atom, Coord, Direction};
 use crate::toolbar::ShapeKind;
 
 use super::color_tool::color_atom_at;
-use super::{EditorState, ShapePreview, index_for_column, replace_cell};
+use super::{Editor, ShapePreview, index_for_column, replace_cell};
 
-impl EditorState {
+impl Editor {
     pub fn toggle_shape_preview(&mut self) {
         if self.cursor_mode != CursorMode::Shapes {
             return;

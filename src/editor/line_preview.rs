@@ -2,7 +2,7 @@ use crate::app::CursorMode;
 use crate::model::{Atom, Coord, Direction};
 use crate::selection::CanvasSelection;
 
-use super::{EditorState, PlacedLineMarker, adjacent_coord, blank_atom, index_for_column};
+use super::{Editor, PlacedLineMarker, adjacent_coord, blank_atom, index_for_column};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LinePreview {
@@ -32,7 +32,7 @@ impl LinePreview {
     }
 }
 
-impl EditorState {
+impl Editor {
     pub fn has_line_preview(&self) -> bool {
         self.line_preview.is_some()
     }
@@ -248,7 +248,7 @@ fn segment_accepts_direction(anchor: Coord, end: Coord, direction: Direction) ->
     }
 }
 
-fn draw_orthogonal_segment(state: &mut EditorState, end: Coord) {
+fn draw_orthogonal_segment(state: &mut Editor, end: Coord) {
     let start = state.grid.cursor_pos;
     let (direction, steps) = if end.line == start.line {
         if end.column >= start.column {

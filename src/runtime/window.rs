@@ -13,7 +13,7 @@ use winit::window::{Window, WindowId};
 use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
-use crate::editor::EditorState;
+use crate::editor::Editor;
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -123,7 +123,7 @@ pub struct EditorWindow {
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_drag: Option<MouseDrag>,
-    pub state: EditorState,
+    pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
     view_cursor_anchor: Option<ViewCursorAnchor>,
@@ -143,7 +143,7 @@ pub struct EditorWindow {
 
 #[derive(Debug, Clone)]
 struct MouseDrag {
-    previous_state: EditorState,
+    previous_state: Editor,
     previous_viewport: ViewportOffset,
     last_pointer: Coord,
     active: bool,
@@ -157,10 +157,7 @@ enum MouseDragOverride {
     Space,
 }
 
-fn finish_mouse_drag_state(
-    state: &mut EditorState,
-    input_override: Option<MouseDragOverride>,
-) -> bool {
+fn finish_mouse_drag_state(state: &mut Editor, input_override: Option<MouseDragOverride>) -> bool {
     let changed = if state.move_lift_active() {
         state.confirm_move_lift()
     } else if input_override == Some(MouseDragOverride::Space)
@@ -479,7 +476,7 @@ impl EditorWindow {
 
     pub fn finish_state_change(
         &mut self,
-        previous_state: EditorState,
+        previous_state: Editor,
         previous_viewport: ViewportOffset,
         document_changed: bool,
     ) -> bool {
@@ -494,7 +491,7 @@ impl EditorWindow {
 
     pub fn finish_selection_clear(
         &mut self,
-        previous_state: EditorState,
+        previous_state: Editor,
         previous_viewport: ViewportOffset,
     ) -> bool {
         self.finish_state_change_in_group(
@@ -508,7 +505,7 @@ impl EditorWindow {
 
     pub fn finish_grouped_state_change(
         &mut self,
-        previous_state: EditorState,
+        previous_state: Editor,
         previous_viewport: ViewportOffset,
         document_changed: bool,
         group: HistoryGroup,
@@ -524,7 +521,7 @@ impl EditorWindow {
 
     fn finish_state_change_in_group(
         &mut self,
-        previous_state: EditorState,
+        previous_state: Editor,
         previous_viewport: ViewportOffset,
         document_changed: bool,
         group: Option<HistoryGroup>,
@@ -625,7 +622,7 @@ impl EditorWindow {
 
     pub fn finish_project_load(
         &mut self,
-        previous_state: EditorState,
+        previous_state: Editor,
         previous_viewport: ViewportOffset,
     ) -> bool {
         self.menu_selections_dirty |=
@@ -767,8 +764,8 @@ fn durable_menu_selections_changed(
 fn reconcile_view_cursor(
     anchor: &mut Option<ViewCursorAnchor>,
     viewport: &mut ViewportOffset,
-    previous: &EditorState,
-    current: &mut EditorState,
+    previous: &Editor,
+    current: &mut Editor,
     cell_size: (usize, usize),
     grid_top: usize,
 ) -> bool {
@@ -970,7 +967,7 @@ pub fn create_editor_window(
         window.focus_window();
     }
 
-    let mut state = EditorState::new(&config.theme, DEFAULT_WINDOW_TITLE);
+    let mut state = Editor::new(&config.theme, DEFAULT_WINDOW_TITLE);
     if let Some(document) = document::load(document_path)? {
         let active_layer = document
             .active_layer
@@ -1199,8 +1196,8 @@ mod tests {
         )
     }
 
-    fn state_with_rows(rows: &[&str]) -> EditorState {
-        let mut state = EditorState::new(&AppConfig::default().theme, DEFAULT_WINDOW_TITLE);
+    fn state_with_rows(rows: &[&str]) -> Editor {
+        let mut state = Editor::new(&AppConfig::default().theme, DEFAULT_WINDOW_TITLE);
         state.grid.lines = rows
             .iter()
             .map(|row| {
@@ -1544,7 +1541,7 @@ mod tests {
     }
 
     fn apply_mouse_toolbar_transition(
-        state: &mut EditorState,
+        state: &mut Editor,
         action: ToolbarAction,
         viewport: &mut ViewportOffset,
         config: &AppConfig,
@@ -1564,7 +1561,7 @@ mod tests {
     }
 
     fn apply_keyboard_toolbar_transition(
-        state: &mut EditorState,
+        state: &mut Editor,
         key: Key,
         viewport: &mut ViewportOffset,
         config: &AppConfig,
@@ -1584,7 +1581,7 @@ mod tests {
     }
 
     fn clear_after_toolbar_action_preserves_cursor_screen_position(
-        state: &mut EditorState,
+        state: &mut Editor,
         viewport: ViewportOffset,
         config: &AppConfig,
         toolbar_cell_height: usize,
@@ -1921,7 +1918,7 @@ mod tests {
             None
         );
 
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -1990,7 +1987,7 @@ mod tests {
     #[test]
     fn rejected_selection_extension_restores_anchor_active_and_cursor_together() {
         let content = [Coord { line: 5, column: 5 }];
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -2010,7 +2007,7 @@ mod tests {
 
     #[test]
     fn rejected_erasure_can_restore_document_selection_and_cursor_atomically() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.move_to(Coord { line: 5, column: 5 });
         state.insert("x");
         state.move_to(Coord {
@@ -2043,7 +2040,7 @@ mod tests {
 
     #[test]
     fn rejected_literal_clear_can_restore_document_selection_and_cursor_atomically() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.move_to(Coord { line: 5, column: 5 });
         state.insert("x");
         state.move_to(Coord {
@@ -2076,7 +2073,7 @@ mod tests {
 
     #[test]
     fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.grid.lines = vec![vec![crate::model::Atom {
             face: crate::model::Face::default(),
             contents: "x".to_string(),
@@ -2105,7 +2102,7 @@ mod tests {
 
     #[test]
     fn rejected_utility_transform_can_restore_document_and_coordinates_atomically() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.grid.lines.resize_with(6, Vec::new);
         state.grid.lines[5].resize_with(5, || Atom {
             face: Face::default(),
@@ -2174,7 +2171,7 @@ mod tests {
     fn keyboard_and_mouse_mode_height_changes_keep_every_canvas_cell_anchored() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         let mut viewport = ViewportOffset { x: -13, y: 17 };
 
         for mode in [MainMode::Utilities, MainMode::Stamp, MainMode::Shapes] {
@@ -2222,7 +2219,7 @@ mod tests {
     fn large_line_and_compact_utils_menu_cycles_have_no_drift() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         let initial = ViewportOffset { x: 21, y: -37 };
         let mut viewport = initial;
 
@@ -2259,7 +2256,7 @@ mod tests {
     fn export_actions_stay_open_without_drift_and_escape_round_trips() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         let initial = ViewportOffset { x: -8, y: 29 };
         let mut viewport = initial;
 
@@ -2324,7 +2321,7 @@ mod tests {
     fn export_close_then_document_edit_records_one_coherent_anchored_viewport() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.insert("ragged\nx\nfar drawing");
         let cursor = Coord { line: 2, column: 7 };
         state.move_to(cursor);
@@ -2379,7 +2376,7 @@ mod tests {
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
 
         for use_keyboard in [true, false] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             state.insert("drawing");
             let cursor = Coord { line: 4, column: 9 };
             state.move_to(cursor);
@@ -2472,7 +2469,7 @@ mod tests {
     fn clearing_styled_whitespace_removes_its_face_without_moving_cursor_or_viewport() {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.grid.lines = vec![vec![Atom {
             face: config.theme.selection.clone(),
             contents: " ".into(),

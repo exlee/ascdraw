@@ -4,9 +4,7 @@ use crate::drawing::{
 };
 use crate::model::{Coord, Direction};
 
-use super::{
-    EditorState, adjacent_coord, atom_width, grid, index_and_column_for_coord, replace_cell,
-};
+use super::{Editor, adjacent_coord, atom_width, grid, index_and_column_for_coord, replace_cell};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ActiveStroke {
@@ -24,7 +22,7 @@ pub(super) struct PlacedLineMarker {
     pub(super) base_glyph: String,
 }
 
-impl EditorState {
+impl Editor {
     pub fn move_or_draw(&mut self, direction: Direction, draw: bool) -> bool {
         let prepended = self.prepare_adjacent(direction);
         let from = self.grid.cursor_pos;

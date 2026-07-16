@@ -1,6 +1,6 @@
 use winit::keyboard::{Key, ModifiersState};
 
-use crate::editor::EditorState;
+use crate::editor::Editor;
 use crate::history::HistoryGroup;
 use crate::input::{EditCommand, OrderedModifierTracker, edit_command, ordered_direction_command};
 use crate::model::Coord;
@@ -13,7 +13,7 @@ pub enum ChangePolicy {
 }
 
 pub fn history_group_for_key(
-    state: &EditorState,
+    state: &Editor,
     key: &Key,
     modifiers: ModifiersState,
     ordered_modifiers: &OrderedModifierTracker,
@@ -22,12 +22,17 @@ pub fn history_group_for_key(
         return Some(HistoryGroup::TextSession);
     }
     ordered_direction_command(key, modifiers, ordered_modifiers, state.cursor_mode)
-        .is_some_and(|command| matches!(command.command, EditCommand::Draw(_)))
-        .then_some(HistoryGroup::LineStroke)
+        .is_some_and(|command| {
+            matches!(
+                command.command,
+                EditCommand::Draw(_) | EditCommand::DrawStamp(_)
+            )
+        })
+        .then_some(HistoryGroup::ControlStroke)
 }
 
 pub fn change_policy_for_key(
-    state: &EditorState,
+    state: &Editor,
     key: &Key,
     repeat: bool,
     modifiers: ModifiersState,
@@ -71,7 +76,7 @@ pub fn change_policy_for_key(
     ChangePolicy::Edit
 }
 
-pub fn navigation_target(state: &EditorState, command: EditCommand, steps: usize) -> Option<Coord> {
+pub fn navigation_target(state: &Editor, command: EditCommand, steps: usize) -> Option<Coord> {
     let (direction, extend_selection) = match command {
         EditCommand::Move(direction) => (direction, false),
         EditCommand::ExtendSelection(direction) => (direction, true),

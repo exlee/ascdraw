@@ -84,7 +84,7 @@ impl Tooltip {
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
             "Alt-direction erases",
             "Shift-direction selects",
-            "Esc cancels most modes",
+            "Esc, Ctrl-C, or Ctrl-G cancels the current mode",
         ];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -108,7 +108,7 @@ impl Tooltip {
             Self::SingleReplace => "Replace selection: type or paste one character",
             Self::LineStroke => "Line stroke: Ctrl-direction continues; release Ctrl to finish",
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
-            Self::Replace => "<Esc> to exit replace mode",
+            Self::Replace => "<Esc>/Ctrl-C/Ctrl-G to exit replace mode",
             Self::Export => {
                 "TXT/PNG export selection or visible viewport; JSON exports the whole project"
             }
@@ -116,7 +116,7 @@ impl Tooltip {
             Self::Layers => "Layers: select, show, reorder, add, or delete a layer",
             Self::Colors => "Colors: select the foreground color for future writes",
             Self::Selection => {
-                "Selection: Alt-direction lifts and moves; Shift-direction expands; Esc collapses; Backspace clears; r then KEY replaces"
+                "Selection: Alt-direction lifts and moves; Shift-direction expands; cancel key collapses; Backspace clears; r then KEY replaces"
             }
         };
         if matches!(

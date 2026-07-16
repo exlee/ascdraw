@@ -133,7 +133,7 @@ impl ToolbarState {
         self.toggles[ToggleKind::MultiColorMode.index()]
     }
 
-    pub(super) fn close_toggles_menu(&mut self) {
+    pub fn close_toggles_menu(&mut self) {
         self.toggles_open = false;
         if self.shortcut_prefix == Some(PendingShortcut::Toggles) {
             self.shortcut_prefix = None;

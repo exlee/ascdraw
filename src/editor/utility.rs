@@ -1,8 +1,8 @@
-use super::{EditorState, atom_width, blank_atom, display_width, index_for_column};
+use super::{Editor, atom_width, blank_atom, display_width, index_for_column};
 use crate::model::{Atom, Coord, Direction};
 use crate::toolbar::UtilityKind;
 
-impl EditorState {
+impl Editor {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
         self.layers.for_each_layer_mut(
             &mut self.grid.lines,

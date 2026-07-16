@@ -231,7 +231,10 @@ pub fn ordered_direction_command_for_direction(
     ordered: &OrderedModifierTracker,
     mode: CursorMode,
 ) -> Option<OrderedDirectionCommand> {
-    if mode.accepts_text() || modifiers.super_key() {
+    if mode.accepts_text()
+        || modifiers.super_key()
+        || (mode == CursorMode::Navigation && modifiers.control_key())
+    {
         return None;
     }
     let (primary, secondary) = ordered.primary_and_secondary()?;
@@ -265,6 +268,7 @@ fn tool_direction_command(direction: Direction, mode: CursorMode) -> EditCommand
 }
 
 /// Returns history commands before every mode-specific or configurable shortcut.
+#[cfg(test)]
 pub fn history_command(
     key: &Key,
     modifiers: ModifiersState,
@@ -290,12 +294,19 @@ pub fn history_command(
 }
 
 /// Returns global clipboard commands before mode-specific key handling.
+#[cfg(test)]
 pub fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
     if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
         return None;
     }
     match key {
-        Key::Character(text) if text.eq_ignore_ascii_case("c") => Some(ClipboardCommand::Copy),
+        Key::Character(text)
+            if text.eq_ignore_ascii_case("c")
+                && modifiers.super_key()
+                && !modifiers.control_key() =>
+        {
+            Some(ClipboardCommand::Copy)
+        }
         Key::Character(text) if text.eq_ignore_ascii_case("x") => Some(ClipboardCommand::Cut),
         Key::Character(text) if text.eq_ignore_ascii_case("v") => Some(ClipboardCommand::Paste),
         _ => None,
@@ -329,19 +340,6 @@ fn edit_command_for_key(
         return Some(EditCommand::CancelTextEntry);
     }
 
-    if mode == CursorMode::Navigation {
-        if modifiers.shift_key()
-            && !modifiers.alt_key()
-            && !modifiers.control_key()
-            && !modifiers.super_key()
-        {
-            return direction_for_key(key).map(EditCommand::ExtendSelection);
-        }
-        return (modifiers == ModifiersState::empty())
-            .then(|| direction_for_key(key).map(EditCommand::Move))
-            .flatten();
-    }
-
     if !mode.accepts_text() && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("i"))
     {
         return Some(EditCommand::ToggleTextEntry);
@@ -364,6 +362,29 @@ fn edit_command_for_key(
         });
     }
 
+    if modifiers == ModifiersState::empty()
+        && matches!(key, Key::Character(text) if text == "r")
+        && !matches!(
+            mode,
+            CursorMode::Text | CursorMode::Insert | CursorMode::Replace
+        )
+    {
+        return Some(EditCommand::BeginSingleReplace);
+    }
+
+    if mode == CursorMode::Navigation {
+        if modifiers.shift_key()
+            && !modifiers.alt_key()
+            && !modifiers.control_key()
+            && !modifiers.super_key()
+        {
+            return direction_for_key(key).map(EditCommand::ExtendSelection);
+        }
+        return (modifiers == ModifiersState::empty())
+            .then(|| direction_for_key(key).map(EditCommand::Move))
+            .flatten();
+    }
+
     if matches!(key, Key::Named(NamedKey::Backspace)) {
         return match mode {
             CursorMode::Insert | CursorMode::Text => Some(EditCommand::Backspace),
@@ -384,16 +405,6 @@ fn edit_command_for_key(
         || (!mode.accepts_text() && modifiers.shift_key())
     {
         return None;
-    }
-
-    if modifiers == ModifiersState::empty()
-        && matches!(key, Key::Character(text) if text == "r")
-        && !matches!(
-            mode,
-            CursorMode::Text | CursorMode::Insert | CursorMode::Replace
-        )
-    {
-        return Some(EditCommand::BeginSingleReplace);
     }
 
     if mode == CursorMode::MoveDraw {
@@ -451,6 +462,9 @@ pub fn edit_direction_command(
     mode: CursorMode,
     space_held: bool,
 ) -> Option<EditCommand> {
+    if mode == CursorMode::Navigation && modifiers.control_key() {
+        return None;
+    }
     if modifiers.shift_key()
         && !modifiers.alt_key()
         && !modifiers.control_key()
@@ -491,7 +505,7 @@ fn is_space_key(key: &Key) -> bool {
     }
 }
 
-fn direction_for_key(key: &Key) -> Option<Direction> {
+pub(crate) fn direction_for_key(key: &Key) -> Option<Direction> {
     arrow_direction_for_key(key).or_else(|| match key {
         Key::Character(text) if text.eq_ignore_ascii_case("ķ") => Some(Direction::Left),
         Key::Character(text) if text.eq_ignore_ascii_case("∆") => Some(Direction::Down),
@@ -1270,6 +1284,7 @@ mod tests {
             CursorMode::Text,
             CursorMode::Stamp,
             CursorMode::Utilities,
+            CursorMode::Navigation,
         ] {
             assert_eq!(
                 edit_command_for_key(&Key::Named(NamedKey::Enter), ModifiersState::empty(), mode,),
@@ -1402,7 +1417,7 @@ mod tests {
                 false,
             ),
             None,
-            "Ctrl-C remains available to the global clipboard route"
+            "Ctrl-C is handled by the cancel-key classifier"
         );
         assert_eq!(
             move_selection_command(
@@ -1480,22 +1495,16 @@ mod tests {
 
     #[test]
     fn entering_replace_mode() {
-        assert_eq!(
-            edit_command_for_key(
-                &Key::Named(NamedKey::Enter),
-                ModifiersState::SHIFT,
-                CursorMode::MoveDraw,
-            ),
-            Some(EditCommand::ToggleTextEntry)
-        );
-        assert_eq!(
-            edit_command_for_key(
-                &Key::Character("r".into()),
-                ModifiersState::SHIFT,
-                CursorMode::MoveDraw,
-            ),
-            Some(EditCommand::ToggleReplaceMode)
-        );
+        for mode in [CursorMode::MoveDraw, CursorMode::Navigation] {
+            assert_eq!(
+                edit_command_for_key(&Key::Named(NamedKey::Enter), ModifiersState::SHIFT, mode,),
+                Some(EditCommand::ToggleTextEntry)
+            );
+            assert_eq!(
+                edit_command_for_key(&Key::Character("r".into()), ModifiersState::SHIFT, mode,),
+                Some(EditCommand::ToggleReplaceMode)
+            );
+        }
     }
 
     #[test]
@@ -1505,6 +1514,7 @@ mod tests {
             CursorMode::Stamp,
             CursorMode::Shapes,
             CursorMode::Utilities,
+            CursorMode::Navigation,
         ] {
             assert_eq!(
                 edit_command_for_key(&Key::Character("r".into()), ModifiersState::empty(), mode,),
@@ -1516,6 +1526,49 @@ mod tests {
             assert_eq!(
                 edit_command_for_key(&Key::Character("r".into()), ModifiersState::empty(), mode,),
                 None
+            );
+        }
+    }
+
+    #[test]
+    fn navigation_keeps_mode_entry_keys_but_ignores_tool_keys() {
+        for (key, modifiers, expected) in [
+            (
+                Key::Character("i".into()),
+                ModifiersState::empty(),
+                Some(EditCommand::ToggleTextEntry),
+            ),
+            (
+                Key::Named(NamedKey::Enter),
+                ModifiersState::SHIFT,
+                Some(EditCommand::ToggleTextEntry),
+            ),
+            (
+                Key::Named(NamedKey::Enter),
+                ModifiersState::empty(),
+                Some(EditCommand::ToggleReplaceMode),
+            ),
+            (
+                Key::Character("R".into()),
+                ModifiersState::SHIFT,
+                Some(EditCommand::ToggleReplaceMode),
+            ),
+            (
+                Key::Character("r".into()),
+                ModifiersState::empty(),
+                Some(EditCommand::BeginSingleReplace),
+            ),
+            (Key::Named(NamedKey::Space), ModifiersState::empty(), None),
+            (
+                Key::Named(NamedKey::ArrowRight),
+                ModifiersState::CONTROL,
+                None,
+            ),
+        ] {
+            assert_eq!(
+                edit_command_for_key(&key, modifiers, CursorMode::Navigation),
+                expected,
+                "key={key:?}, modifiers={modifiers:?}"
             );
         }
     }
@@ -1537,11 +1590,9 @@ mod tests {
     }
 
     #[test]
-    fn control_and_command_clipboard_shortcuts_are_global_and_alt_is_excluded() {
+    fn command_copy_and_control_or_command_cut_paste_are_global() {
         for modifiers in [
-            ModifiersState::CONTROL,
             ModifiersState::SUPER,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
             ModifiersState::SUPER | ModifiersState::SHIFT,
         ] {
             assert_eq!(
@@ -1552,6 +1603,13 @@ mod tests {
                 clipboard_command(&Key::Character("C".into()), modifiers),
                 Some(ClipboardCommand::Copy)
             );
+        }
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
             assert_eq!(
                 clipboard_command(&Key::Character("x".into()), modifiers),
                 Some(ClipboardCommand::Cut)
@@ -1569,6 +1627,10 @@ mod tests {
                 Some(ClipboardCommand::Paste)
             );
         }
+        assert_eq!(
+            clipboard_command(&Key::Character("c".into()), ModifiersState::CONTROL),
+            None
+        );
         assert_eq!(
             clipboard_command(
                 &Key::Character("c".into()),
@@ -1590,7 +1652,7 @@ mod tests {
                 CursorMode::Text
             ),
             None,
-            "Ctrl-C is copy, never text cancellation"
+            "Ctrl-C is handled by the cancel-key classifier before edit commands"
         );
     }
 

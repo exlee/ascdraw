@@ -9,7 +9,7 @@ use super::{Renderer, render, resize_surface};
 use crate::app::AppConfig;
 #[cfg(target_os = "macos")]
 use crate::diagnostics::log_error;
-use crate::editor::EditorState;
+use crate::editor::Editor;
 use crate::layout::ViewportOffset;
 use crate::perf::FrameTiming;
 
@@ -71,7 +71,7 @@ impl WindowSurface {
     pub fn render(
         &mut self,
         window: &Window,
-        state: &EditorState,
+        state: &Editor,
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,

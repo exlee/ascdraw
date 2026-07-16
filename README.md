@@ -73,12 +73,12 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Place the active stamp | Space |
 | Grow the rectangular selection | Shift + direction |
 | Erase while moving | Alt + direction |
-| Collapse the selection to one cell | Escape |
+| Cancel the current interaction / collapse selection | Escape, Ctrl + `C`, or Ctrl + `G` |
 | Clear selected cells | Backspace |
 | Replace selected cells once | `r`, then one grapheme |
 | Enter or leave Text mode | `i` or Shift + Return |
 | Enter or leave continuous Replace mode | Return or Shift + `R` |
-| Copy / cut / paste | Ctrl/Cmd + `C` / `X` / `V` |
+| Copy / cut / paste | Cmd + `C` / Ctrl/Cmd + `X` / Ctrl/Cmd + `V` |
 | Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
 | Open Toggles | `9` |
 | Open Save/Load/Export | `0` |
@@ -164,7 +164,7 @@ Operations that would split a wide grapheme are rejected.
 
 Text mode is independent of the selected drawing tool. Type to insert graphemes; arrows move freely
 over the canvas, Backspace removes the preceding grapheme, Delete removes the following grapheme,
-and Tab inserts four spaces. Escape or Ctrl + `G` returns to the active toolbar mode.
+and Tab inserts four spaces. Escape, Ctrl + `C`, or Ctrl + `G` returns to the active toolbar mode.
 
 Continuous Replace overwrites cells and extends rows when needed. In any drawing mode, `r` waits for
 one typed or pasted grapheme, replaces the selected rectangle, and immediately returns to the active
@@ -172,7 +172,7 @@ tool.
 
 Shift + direction expands the selection from its anchor. With an expanded selection, Alt + direction
 lifts and moves the edited cells in the rectangle; blank cells remain transparent. A plain direction,
-Space, or Return confirms it, while Escape cancels.
+Space, or Return confirms it, while Escape, Ctrl + `C`, or Ctrl + `G` cancels.
 Mouse drag crosses cells through these same direction commands: Shift-drag expands the selection and
 Alt-drag moves an expanded selection (or erases when it is collapsed).
 Clipboard paste overwrites a rectangle from the selection's top-left corner, preserves ragged rows

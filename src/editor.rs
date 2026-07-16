@@ -24,6 +24,7 @@ mod line_preview;
 mod line_tool;
 mod move_tool;
 mod shape_tool;
+mod state;
 mod text_tool;
 mod utility;
 pub(super) use grid::{adjacent_coord, edited_content_origin};
@@ -42,7 +43,7 @@ pub struct GridState {
 }
 
 #[derive(Debug, Clone)]
-pub struct EditorState {
+pub struct Editor {
     pub grid: GridState,
     pub theme: ThemeConfig,
     pub window_title: String,
@@ -99,7 +100,7 @@ impl EditSnapshot {
     }
 }
 
-impl EditorState {
+impl Editor {
     pub fn layer_summaries(&self) -> Vec<LayerSummary> {
         self.layers.summaries()
     }
@@ -536,10 +537,12 @@ impl EditorState {
     }
 
     pub fn begin_single_replace(&mut self) -> bool {
-        if matches!(
-            self.cursor_mode,
-            CursorMode::Text | CursorMode::Insert | CursorMode::Replace
-        ) {
+        if self.selection.is_collapsed()
+            && matches!(
+                self.cursor_mode,
+                CursorMode::Text | CursorMode::Insert | CursorMode::Replace
+            )
+        {
             return false;
         }
         self.end_stroke();
@@ -1189,11 +1192,76 @@ fn index_for_column(atoms: &[Atom], column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor_event::EditorState;
     use crate::export::lines_from_text;
     use crate::toolbar::{ToggleKind, UtilityKind};
 
-    fn state() -> EditorState {
-        EditorState::new(&ThemeConfig::default(), "ascdraw")
+    fn state() -> Editor {
+        Editor::new(&ThemeConfig::default(), "ascdraw")
+    }
+
+    #[test]
+    fn editor_state_enum_tracks_modes_and_transient_interactions() {
+        let mut editor = state();
+        assert_eq!(editor.state(), EditorState::StampMode);
+
+        assert!(
+            editor.handle_toolbar_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        assert_eq!(editor.state(), EditorState::ToolbarMode);
+        assert!(editor.cancel_current_state());
+        assert_eq!(editor.state(), EditorState::StampMode);
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
+        assert_eq!(editor.state(), EditorState::ExportMode);
+        assert!(editor.cancel_current_state());
+        assert_eq!(editor.state(), EditorState::StampMode);
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleTogglesMenu));
+        assert_eq!(editor.state(), EditorState::TogglesMode);
+        assert!(editor.cancel_current_state());
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        assert_eq!(editor.state(), EditorState::LineMode);
+        assert!(!editor.start_or_advance_line_preview());
+        assert_eq!(editor.state(), EditorState::LinePreviewMode);
+        assert!(editor.cancel_current_state());
+
+        editor.extend_selection(Direction::Right);
+        assert_eq!(
+            editor.state(),
+            EditorState::SelectionMode(CursorMode::MoveDraw)
+        );
+        assert!(editor.begin_selected_move_lift());
+        assert_eq!(editor.state(), EditorState::MoveMode);
+        assert!(editor.cancel_current_state());
+        assert!(editor.cancel_current_state());
+        assert_eq!(editor.state(), EditorState::LineMode);
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        assert_eq!(editor.state(), EditorState::ShapeMode);
+        editor.toggle_shape_preview();
+        assert_eq!(editor.state(), EditorState::ShapePreviewMode);
+        assert!(editor.cancel_current_state());
+
+        editor.toggle_text_entry();
+        assert_eq!(editor.state(), EditorState::TextMode);
+        assert!(editor.cancel_current_state());
+        editor.cursor_mode = CursorMode::Insert;
+        assert_eq!(editor.state(), EditorState::InsertMode);
+        assert!(editor.cancel_current_state());
+        editor.toggle_replace_mode();
+        assert_eq!(editor.state(), EditorState::ReplaceMode);
+        assert!(editor.cancel_current_state());
+
+        assert!(editor.begin_single_replace());
+        assert_eq!(editor.state(), EditorState::ReplaceOneMode);
+        assert!(editor.cancel_current_state());
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
+        assert_eq!(editor.state(), EditorState::UtilityMode);
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Layers)));
+        assert_eq!(editor.state(), EditorState::NavigationMode);
     }
 
     #[test]
@@ -1201,7 +1269,7 @@ mod tests {
         let source = ThemeConfig::default();
         let mut reversed = source.clone();
         reverse_theme_colors(&mut reversed);
-        let mut state = EditorState::new(&source, "ascdraw");
+        let mut state = Editor::new(&source, "ascdraw");
 
         assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode)));
         assert_eq!(state.theme, reversed);
@@ -1786,7 +1854,7 @@ mod tests {
     #[test]
     fn clear_canvas_removes_faces_from_styled_whitespace() {
         let theme = ThemeConfig::default();
-        let mut state = EditorState::new(&theme, "ascdraw");
+        let mut state = Editor::new(&theme, "ascdraw");
         let cursor = Coord { line: 2, column: 3 };
         state.grid.lines = vec![
             vec![Atom {
@@ -2811,7 +2879,7 @@ mod tests {
 
     #[test]
     fn tooltip_tracks_editor_mode_and_export_override() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         assert_eq!(state.tooltip(), Tooltip::Stamp);
 
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
@@ -2828,7 +2896,7 @@ mod tests {
 
     #[test]
     fn tooltip_reacts_to_selection_and_transient_editor_states() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.insert("abcd");
         state.move_home();
         assert_eq!(state.tooltip(), Tooltip::Stamp);
@@ -3660,7 +3728,7 @@ mod tests {
         assert_eq!(state.edit_snapshot(), before);
     }
 
-    fn utility_state(rows: &[&str], utility: UtilityKind, cursor: Coord) -> EditorState {
+    fn utility_state(rows: &[&str], utility: UtilityKind, cursor: Coord) -> Editor {
         let mut state = state();
         state.grid.lines = rows
             .iter()
@@ -3688,11 +3756,11 @@ mod tests {
         state
     }
 
-    fn line_contents(state: &EditorState) -> Vec<String> {
+    fn line_contents(state: &Editor) -> Vec<String> {
         state.grid.lines.iter().map(|line| contents(line)).collect()
     }
 
-    fn select_toolbar_option(state: &mut EditorState, key: &str, count: usize) {
+    fn select_toolbar_option(state: &mut Editor, key: &str, count: usize) {
         let submenu = key.parse::<usize>().expect("numeric toolbar group") - 2;
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu,

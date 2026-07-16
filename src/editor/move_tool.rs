@@ -6,7 +6,7 @@ use crate::selection::{
     selected_atoms,
 };
 
-use super::{EditorState, PlacedLineMarker, index_for_column};
+use super::{Editor, PlacedLineMarker, index_for_column};
 
 #[derive(Debug, Clone)]
 pub(super) struct MoveLift {
@@ -34,7 +34,7 @@ struct LiftedAtom {
     atom: Atom,
 }
 
-impl EditorState {
+impl Editor {
     pub fn move_lift_active(&self) -> bool {
         self.move_lift.is_some()
     }

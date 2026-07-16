@@ -8,7 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::MacosColorSpace;
-use crate::editor::{EditorState, PersistedLayer};
+use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Atom, Face, LayerId};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
@@ -180,23 +180,20 @@ impl ExportPlatform for NativeExportPlatform<'_> {
     }
 }
 
-pub fn copy_selection(state: &EditorState, platform: &mut impl ExportPlatform) -> Result<()> {
+pub fn copy_selection(state: &Editor, platform: &mut impl ExportPlatform) -> Result<()> {
     platform.set_clipboard_text(&selected_visible_text(state))
 }
 
 /// Copies the normalized selection before clearing it. Keeping the clipboard
 /// write first makes a failed external operation an editor-state no-op.
-pub fn cut_selection(state: &mut EditorState, platform: &mut impl ExportPlatform) -> Result<bool> {
+pub fn cut_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<bool> {
     platform.set_clipboard_text(&selected_visible_text(state))?;
     let before = state.edit_snapshot();
     state.clear_selection();
     Ok(!before.same_document(&state.edit_snapshot()))
 }
 
-pub fn paste_selection(
-    state: &mut EditorState,
-    platform: &mut impl ExportPlatform,
-) -> Result<bool> {
+pub fn paste_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<bool> {
     let text = platform.clipboard_text()?;
     Ok(state.paste_text(&text))
 }
@@ -219,7 +216,7 @@ fn default_file_name(kind: FileKind) -> &'static str {
 
 pub fn perform(
     action: ExportAction,
-    state: &mut EditorState,
+    state: &mut Editor,
     viewport: &mut ViewportOffset,
     visible_canvas: VisibleCanvasCells,
     platform: &mut impl ExportPlatform,
@@ -300,11 +297,11 @@ pub fn perform(
     }
 }
 
-fn text_export(state: &EditorState, visible_canvas: VisibleCanvasCells) -> String {
+fn text_export(state: &Editor, visible_canvas: VisibleCanvasCells) -> String {
     atoms_text(&canvas_atoms_for_export(state, visible_canvas))
 }
 
-fn selected_visible_text(state: &EditorState) -> String {
+fn selected_visible_text(state: &Editor) -> String {
     let region = CanvasRegion::from_selection(state.selection_bounds());
     atoms_text(&flatten_visible_layers(&visible_layer_atoms(state, region)))
 }
@@ -322,7 +319,7 @@ fn atoms_text(lines: &[Vec<Atom>]) -> String {
 }
 
 pub fn canvas_region_for_export(
-    state: &EditorState,
+    state: &Editor,
     visible_canvas: VisibleCanvasCells,
 ) -> CanvasRegion {
     if state.selection.is_collapsed() {
@@ -338,21 +335,21 @@ pub fn canvas_region_for_export(
 }
 
 pub fn canvas_atoms_for_export(
-    state: &EditorState,
+    state: &Editor,
     visible_canvas: VisibleCanvasCells,
 ) -> Vec<Vec<Atom>> {
     flatten_visible_layers(&canvas_layers_for_export(state, visible_canvas))
 }
 
 pub fn canvas_layers_for_export(
-    state: &EditorState,
+    state: &Editor,
     visible_canvas: VisibleCanvasCells,
 ) -> Vec<Vec<Vec<Atom>>> {
     let region = canvas_region_for_export(state, visible_canvas);
     visible_layer_atoms(state, region)
 }
 
-fn visible_layer_atoms(state: &EditorState, region: CanvasRegion) -> Vec<Vec<Vec<Atom>>> {
+fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<Atom>>> {
     state
         .layer_views()
         .into_iter()
@@ -483,7 +480,7 @@ enum LoadedJson {
     Legacy(Vec<Vec<Atom>>),
 }
 
-fn project_document(state: &EditorState, viewport: ViewportOffset) -> ProjectDocument {
+fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument {
     ProjectDocument {
         format: PROJECT_FORMAT.to_owned(),
         version: PROJECT_VERSION,
@@ -499,7 +496,7 @@ fn project_document(state: &EditorState, viewport: ViewportOffset) -> ProjectDoc
     }
 }
 
-fn save_project_json(path: &Path, state: &EditorState, viewport: ViewportOffset) -> Result<()> {
+fn save_project_json(path: &Path, state: &Editor, viewport: ViewportOffset) -> Result<()> {
     let contents = serde_json::to_string_pretty(&project_document(state, viewport))
         .context("failed to serialize ascdraw project")?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
@@ -840,8 +837,8 @@ mod tests {
         }
     }
 
-    fn state_with_selection() -> EditorState {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+    fn state_with_selection() -> Editor {
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("outside\n  ab  \n  cd  ");
         state.move_to(Coord { line: 1, column: 2 });
         state.extend_selection(crate::model::Direction::Right);
@@ -861,7 +858,7 @@ mod tests {
 
     fn perform_action(
         action: ExportAction,
-        state: &mut EditorState,
+        state: &mut Editor,
         platform: &mut MockPlatform,
     ) -> Result<ExportOutcome> {
         perform(
@@ -890,7 +887,7 @@ mod tests {
 
     #[test]
     fn collapsed_selection_exports_signed_viewport_with_blank_padding_and_trailing_cells() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("abc\nde");
         let before = state.edit_snapshot();
         let mut viewport = ViewportOffset { x: 13, y: -7 };
@@ -958,7 +955,7 @@ mod tests {
 
     #[test]
     fn txt_flattens_the_highest_visible_glyph_without_splitting_wide_graphemes() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("😀");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
@@ -977,7 +974,7 @@ mod tests {
 
     #[test]
     fn clipboard_txt_combines_visible_layers_with_the_topmost_nonblank_winning() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("AAA");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
@@ -1006,7 +1003,7 @@ mod tests {
 
     #[test]
     fn edit_copy_and_cut_flatten_visible_layers_and_cut_clears_every_layer() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("AAA");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
@@ -1038,7 +1035,7 @@ mod tests {
 
     #[test]
     fn png_export_passes_every_visible_layer_in_bottom_to_top_order() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("◯");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
@@ -1078,7 +1075,7 @@ mod tests {
     #[test]
     fn png_export_preserves_canvas_palette_faces() {
         let color = crate::model::ColorId(13);
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         state.apply_toolbar_action(ToolbarAction::SelectColor(color));
         state.insert("x");
@@ -1189,7 +1186,7 @@ mod tests {
     #[test]
     fn png_viewport_source_is_raw_canvas_only_even_with_active_overlays_and_preview() {
         let config = ThemeConfig::default();
-        let mut state = EditorState::new(&config, "title excluded");
+        let mut state = Editor::new(&config, "title excluded");
         state.grid.lines = lines_from_text("ab");
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
         state.toggle_shape_preview();
@@ -1223,7 +1220,7 @@ mod tests {
 
         assert_eq!(platform.rendered_lines.as_ref(), Some(&expected));
 
-        let mut lifted = EditorState::new(&config, "title excluded");
+        let mut lifted = Editor::new(&config, "title excluded");
         lifted.grid.lines = lines_from_text("ab");
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectSubmenu {
@@ -1302,7 +1299,7 @@ mod tests {
 
     #[test]
     fn clipboard_copy_preserves_blank_rows_and_trailing_spaces_without_mutating_state() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("ab\n\nz");
         state.move_to(Coord::default());
         state.extend_selection(crate::model::Direction::Right);
@@ -1320,7 +1317,7 @@ mod tests {
 
     #[test]
     fn cut_copies_exact_ragged_rectangle_then_clears_only_that_rectangle() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("A│Z\nB\nC界Q");
         state.move_to(Coord { line: 0, column: 1 });
         state.extend_selection(crate::model::Direction::Right);
@@ -1352,7 +1349,7 @@ mod tests {
         assert_eq!(state.selection, before.selection);
         assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
 
-        let mut blank = EditorState::new(&ThemeConfig::default(), "test");
+        let mut blank = Editor::new(&ThemeConfig::default(), "test");
         blank.extend_selection(crate::model::Direction::Right);
         blank.extend_selection(crate::model::Direction::Down);
         let blank_before = blank.clone();
@@ -1365,7 +1362,7 @@ mod tests {
 
     #[test]
     fn cut_does_not_smart_break_neighboring_lines() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("│\n│\n│");
         state.move_to(Coord { line: 1, column: 0 });
         let outside_faces = [
@@ -1386,7 +1383,7 @@ mod tests {
 
     #[test]
     fn real_cut_is_one_undoable_edit_and_blank_cut_preserves_redo() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("wide\ntext");
         state.move_to(Coord::default());
         state.extend_selection(crate::model::Direction::Right);
@@ -1495,7 +1492,7 @@ mod tests {
 
     #[test]
     fn project_v2_round_trips_layer_order_visibility_active_layer_and_faces() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = vec![vec![Atom {
             face: state.theme.selection.clone(),
             contents: "a".to_owned(),
@@ -1623,7 +1620,7 @@ mod tests {
         let source_viewport = ViewportOffset { x: -12, y: 34 };
         save_project_json(&path, &source, source_viewport).unwrap();
 
-        let mut target = EditorState::new(&ThemeConfig::default(), "target");
+        let mut target = Editor::new(&ThemeConfig::default(), "target");
         target.grid.lines = lines_from_text("unrelated outside content");
         target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         let mut target_viewport = ViewportOffset::default();
@@ -1708,7 +1705,7 @@ mod tests {
     #[test]
     fn invalid_project_load_is_atomic() {
         let path = temp_path("json");
-        let source = EditorState::new(&ThemeConfig::default(), "source");
+        let source = Editor::new(&ThemeConfig::default(), "source");
         let mut value =
             serde_json::to_value(project_document(&source, ViewportOffset { x: 4, y: -8 }))
                 .unwrap();
@@ -1750,7 +1747,7 @@ mod tests {
     #[test]
     fn invalid_project_color_is_rejected_atomically() {
         let path = temp_path("json");
-        let source = EditorState::new(&ThemeConfig::default(), "source");
+        let source = Editor::new(&ThemeConfig::default(), "source");
         let mut value =
             serde_json::to_value(project_document(&source, ViewportOffset::default())).unwrap();
         value["menu-selections"]["active-color"] = serde_json::json!(99);
@@ -1786,7 +1783,7 @@ mod tests {
 
     #[test]
     fn unsupported_project_format_and_version_are_rejected() {
-        let state = EditorState::new(&ThemeConfig::default(), "source");
+        let state = Editor::new(&ThemeConfig::default(), "source");
         let document = project_document(&state, ViewportOffset::default());
         let mut wrong_format = serde_json::to_value(&document).unwrap();
         wrong_format["format"] = serde_json::json!("some-other-app");

@@ -20,7 +20,7 @@ pub struct EditHistory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryGroup {
-    LineStroke,
+    ControlStroke,
     TextSession,
 }
 
@@ -123,12 +123,12 @@ fn push_bounded(stack: &mut VecDeque<HistorySnapshot>, snapshot: HistorySnapshot
 mod tests {
     use super::*;
     use crate::app::AppConfig;
-    use crate::editor::EditorState;
+    use crate::editor::Editor;
     use crate::model::Direction;
     use crate::toolbar::{MainMode, ToolbarAction};
 
     fn snapshot(text: &str, viewport: ViewportOffset) -> HistorySnapshot {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert(text);
         HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -164,10 +164,10 @@ mod tests {
         let complete = snapshot("──", ViewportOffset { x: 2, y: 0 });
         let mut history = EditHistory::default();
 
-        assert!(history.record_grouped_change(HistoryGroup::LineStroke, blank.clone(), &one));
+        assert!(history.record_grouped_change(HistoryGroup::ControlStroke, blank.clone(), &one));
         assert!(history.has_pending_transaction());
         assert_eq!(history.lengths(), (0, 0));
-        assert!(history.record_grouped_change(HistoryGroup::LineStroke, one, &complete));
+        assert!(history.record_grouped_change(HistoryGroup::ControlStroke, one, &complete));
         assert_eq!(history.lengths(), (0, 0));
 
         assert!(history.finish_transaction(&complete));
@@ -182,7 +182,7 @@ mod tests {
             crate::app::CursorMode::Insert,
             crate::app::CursorMode::Replace,
         ] {
-            let mut state = EditorState::new(&AppConfig::default().theme, "test");
+            let mut state = Editor::new(&AppConfig::default().theme, "test");
             state.cursor_mode = mode;
             let before = HistorySnapshot {
                 edit: state.edit_snapshot(),
@@ -211,7 +211,7 @@ mod tests {
             assert_eq!(history.undo(exited), Some(before), "mode {mode:?}");
         }
 
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.place_stamp();
         let before = HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn utility_edits_round_trip_and_no_op_does_not_clear_redo() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("ab");
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn layer_add_visibility_reorder_and_delete_round_trip_through_history() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("base");
         let base = state.active_layer_id();
         let before = HistorySnapshot {
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn confirmed_move_lift_is_one_entry_and_stationary_confirmation_preserves_redo() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("abcd");
         state.move_home();
         state.extend_selection(Direction::Right);
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn clear_is_undoable_and_redoable_while_blank_clear_preserves_redo() {
-        let mut blank_state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut blank_state = Editor::new(&AppConfig::default().theme, "test");
         let blank = HistorySnapshot {
             edit: blank_state.edit_snapshot(),
             viewport: ViewportOffset::default(),
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn undo_and_redo_snapshots_do_not_change_durable_menu_selections() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn literal_selection_clear_is_one_transaction_and_blank_clear_retains_redo() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("x ");
         state.move_to(crate::model::Coord::default());
         let edited = HistorySnapshot {

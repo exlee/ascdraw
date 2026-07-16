@@ -19,7 +19,7 @@ use winit::window::Window;
 use super::export_png::skia_color_space;
 use super::{RenderFrame, Renderer, render_canvas};
 use crate::app::{AppConfig, MacosColorSpace};
-use crate::editor::EditorState;
+use crate::editor::Editor;
 use crate::layout::{ViewportOffset, layout_metrics};
 use crate::macos::color_space_for_config;
 use crate::perf::FrameTiming;
@@ -89,7 +89,7 @@ impl MetalRenderer {
     pub(super) fn render(
         &mut self,
         window: &Window,
-        state: &EditorState,
+        state: &Editor,
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,

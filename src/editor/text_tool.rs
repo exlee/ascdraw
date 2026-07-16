@@ -3,9 +3,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::app::CursorMode;
 use crate::model::Atom;
 
-use super::{EditorState, atom_width, display_width};
+use super::{Editor, atom_width, display_width};
 
-impl EditorState {
+impl Editor {
     pub fn insert(&mut self, text: &str) {
         self.end_stroke();
         self.expose_cursor_cells();

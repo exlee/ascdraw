@@ -14,7 +14,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::window::Window;
 
 use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
-use crate::editor::EditorState;
+use crate::editor::Editor;
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
@@ -100,7 +100,7 @@ struct RenderFrame<'a> {
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
-    state: &EditorState,
+    state: &Editor,
     renderer: &Renderer,
     config: &AppConfig,
     viewport: ViewportOffset,
@@ -166,7 +166,7 @@ pub fn render(
     })
 }
 
-fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame: RenderFrame<'_>) {
+fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: RenderFrame<'_>) {
     let RenderFrame {
         metrics,
         toolbar_metrics,
@@ -298,7 +298,7 @@ fn canvas_selection_outline(
 
 fn render_canvas_selection(
     canvas: &Canvas,
-    state: &EditorState,
+    state: &Editor,
     metrics: &CellMetrics,
     grid_top: usize,
 ) {
@@ -357,7 +357,7 @@ fn render_canvas_selection(
     );
 }
 
-fn canvas_selection_is_visible(state: &EditorState) -> bool {
+fn canvas_selection_is_visible(state: &Editor) -> bool {
     state.move_lift_active() || !state.selection.is_collapsed()
 }
 
@@ -450,7 +450,7 @@ fn render_marching_edge(
 
 fn render_toolbar(
     canvas: &Canvas,
-    state: &EditorState,
+    state: &Editor,
     metrics: &CellMetrics,
     top_padding: usize,
     width: usize,
@@ -488,7 +488,7 @@ fn render_toolbar(
 
 fn render_bottom_tooltip(
     canvas: &Canvas,
-    state: &EditorState,
+    state: &Editor,
     metrics: &CellMetrics,
     layout: LayoutMetrics,
     width: usize,
@@ -513,7 +513,7 @@ fn render_toolbar_span_contents(
     canvas: &Canvas,
     row: usize,
     spans: &[crate::toolbar::ToolbarSpan],
-    state: &EditorState,
+    state: &Editor,
     max_columns: usize,
     metrics: &CellMetrics,
     top_padding: usize,
@@ -532,7 +532,7 @@ fn render_toolbar_span_contents(
     );
 }
 
-fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &EditorState) -> Vec<Atom> {
+fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &Editor) -> Vec<Atom> {
     let mut atoms = Vec::new();
     for span in spans {
         let split = display_width_byte_index(&span.contents, span.bold_prefix);
@@ -555,7 +555,7 @@ fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &EditorState) -> 
     atoms
 }
 
-fn toolbar_span_face(span: &crate::toolbar::ToolbarSpan, state: &EditorState) -> Face {
+fn toolbar_span_face(span: &crate::toolbar::ToolbarSpan, state: &Editor) -> Face {
     let mut face = if span.tooltip {
         state.theme.tooltip.clone()
     } else {
@@ -591,7 +591,7 @@ fn render_toolbar_span_outlines(
     canvas: &Canvas,
     row: usize,
     spans: &[crate::toolbar::ToolbarSpan],
-    state: &EditorState,
+    state: &Editor,
     metrics: &CellMetrics,
     top_padding: usize,
 ) {
@@ -636,7 +636,7 @@ struct ToolbarSpanOutline {
 fn toolbar_span_outlines(
     row: usize,
     spans: &[crate::toolbar::ToolbarSpan],
-    state: &EditorState,
+    state: &Editor,
     metrics: &CellMetrics,
     top_padding: usize,
 ) -> Vec<ToolbarSpanOutline> {
@@ -669,10 +669,7 @@ fn toolbar_span_outlines(
     outlines
 }
 
-fn toolbar_span_outline_color(
-    state: &EditorState,
-    span: &crate::toolbar::ToolbarSpan,
-) -> Option<Rgba> {
+fn toolbar_span_outline_color(state: &Editor, span: &crate::toolbar::ToolbarSpan) -> Option<Rgba> {
     let face = if span.highlighted {
         &state.theme.selection_highlight
     } else if span.selected {
@@ -897,7 +894,7 @@ fn render_line_at(
 
 fn render_grid_cursor(
     canvas: &Canvas,
-    state: &EditorState,
+    state: &Editor,
     rendered_lines: &[Vec<Atom>],
     cursor_shape_config: &CursorShapeConfig,
     layout: LayoutMetrics,
@@ -977,7 +974,7 @@ fn render_grid_cursor(
     }
 }
 
-fn grid_cursor_is_visible(state: &EditorState) -> bool {
+fn grid_cursor_is_visible(state: &Editor) -> bool {
     !state.view_active()
 }
 
@@ -1613,7 +1610,7 @@ pub fn resize_surface(
 #[cfg(test)]
 mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
-    use crate::editor::EditorState;
+    use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
     use crate::model::{ColorId, Coord, Direction};
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
@@ -1631,7 +1628,7 @@ mod tests {
 
     #[test]
     fn view_hides_grid_cursor_while_move_lift_keeps_it_visible() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         state
             .selection
             .select(Coord::default(), Coord { line: 0, column: 1 });
@@ -1770,7 +1767,7 @@ mod tests {
     #[test]
     fn shape_preview_provides_the_cell_beneath_the_cursor() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
         state.toggle_shape_preview();
         state.move_cursor(Direction::Right);
@@ -1886,7 +1883,7 @@ mod tests {
 
     #[test]
     fn collapsed_selection_is_hidden_behind_the_grid_cursor() {
-        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
         assert!(!canvas_selection_is_visible(&state));
 
         state
@@ -1939,7 +1936,7 @@ mod tests {
     #[test]
     fn toolbar_selection_and_pending_prefix_use_theme_colors() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         let selected = state
             .toolbar
             .toolbar_spans(1)
@@ -1961,7 +1958,7 @@ mod tests {
     #[test]
     fn color_menu_blocks_keep_their_explicit_palette_foregrounds() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Colors));
         let atoms = toolbar_atoms(
@@ -1984,7 +1981,7 @@ mod tests {
     #[test]
     fn structural_toolbar_atoms_resolve_bold_without_changing_theme_colors() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         let atoms = toolbar_atoms(&state.toolbar.toolbar_spans(1), &state);
         let mode_label = atoms
             .iter()
@@ -2044,7 +2041,7 @@ mod tests {
     #[test]
     fn complete_page_prefix_renders_as_one_outline_without_an_internal_seam() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         for key in ["2", "1"] {
             assert!(
@@ -2123,7 +2120,7 @@ mod tests {
     #[test]
     fn bottom_tooltip_uses_screen_bottom_geometry_width_clipping_and_theme_face() {
         let config = AppConfig::default();
-        let state = EditorState::new(&config.theme, "test");
+        let state = Editor::new(&config.theme, "test");
         let metrics = CellMetrics {
             font: Font::default(),
             cell_width: 8,
@@ -2159,7 +2156,7 @@ mod tests {
     #[test]
     fn last_menu_row_selection_bottom_is_rendered_after_later_row_backgrounds() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
@@ -2176,7 +2173,7 @@ mod tests {
     #[test]
     fn pending_prefix_highlight_bottom_is_rendered_after_later_row_backgrounds() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(
             state
                 .toolbar
@@ -2190,7 +2187,7 @@ mod tests {
         );
     }
 
-    fn assert_toolbar_bottom_edge_visible(state: &EditorState, logical_row: usize, _: Rgba) {
+    fn assert_toolbar_bottom_edge_visible(state: &Editor, logical_row: usize, _: Rgba) {
         let metrics = CellMetrics {
             font: Font::default(),
             cell_width: 8,

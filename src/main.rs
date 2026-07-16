@@ -6,7 +6,9 @@ use anyhow::Result;
 use clap::Parser;
 use winit::event::{ElementState, Event, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState};
+#[cfg(test)]
+use winit::keyboard::Key;
+use winit::keyboard::ModifiersState;
 use winit::window::WindowId;
 
 mod app;
@@ -14,6 +16,7 @@ mod diagnostics;
 mod document;
 mod drawing;
 mod editor;
+mod editor_event;
 mod export;
 mod face_resolution;
 mod history;
@@ -36,16 +39,20 @@ use app::{
     user_config_path,
 };
 use diagnostics::log_error;
-use editor::EditorState;
+use editor::Editor;
+use editor_event::{
+    EditorState, KeyInput, KeyType, SelectionAction, classify_key, selection_action,
+};
 use export::{ExportOutcome, NativeExportPlatform};
 use history::HistoryGroup;
 use input::{
-    ClipboardCommand, EditCommand, HistoryCommand, clipboard_command, cursor_direction_for_key,
-    edit_command, edit_direction_command, history_command, line_preview_command,
-    move_selection_command, move_selection_direction_command,
-    ordered_direction_command_for_direction, pointer_position_to_coord,
-    pointer_position_to_toolbar_position, view_command,
+    ClipboardCommand, EditCommand, HistoryCommand, cursor_direction_for_key, edit_command,
+    edit_direction_command, line_preview_command, move_selection_command,
+    move_selection_direction_command, ordered_direction_command_for_direction,
+    pointer_position_to_coord, pointer_position_to_toolbar_position, view_command,
 };
+#[cfg(test)]
+use input::{clipboard_command, history_command};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 #[cfg(test)]
 use runtime::input_dispatch::history_group_for_key;
@@ -250,11 +257,16 @@ fn try_main() -> Result<ExitCode> {
                             if event.state == ElementState::Pressed =>
                         {
                             editor.note_keypress(Instant::now());
-                            if let Some(command) = history_command(
-                                &event.logical_key,
-                                editor.modifiers,
-                                editor.state.cursor_mode,
-                            ) {
+                            let key_type = classify_key(
+                                editor.state.state(),
+                                KeyInput {
+                                    key: &event.logical_key,
+                                    text: event.text.as_deref(),
+                                    repeat: event.repeat,
+                                    modifiers: editor.modifiers,
+                                },
+                            );
+                            if let Some(command) = key_type.history_command() {
                                 match command {
                                     HistoryCommand::Undo => {
                                         editor.undo();
@@ -263,21 +275,17 @@ fn try_main() -> Result<ExitCode> {
                                         editor.redo();
                                     }
                                 }
-                            } else if let Some(clipboard_command) =
-                                clipboard_command(&event.logical_key, editor.modifiers)
-                            {
+                            } else if let Some(clipboard_command) = key_type.clipboard_command() {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
                                 let mut platform = NativeExportPlatform::text_only();
-                                let result = handle_clipboard_shortcut(
+                                let result = handle_clipboard_command(
                                     &mut editor.state,
-                                    &event.logical_key,
-                                    editor.modifiers,
+                                    clipboard_command,
                                     &mut platform,
-                                )
-                                .expect("clipboard shortcut was already recognized");
+                                );
                                 match result {
                                     Ok(true) => {
                                         let changed = if clipboard_command == ClipboardCommand::Cut
@@ -305,16 +313,14 @@ fn try_main() -> Result<ExitCode> {
                                     }
                                 }
                                 editor.request_redraw();
-                            } else if edit_command(
-                                &event.logical_key,
-                                event.repeat,
-                                editor.modifiers,
-                                editor.state.cursor_mode,
-                            ) == Some(EditCommand::CancelTextEntry)
-                            {
+                            } else if key_type.is_cancel() {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
-                                editor.state.cancel_text_entry();
+                                dispatch_editor_event(
+                                    &mut editor.state,
+                                    key_type,
+                                    &editor.ordered_modifiers,
+                                );
                                 editor.finish_state_change(
                                     previous_state,
                                     previous_viewport,
@@ -372,21 +378,23 @@ fn try_main() -> Result<ExitCode> {
                                     };
                                     let previous_state = editor.state.clone();
                                     let previous_viewport = editor.viewport;
-                                    let clears_selection = matches!(
-                                        edit_command(
-                                            &event.logical_key,
-                                            event.repeat,
-                                            editor.modifiers,
-                                            editor.state.cursor_mode,
-                                        ),
-                                        Some(EditCommand::Clear | EditCommand::ClearAndBack)
-                                    );
-                                    let handled = handle_editor_key_with_order(
+                                    let clears_selection =
+                                        selection_action(editor.state.state(), key_type)
+                                            == Some(SelectionAction::Clear)
+                                            || matches!(
+                                                edit_command(
+                                                    &event.logical_key,
+                                                    event.repeat,
+                                                    editor.modifiers,
+                                                    editor.state.cursor_mode,
+                                                ),
+                                                Some(
+                                                    EditCommand::Clear | EditCommand::ClearAndBack
+                                                )
+                                            );
+                                    let handled = dispatch_editor_event(
                                         &mut editor.state,
-                                        &event.logical_key,
-                                        event.text.as_deref(),
-                                        event.repeat,
-                                        editor.modifiers,
+                                        key_type,
                                         &editor.ordered_modifiers,
                                     );
                                     if let Some(document_changed) = handled {
@@ -519,20 +527,29 @@ fn try_main() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[cfg(test)]
 fn handle_clipboard_shortcut(
-    state: &mut EditorState,
+    state: &mut Editor,
     key: &Key,
     modifiers: ModifiersState,
     platform: &mut impl export::ExportPlatform,
 ) -> Option<Result<bool>> {
     let command = clipboard_command(key, modifiers)?;
+    Some(handle_clipboard_command(state, command, platform))
+}
+
+fn handle_clipboard_command(
+    state: &mut Editor,
+    command: ClipboardCommand,
+    platform: &mut impl export::ExportPlatform,
+) -> Result<bool> {
     state.cancel_line_preview();
     state.cancel_move_lift();
-    Some(match command {
+    match command {
         ClipboardCommand::Copy => export::copy_selection(state, platform).map(|()| false),
         ClipboardCommand::Cut => export::cut_selection(state, platform),
         ClipboardCommand::Paste => export::paste_selection(state, platform),
-    })
+    }
 }
 
 fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
@@ -578,7 +595,7 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
 
 fn perform_export_action(
     action: export::ExportAction,
-    state: &mut EditorState,
+    state: &mut Editor,
     viewport: &mut layout::ViewportOffset,
     visible_canvas: layout::VisibleCanvasCells,
     platform: &mut impl export::ExportPlatform,
@@ -601,22 +618,42 @@ fn app_command_from_user_action(action: UserAction) -> AppCommand {
     }
 }
 
-fn apply_navigation_command(state: &mut EditorState, command: EditCommand, steps: usize) {
+fn apply_navigation_command(state: &mut Editor, command: EditCommand, steps: usize) {
     state.toolbar.cancel_shortcut();
     for _ in 0..steps {
         apply_edit_command(state, command);
     }
 }
 
-fn handle_editor_key_with_order(
-    state: &mut EditorState,
-    key: &Key,
-    text: Option<&str>,
-    repeat: bool,
-    modifiers: ModifiersState,
+fn dispatch_editor_event(
+    state: &mut Editor,
+    key_type: KeyType<'_>,
     ordered_modifiers: &input::OrderedModifierTracker,
 ) -> Option<bool> {
-    if let Some(direction) = cursor_direction_for_key(key, state.cursor_mode)
+    let current_state = state.state();
+    if matches!(key_type, KeyType::CancelKey(_)) {
+        return state.cancel_current_state().then_some(false);
+    }
+    if let Some(action) = selection_action(current_state, key_type) {
+        state.cancel_line_preview();
+        state.cancel_move_lift();
+        state.toolbar.cancel_shortcut();
+        return Some(match action {
+            SelectionAction::Clear => apply_edit_command(state, EditCommand::Clear),
+            SelectionAction::ReplaceOne => {
+                apply_edit_command(state, EditCommand::BeginSingleReplace)
+            }
+            SelectionAction::Move(direction) => apply_move_selection_command(
+                state,
+                input::MoveSelectionCommand::BeginAndStep(direction),
+            ),
+        });
+    }
+    let input = key_type.input();
+    let key = input.key;
+    let modifiers = input.modifiers;
+    if let KeyType::DirectionKey { direction, .. } = key_type
+        && cursor_direction_for_key(key, state.cursor_mode).is_some()
         && let Some(changed) =
             handle_cursor_direction(state, direction, modifiers, Some(ordered_modifiers), false)
     {
@@ -625,16 +662,19 @@ fn handle_editor_key_with_order(
     if let Some(command) = move_selection_command(
         key,
         modifiers,
-        state.move_lift_active(),
+        current_state == EditorState::MoveMode,
         !state.selection.is_collapsed(),
     ) {
         state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
         return Some(apply_move_selection_command(state, command));
     }
-    if let Some(command) =
-        line_preview_command(key, modifiers, state.cursor_mode, state.has_line_preview())
-    {
+    if let Some(command) = line_preview_command(
+        key,
+        modifiers,
+        state.cursor_mode,
+        current_state == EditorState::LinePreviewMode,
+    ) {
         state.toolbar.cancel_shortcut();
         return Some(match command {
             input::LinePreviewCommand::StartOrAdvance => state.start_or_advance_line_preview(),
@@ -649,7 +689,7 @@ fn handle_editor_key_with_order(
     if state.handle_toolbar_shortcut(key, modifiers) {
         return Some(state.take_toolbar_document_change());
     }
-    if let Some(command) = edit_command(key, repeat, modifiers, state.cursor_mode) {
+    if let Some(command) = edit_command(key, input.repeat, modifiers, state.cursor_mode) {
         state.cancel_line_preview();
         state.cancel_move_lift();
         return Some(apply_edit_command(state, command));
@@ -658,7 +698,7 @@ fn handle_editor_key_with_order(
         && state.cursor_mode.accepts_text()
         && !modifiers.alt_key()
         && !modifiers.super_key()
-        && let Some(text) = text
+        && let Some(text) = input.text
         && !text.chars().all(char::is_control)
     {
         state.cancel_line_preview();
@@ -669,10 +709,7 @@ fn handle_editor_key_with_order(
     None
 }
 
-fn apply_move_selection_command(
-    state: &mut EditorState,
-    command: input::MoveSelectionCommand,
-) -> bool {
+fn apply_move_selection_command(state: &mut Editor, command: input::MoveSelectionCommand) -> bool {
     match command {
         input::MoveSelectionCommand::BeginAndStep(direction) => {
             state.begin_selected_move_lift();
@@ -696,7 +733,7 @@ fn apply_move_selection_command(
 }
 
 pub(crate) fn handle_cursor_direction(
-    state: &mut EditorState,
+    state: &mut Editor,
     direction: model::Direction,
     modifiers: ModifiersState,
     ordered_modifiers: Option<&input::OrderedModifierTracker>,
@@ -748,7 +785,7 @@ pub(crate) fn handle_cursor_direction(
 
 #[cfg(test)]
 fn handle_editor_key(
-    state: &mut EditorState,
+    state: &mut Editor,
     key: &Key,
     text: Option<&str>,
     repeat: bool,
@@ -756,10 +793,19 @@ fn handle_editor_key(
 ) -> Option<bool> {
     let mut ordered = input::OrderedModifierTracker::default();
     ordered.update(modifiers);
-    handle_editor_key_with_order(state, key, text, repeat, modifiers, &ordered)
+    let key_type = classify_key(
+        state.state(),
+        KeyInput {
+            key,
+            text,
+            repeat,
+            modifiers,
+        },
+    );
+    dispatch_editor_event(state, key_type, &ordered)
 }
 
-pub(crate) fn apply_edit_command(state: &mut EditorState, command: EditCommand) -> bool {
+pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bool {
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => {
@@ -909,7 +955,7 @@ mod tests {
     #[test]
     fn line_preview_anchors_orthogonal_segments_and_zero_length_space_commits() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
         let before = history::HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -1012,7 +1058,7 @@ mod tests {
     #[test]
     fn zero_length_line_preview_confirms_without_a_document_change() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
         let before = state.edit_snapshot();
 
@@ -1035,7 +1081,7 @@ mod tests {
     #[test]
     fn line_preview_origin_prepend_remains_transient_until_commit() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
         let before = state.edit_snapshot();
 
@@ -1113,7 +1159,7 @@ mod tests {
     #[test]
     fn line_preview_backspace_removes_the_last_anchor() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
 
         for key in [
@@ -1169,7 +1215,7 @@ mod tests {
     #[test]
     fn shape_commands_start_preview_move_and_commit_a_rectangle() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
         let before = history::HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -1210,21 +1256,24 @@ mod tests {
     }
 
     #[test]
-    fn history_grouping_routes_only_line_strokes_and_text_accepting_sessions() {
+    fn history_grouping_routes_control_draw_strokes_and_text_accepting_sessions() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        let mut state = Editor::new(&config.theme, "test");
         let mut ordered = input::OrderedModifierTracker::default();
         ordered.update(ModifiersState::CONTROL);
-        assert_eq!(
-            history_group_for_key(
-                &state,
-                &Key::Named(NamedKey::ArrowRight),
-                ModifiersState::CONTROL,
-                &ordered,
-            ),
-            Some(HistoryGroup::LineStroke)
-        );
+        for main_mode in [MainMode::Line, MainMode::Stamp] {
+            state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode));
+            assert_eq!(
+                history_group_for_key(
+                    &state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    ModifiersState::CONTROL,
+                    &ordered,
+                ),
+                Some(HistoryGroup::ControlStroke),
+                "mode={main_mode:?}"
+            );
+        }
         assert_eq!(
             history_group_for_key(
                 &state,
@@ -1251,9 +1300,68 @@ mod tests {
     }
 
     #[test]
+    fn control_stamp_stroke_undoes_as_one_transaction_after_control_release() {
+        let config = AppConfig::default();
+        let mut state = Editor::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 0,
+        }));
+        let before = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        let mut history = history::EditHistory::default();
+        let mut ordered = input::OrderedModifierTracker::default();
+        ordered.update(ModifiersState::CONTROL);
+
+        for _ in 0..3 {
+            let previous = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            assert_eq!(
+                history_group_for_key(
+                    &state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    ModifiersState::CONTROL,
+                    &ordered,
+                ),
+                Some(HistoryGroup::ControlStroke)
+            );
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::CONTROL,
+                ),
+                Some(true)
+            );
+            let current = history::HistorySnapshot {
+                edit: state.edit_snapshot(),
+                viewport: layout::ViewportOffset::default(),
+            };
+            assert!(
+                history.record_grouped_change(HistoryGroup::ControlStroke, previous, &current,)
+            );
+        }
+
+        let complete = history::HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: layout::ViewportOffset::default(),
+        };
+        assert_eq!(line_contents(&state.grid.lines[0]), "░░░░");
+        assert!(history.finish_transaction(&complete));
+        assert_eq!(history.undo(complete), Some(before));
+    }
+
+    #[test]
     fn plain_and_selection_movement_use_navigation_policy() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.insert("abc");
         state.move_home();
         let key = Key::Named(NamedKey::ArrowRight);
@@ -1288,7 +1396,7 @@ mod tests {
     fn shift_arrow_leaves_text_modes_and_starts_selection() {
         let config = AppConfig::default();
         for mode in [CursorMode::Text, CursorMode::Replace] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             state.move_to(Coord { line: 1, column: 1 });
             state.cursor_mode = mode;
             let origin = state.grid.cursor_pos;
@@ -1309,7 +1417,7 @@ mod tests {
             assert_eq!(state.selection.active(), Coord { line: 1, column: 2 });
         }
 
-        let mut pending = EditorState::new(&config.theme, "test");
+        let mut pending = Editor::new(&config.theme, "test");
         assert!(pending.begin_single_replace());
         assert_eq!(
             handle_editor_key(
@@ -1334,7 +1442,7 @@ mod tests {
             MainMode::Shapes,
             MainMode::Utilities,
         ] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode));
             let before = history::HistorySnapshot {
                 edit: state.edit_snapshot(),
@@ -1382,7 +1490,7 @@ mod tests {
     fn plain_u_and_uppercase_u_remain_text_and_single_replacements() {
         let config = AppConfig::default();
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             state.cursor_mode = mode;
             for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
                 assert_eq!(
@@ -1405,7 +1513,7 @@ mod tests {
         }
 
         for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             state.insert("x");
             state.move_to(Coord::default());
             assert!(state.begin_single_replace());
@@ -1430,7 +1538,7 @@ mod tests {
 
     #[test]
     fn plain_history_precedes_and_cancels_pending_toolbar_prefixes() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "ascdraw");
         assert!(
             state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
         );
@@ -1450,7 +1558,7 @@ mod tests {
     #[test]
     fn utilities_space_no_longer_starts_a_move_lift() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.insert("abcd");
         state.move_home();
         state.extend_selection(Direction::Right);
@@ -1486,7 +1594,7 @@ mod tests {
             CursorMode::Shapes,
             CursorMode::Utilities,
         ] {
-            let mut state = EditorState::new(&AppConfig::default().theme, "test");
+            let mut state = Editor::new(&AppConfig::default().theme, "test");
             state.insert("abcd");
             state.move_home();
             state.extend_selection(Direction::Right);
@@ -1541,7 +1649,7 @@ mod tests {
 
     #[test]
     fn shared_cursor_direction_moves_a_shift_drag_selection_with_alt() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("abcd");
         state.move_home();
 
@@ -1573,7 +1681,7 @@ mod tests {
 
     #[test]
     fn shared_cursor_direction_applies_space_and_control_drag_overrides() {
-        let mut stamp = EditorState::new(&AppConfig::default().theme, "test");
+        let mut stamp = Editor::new(&AppConfig::default().theme, "test");
         stamp.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         stamp.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 2,
@@ -1594,7 +1702,7 @@ mod tests {
         }
         assert_eq!(line_contents(&stamp.grid.lines[0]), "░░░░");
 
-        let mut line = EditorState::new(&AppConfig::default().theme, "test");
+        let mut line = Editor::new(&AppConfig::default().theme, "test");
         line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         for _ in 0..3 {
             assert_eq!(
@@ -1613,7 +1721,7 @@ mod tests {
 
     #[test]
     fn changing_selection_ends_an_active_lift() {
-        let mut state = EditorState::new(&AppConfig::default().theme, "test");
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("abcd");
         state.move_home();
         state.extend_selection(Direction::Right);
@@ -1634,7 +1742,7 @@ mod tests {
 
     #[test]
     fn structural_edge_movement_reports_a_document_change() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "ascdraw");
         assert!(apply_edit_command(
             &mut state,
             EditCommand::Move(model::Direction::Up)
@@ -1644,7 +1752,7 @@ mod tests {
 
     #[test]
     fn erase_command_reports_only_real_canvas_erasure() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "ascdraw");
         assert!(!apply_edit_command(
             &mut state,
             EditCommand::Erase(model::Direction::Right)
@@ -1661,7 +1769,7 @@ mod tests {
     #[test]
     fn backspace_still_clears_in_line_mode() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
         state.insert("│\n│\n│");
         state.move_to(Coord { line: 1, column: 0 });
@@ -1683,7 +1791,7 @@ mod tests {
 
     #[test]
     fn modified_directions_precede_and_cancel_pending_toolbar_prefixes() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "ascdraw");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "ascdraw");
         assert!(
             state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty())
         );
@@ -1711,20 +1819,25 @@ mod tests {
         ordered
     }
 
-    fn dispatch_ordered(
-        state: &mut EditorState,
-        key: Key,
-        states: &[ModifiersState],
-    ) -> Option<bool> {
+    fn dispatch_ordered(state: &mut Editor, key: Key, states: &[ModifiersState]) -> Option<bool> {
         let modifiers = *states.last().expect("at least one modifier state");
         let ordered = ordered_modifiers(states);
-        handle_editor_key_with_order(state, &key, None, false, modifiers, &ordered)
+        let key_type = classify_key(
+            state.state(),
+            KeyInput {
+                key: &key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        );
+        dispatch_editor_event(state, key_type, &ordered)
     }
 
     #[test]
     fn ordered_control_draws_connected_five_and_ten_cell_paths() {
         for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
-            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            let mut state = Editor::new(&app::ThemeConfig::default(), "test");
             let combined = ModifiersState::CONTROL | secondary;
             assert_eq!(
                 dispatch_ordered(
@@ -1746,7 +1859,7 @@ mod tests {
 
     #[test]
     fn ordered_alt_erases_every_intermediate_cell_even_after_a_blank() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "test");
         state.insert(" abcdef");
         state.move_to(Coord::default());
         assert_eq!(
@@ -1767,7 +1880,7 @@ mod tests {
     #[test]
     fn ordered_shift_grows_from_the_anchor_by_five_and_ten_without_document_change() {
         for (secondary, steps) in [(ModifiersState::CONTROL, 5), (ModifiersState::ALT, 10)] {
-            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            let mut state = Editor::new(&app::ThemeConfig::default(), "test");
             let combined = ModifiersState::SHIFT | secondary;
             assert_eq!(
                 dispatch_ordered(
@@ -1795,7 +1908,7 @@ mod tests {
             ModifiersState::CONTROL | ModifiersState::ALT,
         ];
 
-        let mut stamp = EditorState::new(&app::ThemeConfig::default(), "test");
+        let mut stamp = Editor::new(&app::ThemeConfig::default(), "test");
         assert!(stamp.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         assert_eq!(
             dispatch_ordered(&mut stamp, Key::Character("l".into()), &states),
@@ -1804,7 +1917,7 @@ mod tests {
         assert_eq!(stamp.grid.cursor_pos.column, 5);
         assert!(stamp.grid.lines[0].len() >= 6);
 
-        let mut shape = EditorState::new(&app::ThemeConfig::default(), "test");
+        let mut shape = Editor::new(&app::ThemeConfig::default(), "test");
         assert!(shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
         assert!(!apply_edit_command(
             &mut shape,
@@ -1817,7 +1930,7 @@ mod tests {
         assert_eq!(shape.grid.cursor_pos.column, 5);
         assert!(shape.lines_with_shape_preview().is_some());
 
-        let mut utility = EditorState::new(&app::ThemeConfig::default(), "test");
+        let mut utility = Editor::new(&app::ThemeConfig::default(), "test");
         utility.insert("x");
         utility.move_to(Coord::default());
         assert!(utility.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
@@ -1837,7 +1950,7 @@ mod tests {
     fn ordered_control_pull_all_repeats_five_or_ten_times_as_one_document_change() {
         for (secondary, steps) in [(ModifiersState::ALT, 5), (ModifiersState::SHIFT, 10)] {
             let source = "abcdefghijkl";
-            let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+            let mut state = Editor::new(&app::ThemeConfig::default(), "test");
             state.insert(source);
             state.move_to(Coord::default());
             assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
@@ -1874,7 +1987,7 @@ mod tests {
 
     #[test]
     fn one_ordered_keypress_is_one_history_record_and_origin_prepends_aggregate() {
-        let mut state = EditorState::new(&app::ThemeConfig::default(), "test");
+        let mut state = Editor::new(&app::ThemeConfig::default(), "test");
         let before = history::HistorySnapshot {
             edit: state.edit_snapshot(),
             viewport: layout::ViewportOffset::default(),
@@ -1905,10 +2018,11 @@ mod tests {
         let config = AppConfig::default();
         for (key, modifiers) in [
             (Key::Named(NamedKey::Escape), ModifiersState::empty()),
+            (Key::Character("c".into()), ModifiersState::CONTROL),
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             for mode in [CursorMode::Text, CursorMode::Replace] {
-                let mut state = EditorState::new(&config.theme, "test");
+                let mut state = Editor::new(&config.theme, "test");
                 assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
                 state.cursor_mode = mode;
 
@@ -1919,7 +2033,7 @@ mod tests {
                 assert_eq!(state.cursor_mode, CursorMode::Stamp);
             }
 
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
             assert!(state.begin_single_replace());
 
@@ -1928,6 +2042,207 @@ mod tests {
                 Some(false)
             );
             assert_eq!(state.cursor_mode, CursorMode::Shapes);
+        }
+    }
+
+    #[test]
+    fn cancel_key_dispatch_uses_the_current_editor_state() {
+        let config = AppConfig::default();
+        let key = Key::Character("c".into());
+        let modifiers = ModifiersState::CONTROL;
+
+        let mut selection = Editor::new(&config.theme, "test");
+        selection.extend_selection(Direction::Right);
+        assert_eq!(
+            handle_editor_key(&mut selection, &key, None, false, modifiers),
+            Some(false)
+        );
+        assert!(selection.selection.is_collapsed());
+
+        let mut moved = Editor::new(&config.theme, "test");
+        moved.extend_selection(Direction::Right);
+        assert!(moved.begin_selected_move_lift());
+        assert_eq!(
+            handle_editor_key(&mut moved, &key, None, false, modifiers),
+            Some(false)
+        );
+        assert!(!moved.move_lift_active());
+
+        let mut line = Editor::new(&config.theme, "test");
+        assert!(line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        assert!(!line.start_or_advance_line_preview());
+        assert_eq!(
+            handle_editor_key(&mut line, &key, None, false, modifiers),
+            Some(false)
+        );
+        assert!(!line.has_line_preview());
+
+        let mut shape = Editor::new(&config.theme, "test");
+        assert!(shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
+        shape.toggle_shape_preview();
+        assert_eq!(
+            handle_editor_key(&mut shape, &key, None, false, modifiers),
+            Some(false)
+        );
+        assert!(!shape.has_shape_preview());
+
+        let mut toolbar = Editor::new(&config.theme, "test");
+        assert!(
+            toolbar.handle_toolbar_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        assert_eq!(
+            handle_editor_key(&mut toolbar, &key, None, false, modifiers),
+            Some(false)
+        );
+        assert!(toolbar.toolbar.pending_shortcut().is_none());
+    }
+
+    #[test]
+    fn layers_and_colors_allow_text_and_replace_entry_bindings() {
+        let config = AppConfig::default();
+        for main_mode in [MainMode::Layers, MainMode::Colors] {
+            for (key, modifiers, expected) in [
+                (
+                    Key::Character("i".into()),
+                    ModifiersState::empty(),
+                    EditorState::TextMode,
+                ),
+                (
+                    Key::Named(NamedKey::Enter),
+                    ModifiersState::SHIFT,
+                    EditorState::TextMode,
+                ),
+                (
+                    Key::Named(NamedKey::Enter),
+                    ModifiersState::empty(),
+                    EditorState::ReplaceMode,
+                ),
+                (
+                    Key::Character("R".into()),
+                    ModifiersState::SHIFT,
+                    EditorState::ReplaceMode,
+                ),
+                (
+                    Key::Character("r".into()),
+                    ModifiersState::empty(),
+                    EditorState::ReplaceOneMode,
+                ),
+            ] {
+                let mut state = Editor::new(&config.theme, "test");
+                assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode)));
+                assert_eq!(state.state(), EditorState::NavigationMode);
+
+                assert_eq!(
+                    handle_editor_key(&mut state, &key, None, false, modifiers),
+                    Some(false),
+                    "main_mode={main_mode:?}, key={key:?}"
+                );
+                assert_eq!(state.state(), expected);
+
+                assert_eq!(
+                    handle_editor_key(
+                        &mut state,
+                        &Key::Named(NamedKey::Escape),
+                        None,
+                        false,
+                        ModifiersState::empty(),
+                    ),
+                    Some(false)
+                );
+                assert_eq!(state.state(), EditorState::NavigationMode);
+                assert_eq!(state.toolbar.main_mode(), main_mode);
+            }
+
+            let mut state = Editor::new(&config.theme, "test");
+            assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode)));
+            for (key, modifiers) in [
+                (Key::Named(NamedKey::Space), ModifiersState::empty()),
+                (Key::Named(NamedKey::ArrowRight), ModifiersState::CONTROL),
+            ] {
+                assert_eq!(
+                    handle_editor_key(&mut state, &key, None, false, modifiers),
+                    None,
+                    "main_mode={main_mode:?}, key={key:?}"
+                );
+                assert_eq!(state.state(), EditorState::NavigationMode);
+            }
+        }
+    }
+
+    #[test]
+    fn selection_invariants_override_every_base_cursor_mode() {
+        let config = AppConfig::default();
+        for mode in [
+            CursorMode::MoveDraw,
+            CursorMode::Text,
+            CursorMode::Insert,
+            CursorMode::Replace,
+            CursorMode::Stamp,
+            CursorMode::Shapes,
+            CursorMode::Utilities,
+            CursorMode::Navigation,
+        ] {
+            let mut cleared = Editor::new(&config.theme, "test");
+            cleared.insert("xy");
+            cleared.move_home();
+            cleared.extend_selection(Direction::Right);
+            cleared.cursor_mode = mode;
+            let selection = cleared.selection;
+            let cursor = cleared.grid.cursor_pos;
+            assert!(matches!(
+                cleared.state(),
+                EditorState::SelectionMode(candidate) if candidate == mode
+            ));
+            assert_eq!(
+                handle_editor_key(
+                    &mut cleared,
+                    &Key::Named(NamedKey::Backspace),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(true),
+                "Backspace in {mode:?}"
+            );
+            assert_eq!(line_contents(&cleared.grid.lines[0]), "  ");
+            assert_eq!(cleared.selection, selection);
+            assert_eq!(cleared.grid.cursor_pos, cursor);
+
+            let mut replaced = Editor::new(&config.theme, "test");
+            replaced.insert("xy");
+            replaced.move_home();
+            replaced.extend_selection(Direction::Right);
+            replaced.cursor_mode = mode;
+            assert_eq!(
+                handle_editor_key(
+                    &mut replaced,
+                    &Key::Character("r".into()),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(false),
+                "r in {mode:?}"
+            );
+            assert_eq!(replaced.state(), EditorState::ReplaceOneMode);
+
+            let mut moved = Editor::new(&config.theme, "test");
+            moved.insert("xy");
+            moved.move_home();
+            moved.extend_selection(Direction::Right);
+            moved.cursor_mode = mode;
+            assert_eq!(
+                handle_editor_key(
+                    &mut moved,
+                    &Key::Named(NamedKey::ArrowRight),
+                    None,
+                    false,
+                    ModifiersState::ALT,
+                ),
+                Some(false),
+                "Alt-direction in {mode:?}"
+            );
+            assert_eq!(moved.state(), EditorState::MoveMode);
         }
     }
 
@@ -1944,7 +2259,7 @@ mod tests {
             CursorMode::Replace,
         ] {
             for modifiers in [ModifiersState::CONTROL, ModifiersState::SUPER] {
-                let mut state = EditorState::new(&config.theme, "test");
+                let mut state = Editor::new(&config.theme, "test");
                 state.cursor_mode = mode;
                 let mut platform = ClipboardPlatform {
                     text: "v".into(),
@@ -1965,7 +2280,7 @@ mod tests {
             }
         }
 
-        let mut one_shot = EditorState::new(&config.theme, "test");
+        let mut one_shot = Editor::new(&config.theme, "test");
         one_shot.extend_selection(Direction::Right);
         one_shot.extend_selection(Direction::Down);
         assert!(one_shot.begin_single_replace());
@@ -1987,7 +2302,7 @@ mod tests {
         assert_eq!(one_shot.cursor_mode, CursorMode::Stamp);
 
         for prefix in ["2", "0"] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             assert!(
                 state.handle_toolbar_shortcut(
                     &Key::Character(prefix.into()),
@@ -2011,7 +2326,7 @@ mod tests {
             assert_eq!(state.selected_text(), "x");
         }
 
-        let mut copy = EditorState::new(&config.theme, "test");
+        let mut copy = Editor::new(&config.theme, "test");
         copy.insert("copy");
         copy.move_to(Coord::default());
         copy.extend_selection(Direction::Right);
@@ -2050,7 +2365,7 @@ mod tests {
                 (Key::Character("x".into()), ModifiersState::CONTROL),
                 (Key::Character("X".into()), ModifiersState::SUPER),
             ] {
-                let mut state = EditorState::new(&config.theme, "test");
+                let mut state = Editor::new(&config.theme, "test");
                 state.insert("cut");
                 state.move_to(Coord::default());
                 state.extend_selection(Direction::Right);
@@ -2070,7 +2385,7 @@ mod tests {
             }
         }
 
-        let mut one_shot = EditorState::new(&config.theme, "test");
+        let mut one_shot = Editor::new(&config.theme, "test");
         one_shot.insert("x");
         one_shot.move_to(Coord::default());
         assert!(one_shot.begin_single_replace());
@@ -2095,7 +2410,7 @@ mod tests {
         let config = AppConfig::default();
         let digit = Key::Character("2".into());
 
-        let mut insert = EditorState::new(&config.theme, "test");
+        let mut insert = Editor::new(&config.theme, "test");
         insert.toggle_text_entry();
         assert_eq!(
             handle_editor_key(
@@ -2109,7 +2424,7 @@ mod tests {
         );
         assert_eq!(line_contents(&insert.grid.lines[0]), "2");
 
-        let mut replace = EditorState::new(&config.theme, "test");
+        let mut replace = Editor::new(&config.theme, "test");
         replace.insert("a");
         replace.move_to(Coord::default());
         replace.toggle_replace_mode();
@@ -2126,7 +2441,7 @@ mod tests {
         assert_eq!(line_contents(&replace.grid.lines[0]), "2");
         assert_eq!(replace.cursor_mode, CursorMode::Replace);
 
-        let mut single_replace = EditorState::new(&config.theme, "test");
+        let mut single_replace = Editor::new(&config.theme, "test");
         single_replace.insert("a");
         single_replace.move_to(Coord::default());
         assert!(single_replace.begin_single_replace());
@@ -2148,7 +2463,7 @@ mod tests {
     #[test]
     fn escape_closes_export_menu_without_collapsing_canvas_selection() {
         let config = AppConfig::default();
-        let mut state = EditorState::new(&config.theme, "test");
+        let mut state = Editor::new(&config.theme, "test");
         state.extend_selection(Direction::Right);
         let bounds = state.selection_bounds();
 
@@ -2212,7 +2527,7 @@ mod tests {
             ),
             (export::ExportAction::Clear, PendingShortcut::ExportFlat(3)),
         ] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             let durable = state.toolbar.durable_selections();
             assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
             assert_eq!(state.toolbar.take_export_action(), Some(action));
@@ -2255,7 +2570,7 @@ mod tests {
             export::ExportAction::ClipboardTxt,
             export::ExportAction::ClipboardPng,
         ] {
-            let mut state = EditorState::new(&config.theme, "test");
+            let mut state = Editor::new(&config.theme, "test");
             assert!(state.apply_toolbar_action(ToolbarAction::RunExport(action)));
             assert_eq!(state.toolbar.take_export_action(), Some(action));
             let mut platform = ClipboardPlatform {
@@ -2295,7 +2610,7 @@ mod tests {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let config = AppConfig::default();
-        let mut source = EditorState::new(&config.theme, "source");
+        let mut source = Editor::new(&config.theme, "source");
         source.insert("saved canvas");
         assert!(source.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
         assert!(source.apply_toolbar_action(ToolbarAction::SelectSubmenu {
@@ -2322,7 +2637,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut target = EditorState::new(&config.theme, "target");
+        let mut target = Editor::new(&config.theme, "target");
         assert!(target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert!(
             target.apply_toolbar_action(ToolbarAction::RunExport(export::ExportAction::LoadJson,))
