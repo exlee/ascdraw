@@ -10,6 +10,9 @@ underline-offset = 0.0
 # insert = "beam"
 # replace = "underline"
 
+[jump]
+inactivity-ms = 500
+
 [macos]
 color-space = "p3"
 

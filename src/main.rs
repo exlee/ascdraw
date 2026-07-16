@@ -22,6 +22,7 @@ mod face_resolution;
 mod history;
 mod icon;
 mod input;
+mod jump;
 mod layout;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -110,10 +111,6 @@ fn try_main() -> Result<ExitCode> {
     let mut should_apply_app_icon = true;
 
     event_loop.run(move |event, elwt| {
-        elwt.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(500),
-        ));
-
         match event {
             Event::Resumed => {
                 #[cfg(target_os = "macos")]
@@ -149,6 +146,18 @@ fn try_main() -> Result<ExitCode> {
                 }
                 let now = Instant::now();
                 for editor in windows.values_mut() {
+                    if editor
+                        .state
+                        .jump_deadline()
+                        .is_some_and(|deadline| now >= deadline)
+                    {
+                        let previous_state = editor.state.clone();
+                        let previous_viewport = editor.viewport;
+                        if editor.state.advance_jump(now) {
+                            editor.finish_state_change(previous_state, previous_viewport, false);
+                            editor.request_redraw();
+                        }
+                    }
                     if editor.state.move_lift_active() {
                         editor.request_redraw();
                     }
@@ -256,7 +265,8 @@ fn try_main() -> Result<ExitCode> {
                         WindowEvent::KeyboardInput { event, .. }
                             if event.state == ElementState::Pressed =>
                         {
-                            editor.note_keypress(Instant::now());
+                            let keypress_at = Instant::now();
+                            editor.note_keypress(keypress_at);
                             let key_type = classify_key(
                                 editor.state.state(),
                                 KeyInput {
@@ -266,7 +276,25 @@ fn try_main() -> Result<ExitCode> {
                                     modifiers: editor.modifiers,
                                 },
                             );
-                            if let Some(command) = key_type.history_command() {
+                            if jump_mode_handles_key(&editor.state, key_type) {
+                                let previous_state = editor.state.clone();
+                                let previous_viewport = editor.viewport;
+                                let visible_canvas = editor.visible_canvas_cells();
+                                dispatch_editor_event(
+                                    &mut editor.state,
+                                    key_type,
+                                    &editor.ordered_modifiers,
+                                    visible_canvas,
+                                    config.jump.inactivity(),
+                                    keypress_at,
+                                );
+                                editor.finish_state_change(
+                                    previous_state,
+                                    previous_viewport,
+                                    false,
+                                );
+                                editor.request_redraw();
+                            } else if let Some(command) = key_type.history_command() {
                                 match command {
                                     HistoryCommand::Undo => {
                                         editor.undo();
@@ -316,10 +344,14 @@ fn try_main() -> Result<ExitCode> {
                             } else if key_type.is_cancel() {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
+                                let visible_canvas = editor.visible_canvas_cells();
                                 dispatch_editor_event(
                                     &mut editor.state,
                                     key_type,
                                     &editor.ordered_modifiers,
+                                    visible_canvas,
+                                    config.jump.inactivity(),
+                                    keypress_at,
                                 );
                                 editor.finish_state_change(
                                     previous_state,
@@ -392,10 +424,14 @@ fn try_main() -> Result<ExitCode> {
                                                     EditCommand::Clear | EditCommand::ClearAndBack
                                                 )
                                             );
+                                    let visible_canvas = editor.visible_canvas_cells();
                                     let handled = dispatch_editor_event(
                                         &mut editor.state,
                                         key_type,
                                         &editor.ordered_modifiers,
+                                        visible_canvas,
+                                        config.jump.inactivity(),
+                                        keypress_at,
                                     );
                                     if let Some(document_changed) = handled {
                                         if history_group.is_none() {
@@ -522,6 +558,16 @@ fn try_main() -> Result<ExitCode> {
             Event::LoopExiting => save_windows_on_exit(&mut windows),
             _ => {}
         }
+
+        let now = Instant::now();
+        let periodic_deadline = now + Duration::from_millis(500);
+        let next_deadline = windows
+            .values()
+            .filter_map(|editor| editor.state.jump_deadline())
+            .min()
+            .unwrap_or(periodic_deadline)
+            .min(periodic_deadline);
+        elwt.set_control_flow(ControlFlow::WaitUntil(next_deadline));
     })?;
 
     Ok(ExitCode::SUCCESS)
@@ -543,6 +589,7 @@ fn handle_clipboard_command(
     command: ClipboardCommand,
     platform: &mut impl export::ExportPlatform,
 ) -> Result<bool> {
+    state.cancel_jump();
     state.cancel_line_preview();
     state.cancel_move_lift();
     match command {
@@ -625,14 +672,37 @@ fn apply_navigation_command(state: &mut Editor, command: EditCommand, steps: usi
     }
 }
 
+fn jump_mode_handles_key(state: &Editor, key_type: KeyType<'_>) -> bool {
+    if !state.jump_active() {
+        return false;
+    }
+    let modified = key_type.input().modifiers != ModifiersState::empty();
+    !(modified && (key_type.history_command().is_some() || key_type.clipboard_command().is_some()))
+}
+
 fn dispatch_editor_event(
     state: &mut Editor,
     key_type: KeyType<'_>,
     ordered_modifiers: &input::OrderedModifierTracker,
+    visible_canvas: layout::VisibleCanvasCells,
+    jump_inactivity: Duration,
+    now: Instant,
 ) -> Option<bool> {
     let current_state = state.state();
     if matches!(key_type, KeyType::CancelKey(_)) {
         return state.cancel_current_state().then_some(false);
+    }
+    let input = key_type.input();
+    if current_state == EditorState::JumpMode {
+        state.handle_jump_key(input.key, input.modifiers, now);
+        return Some(false);
+    }
+    if current_state.can_start_jump()
+        && input.modifiers == ModifiersState::empty()
+        && matches!(input.key, winit::keyboard::Key::Character(text) if text.eq_ignore_ascii_case("m"))
+    {
+        state.begin_jump(visible_canvas, jump_inactivity);
+        return Some(false);
     }
     if let Some(action) = selection_action(current_state, key_type) {
         state.cancel_line_preview();
@@ -649,7 +719,6 @@ fn dispatch_editor_event(
             ),
         });
     }
-    let input = key_type.input();
     let key = input.key;
     let modifiers = input.modifiers;
     if let KeyType::DirectionKey { direction, .. } = key_type
@@ -802,7 +871,18 @@ fn handle_editor_key(
             modifiers,
         },
     );
-    dispatch_editor_event(state, key_type, &ordered)
+    dispatch_editor_event(
+        state,
+        key_type,
+        &ordered,
+        layout::VisibleCanvasCells {
+            origin: (0, 0),
+            columns: 80,
+            rows: 24,
+        },
+        app::JumpConfig::default().inactivity(),
+        Instant::now(),
+    )
 }
 
 pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bool {
@@ -1811,6 +1891,138 @@ mod tests {
         assert!(state.toolbar.pending_shortcut().is_none());
     }
 
+    #[test]
+    fn m_starts_directional_jump_and_hjkl_moves_the_selected_sector() {
+        let mut state = Editor::new(&app::ThemeConfig::default(), "test");
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Character("m".into()),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(state.state(), EditorState::JumpMode);
+        assert_eq!(state.tooltip(), toolbar::Tooltip::Jump);
+        let initial = state.jump_overlay().expect("jump overlay");
+        assert_eq!(initial.selected, 0);
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Character("L".into()),
+                None,
+                false,
+                ModifiersState::SHIFT,
+            ),
+            Some(false)
+        );
+        assert_eq!(state.jump_overlay().expect("jump overlay").selected, 1);
+    }
+
+    #[test]
+    fn jump_mode_consumes_normal_command_letters_and_escape_cancels_it() {
+        let mut state = Editor::new(&app::ThemeConfig::default(), "test");
+        for key in ["m", "a", "u"] {
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Character(key.into()),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(false)
+            );
+        }
+        assert_eq!(state.state(), EditorState::JumpMode);
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Escape),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(state.state(), EditorState::StampMode);
+        assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn jump_keys_precede_plain_commands_but_keep_modified_global_shortcuts() {
+        let mut state = Editor::new(&app::ThemeConfig::default(), "test");
+        assert!(state.begin_jump(
+            layout::VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
+            app::JumpConfig::default().inactivity(),
+        ));
+
+        for (key, modifiers, expected) in [
+            (Key::Character("u".into()), ModifiersState::empty(), true),
+            (Key::Character("h".into()), ModifiersState::empty(), true),
+            (Key::Character("c".into()), ModifiersState::CONTROL, true),
+            (Key::Character("z".into()), ModifiersState::SUPER, false),
+            (Key::Character("c".into()), ModifiersState::SUPER, false),
+        ] {
+            let key_type = classify_key(
+                state.state(),
+                KeyInput {
+                    key: &key,
+                    text: None,
+                    repeat: false,
+                    modifiers,
+                },
+            );
+            assert_eq!(
+                jump_mode_handles_key(&state, key_type),
+                expected,
+                "key={key:?}, modifiers={modifiers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_m_remains_text_in_text_entry_but_starts_jump_from_selection_mode() {
+        let mut text = Editor::new(&app::ThemeConfig::default(), "test");
+        text.toggle_text_entry();
+        assert_eq!(
+            handle_editor_key(
+                &mut text,
+                &Key::Character("m".into()),
+                Some("m"),
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert_eq!(text.state(), EditorState::TextMode);
+        assert_eq!(line_contents(&text.grid.lines[0]), "m");
+
+        text.extend_selection(Direction::Right);
+        assert!(matches!(text.state(), EditorState::SelectionMode(_)));
+        assert_eq!(
+            handle_editor_key(
+                &mut text,
+                &Key::Character("m".into()),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
+        assert_eq!(text.state(), EditorState::JumpMode);
+        assert!(text.selection.is_collapsed());
+    }
+
     fn ordered_modifiers(states: &[ModifiersState]) -> input::OrderedModifierTracker {
         let mut ordered = input::OrderedModifierTracker::default();
         for state in states {
@@ -1831,7 +2043,18 @@ mod tests {
                 modifiers,
             },
         );
-        dispatch_editor_event(state, key_type, &ordered)
+        dispatch_editor_event(
+            state,
+            key_type,
+            &ordered,
+            layout::VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
+            app::JumpConfig::default().inactivity(),
+            Instant::now(),
+        )
     }
 
     #[test]

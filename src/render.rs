@@ -24,6 +24,7 @@ use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
 
 mod export_png;
+mod jump;
 #[cfg(target_os = "macos")]
 mod metal;
 mod window_surface;
@@ -259,6 +260,7 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
     }
 
     render_canvas_selection(canvas, state, metrics, layout.grid_top);
+    jump::render_jump_overlay(canvas, state, metrics, layout.grid_top);
     if grid_cursor_is_visible(state) {
         render_grid_cursor(
             canvas,
@@ -975,7 +977,7 @@ fn render_grid_cursor(
 }
 
 fn grid_cursor_is_visible(state: &Editor) -> bool {
-    !state.view_active()
+    !state.view_active() && !state.jump_active()
 }
 
 fn is_drawing_mode(mode: CursorMode) -> bool {

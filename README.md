@@ -68,6 +68,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Action | Key |
 | --- | --- |
 | Move the cursor | direction |
+| Jump across the visible canvas | `m`, then `hjkl` or arrow keys |
 | Use the active tool with the mouse | click-drag (unmodified Line holds Ctrl; Stamp/Shape hold Space) |
 | Draw or apply the active Line/Stamp/Utils operation | Ctrl + direction |
 | Place the active stamp | Space |
@@ -82,6 +83,19 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
 | Open Toggles | `9` |
 | Open Save/Load/Export | `0` |
+
+Jump shows non-overlapping 21×15 sectors covering the visible canvas, with the initial selected
+sector centered exactly on the cursor. A cursor-colored inner rectangle marks the selected sector;
+move it with `hjkl` or the arrow keys, with or without Shift. After the configured inactivity delay from the last actual
+movement, that sector becomes a centered 5×5 grid of 5×5 sectors and its landing timer starts
+immediately. The resulting 25×25 refinement grid intentionally extends beyond the 21×15 sector.
+Move again to restart the timer, or let it place the cursor at the selected sector's center. Landing
+after normal movement moves only the cursor. Landing after Shift + direction selects the rectangle
+from the cursor position where Jump started to the landed position; continue extending that
+selection with Shift + direction. The most recent direction press determines whether landing
+selects. In the second level, every direction press restarts the landing timer, including a press
+against the grid edge.
+Configure the delay with `jump.inactivity-ms` (500 ms by default).
 
 The first key of a toolbar path selects its group. Press `1`, then a mode number:
 
@@ -216,13 +230,16 @@ in [`theme.toml`](theme.toml). Put personal overrides in
 `$XDG_CONFIG_HOME/ascdraw/config.toml`, or in `~/.config/ascdraw/config.toml` when
 `XDG_CONFIG_HOME` is not set. The app watches this file and applies changes while running.
 
-Theme faces include `default`, `selection`, `selection-highlight`, `cursor-drawing`,
-`cursor-block`, and `tooltip`:
+Theme faces include `default`, `selection`, `selection-highlight`, `jump-grid`,
+`cursor-drawing`, `cursor-block`, and `tooltip`:
 
 ```toml
 [theme.selection]
 fg = "#ff0000"
 bg = "default"
+
+[theme.jump-grid]
+fg = "#800080"
 ```
 
 Colors are hexadecimal `#RRGGBB` or `#RRGGBBAA`. The value `"default"` inherits from the default

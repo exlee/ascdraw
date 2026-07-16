@@ -7,6 +7,7 @@ use crate::app::{CursorMode, ThemeConfig};
 #[cfg(test)]
 use crate::drawing::LineEnding;
 use crate::drawing::is_line_glyph;
+use crate::jump::JumpMode;
 use crate::model::{Atom, Coord, Direction, Face, LayerId, LayerSummary};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
@@ -19,6 +20,7 @@ use crate::toolbar::{
 
 mod color_tool;
 mod grid;
+mod jump_mode;
 mod layers;
 mod line_preview;
 mod line_tool;
@@ -57,6 +59,7 @@ pub struct Editor {
     line_preview: Option<LinePreview>,
     shape_preview: Option<ShapePreview>,
     move_lift: Option<MoveLift>,
+    jump_mode: Option<JumpMode>,
     single_replace_pending: bool,
     pending_prepend: (usize, usize),
     canvas_origin: Coord,
@@ -215,6 +218,7 @@ impl Editor {
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
+        self.jump_mode = None;
         self.single_replace_pending = false;
     }
 
@@ -313,6 +317,7 @@ impl Editor {
             line_preview: None,
             shape_preview: None,
             move_lift: None,
+            jump_mode: None,
             single_replace_pending: false,
             pending_prepend: (0, 0),
             canvas_origin: Coord::default(),
@@ -333,6 +338,7 @@ impl Editor {
         self.cancel_line_preview();
         self.shape_preview = None;
         self.move_lift = None;
+        self.jump_mode = None;
         self.single_replace_pending = false;
         self.collapse_selection();
         self.toolbar.restore_durable_selections(selections);
@@ -340,6 +346,9 @@ impl Editor {
     }
 
     pub fn tooltip(&self) -> Tooltip {
+        if self.jump_mode.is_some() {
+            return Tooltip::Jump;
+        }
         if self.toolbar.export_menu_open() || self.toolbar.toggles_menu_open() {
             return self.toolbar.tooltip();
         }
@@ -457,6 +466,7 @@ impl Editor {
 
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
         self.toolbar_document_changed = false;
+        self.cancel_jump();
         self.cancel_line_preview();
         if self.move_lift.is_some() {
             self.cancel_move_lift();
@@ -571,11 +581,13 @@ impl Editor {
             || self.line_preview.is_some()
             || self.shape_preview.is_some()
             || self.move_lift.is_some()
+            || self.jump_mode.is_some()
             || self.toolbar.pending_shortcut().is_some();
         self.end_stroke();
         self.cancel_line_preview();
         self.shape_preview = None;
         self.cancel_move_lift();
+        self.cancel_jump();
         self.toolbar.cancel_shortcut();
         changed
     }
@@ -1277,6 +1289,7 @@ mod tests {
         assert_eq!(state.grid.cursor_face, reversed.cursor_block);
         assert_eq!(state.theme.selection, source.selection);
         assert_eq!(state.theme.selection_highlight, source.selection_highlight);
+        assert_eq!(state.theme.jump_grid, source.jump_grid);
         assert_eq!(state.theme.cursor_drawing, source.cursor_drawing);
         assert_eq!(state.theme.tooltip, source.tooltip);
 

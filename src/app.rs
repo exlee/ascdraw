@@ -28,6 +28,7 @@ pub struct AppConfig {
     pub transparent_menubar: bool,
     pub cell: CellConfig,
     pub display: DisplayConfig,
+    pub jump: JumpConfig,
     pub theme: ThemeConfig,
     pub macos: MacosConfig,
     pub keys: UserKeysConfig,
@@ -60,6 +61,24 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         bundled_default_display_config()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct JumpConfig {
+    pub inactivity_ms: u64,
+}
+
+impl JumpConfig {
+    pub fn inactivity(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.inactivity_ms.max(1))
+    }
+}
+
+impl Default for JumpConfig {
+    fn default() -> Self {
+        bundled_default_jump_config()
     }
 }
 
@@ -112,6 +131,7 @@ pub struct ThemeConfig {
     pub default: Face,
     pub selection: Face,
     pub selection_highlight: Face,
+    pub jump_grid: Face,
     pub cursor_drawing: Face,
     pub cursor_block: Face,
     pub tooltip: Face,
@@ -267,6 +287,15 @@ fn bundled_default_display_config() -> DisplayConfig {
         .expect("bundled [display] should match DisplayConfig")
 }
 
+fn bundled_default_jump_config() -> JumpConfig {
+    bundled_default_value()
+        .get("jump")
+        .cloned()
+        .expect("bundled ascdraw.toml should contain [jump]")
+        .try_into()
+        .expect("bundled [jump] should match JumpConfig")
+}
+
 fn bundled_default_cursor_shape_config() -> CursorShapeConfig {
     bundled_default_value()
         .get("display")
@@ -346,6 +375,7 @@ mod tests {
             "default",
             "selection",
             "selection-highlight",
+            "jump-grid",
             "cursor-drawing",
             "cursor-block",
             "tooltip",
@@ -357,6 +387,7 @@ mod tests {
             &theme.default,
             &theme.selection,
             &theme.selection_highlight,
+            &theme.jump_grid,
             &theme.cursor_drawing,
             &theme.cursor_block,
             &theme.tooltip,
@@ -404,6 +435,7 @@ mod tests {
         assert_eq!(config.theme.selection.fg, "#ff0000");
         assert_eq!(config.theme.tooltip.fg, "#00ffff");
         assert_eq!(config.theme.tooltip.bg, "default");
+        assert_eq!(config.jump, JumpConfig::default());
     }
 
     #[test]

@@ -5,6 +5,9 @@ use super::Editor;
 
 impl Editor {
     pub fn state(&self) -> EditorState {
+        if self.jump_mode.is_some() {
+            return EditorState::JumpMode;
+        }
         if self.toolbar.export_menu_open() {
             return EditorState::ExportMode;
         }
@@ -43,6 +46,7 @@ impl Editor {
 
     pub fn cancel_current_state(&mut self) -> bool {
         match self.state() {
+            EditorState::JumpMode => self.cancel_jump(),
             EditorState::ExportMode => {
                 self.toolbar.close_export_menu();
                 true

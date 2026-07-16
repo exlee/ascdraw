@@ -38,7 +38,7 @@ pub fn change_policy_for_key(
     modifiers: ModifiersState,
     ordered_modifiers: &OrderedModifierTracker,
 ) -> ChangePolicy {
-    if state.move_lift_active() || state.has_line_preview() {
+    if state.jump_active() || state.move_lift_active() || state.has_line_preview() {
         return ChangePolicy::Edit;
     }
     if state.cursor_mode.accepts_text()

@@ -7,6 +7,7 @@ use crate::model::Direction;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum EditorState {
+    JumpMode,
     ToolbarMode,
     ExportMode,
     TogglesMode,
@@ -32,6 +33,13 @@ impl EditorState {
             Self::ReplaceOneMode | Self::TextMode | Self::InsertMode | Self::ReplaceMode => true,
             _ => false,
         }
+    }
+
+    pub fn can_start_jump(self) -> bool {
+        !matches!(
+            self,
+            Self::ReplaceOneMode | Self::TextMode | Self::InsertMode | Self::ReplaceMode
+        )
     }
 }
 

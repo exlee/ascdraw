@@ -8,6 +8,9 @@ fg = "#ff0000"
 [selection-highlight]
 fg = "#004DFF"
 
+[jump-grid]
+fg = "#800080"
+
 [cursor-drawing]
 fg = "#00008b"
 

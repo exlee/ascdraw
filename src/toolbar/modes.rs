@@ -74,13 +74,15 @@ pub enum Tooltip {
     Layers,
     Colors,
     Selection,
+    Jump,
 }
 
 impl Tooltip {
     pub fn text(self) -> String {
-        const MISC_TIP: [&str; 6] = [
+        const MISC_TIP: [&str; 7] = [
             "Canvas: u undo; U redo; Ctrl/Cmd-Z undo; Ctrl/Cmd-R redo",
             "Direction keys are ←→↓↑ and hjkl",
+            "m opens a directional sector grid for jumping",
             "When drawing/selecting/resizing add Ctrl/Alt/Shift for 5/10 steps",
             "Alt-direction erases",
             "Shift-direction selects",
@@ -118,6 +120,9 @@ impl Tooltip {
             Self::Selection => {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; cancel key collapses; Backspace clears; r then KEY replaces"
             }
+            Self::Jump => {
+                "Jump: direction lands cursor; Shift-direction lands selection; Esc cancels"
+            }
         };
         if matches!(
             self,
@@ -131,6 +136,7 @@ impl Tooltip {
                 | Self::Layers
                 | Self::Colors
                 | Self::Selection
+                | Self::Jump
         ) {
             return primary.to_string();
         }

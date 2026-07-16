@@ -178,6 +178,7 @@ impl EditorWindow {
     }
 
     pub fn begin_mouse_drag(&mut self, coord: Coord) {
+        self.state.cancel_jump();
         let input_override = if self.modifiers == ModifiersState::empty() {
             match self.state.cursor_mode {
                 crate::app::CursorMode::MoveDraw => Some(MouseDragOverride::Control),
