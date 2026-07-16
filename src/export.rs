@@ -181,13 +181,13 @@ impl ExportPlatform for NativeExportPlatform<'_> {
 }
 
 pub fn copy_selection(state: &EditorState, platform: &mut impl ExportPlatform) -> Result<()> {
-    platform.set_clipboard_text(&state.selected_text())
+    platform.set_clipboard_text(&selected_visible_text(state))
 }
 
 /// Copies the normalized selection before clearing it. Keeping the clipboard
 /// write first makes a failed external operation an editor-state no-op.
 pub fn cut_selection(state: &mut EditorState, platform: &mut impl ExportPlatform) -> Result<bool> {
-    platform.set_clipboard_text(&state.selected_text())?;
+    platform.set_clipboard_text(&selected_visible_text(state))?;
     let before = state.edit_snapshot();
     state.clear_selection();
     Ok(!before.same_document(&state.edit_snapshot()))
@@ -301,7 +301,16 @@ pub fn perform(
 }
 
 fn text_export(state: &EditorState, visible_canvas: VisibleCanvasCells) -> String {
-    canvas_atoms_for_export(state, visible_canvas)
+    atoms_text(&canvas_atoms_for_export(state, visible_canvas))
+}
+
+fn selected_visible_text(state: &EditorState) -> String {
+    let region = CanvasRegion::from_selection(state.selection_bounds());
+    atoms_text(&flatten_visible_layers(&visible_layer_atoms(state, region)))
+}
+
+fn atoms_text(lines: &[Vec<Atom>]) -> String {
+    lines
         .iter()
         .map(|row| {
             row.iter()
@@ -340,6 +349,10 @@ pub fn canvas_layers_for_export(
     visible_canvas: VisibleCanvasCells,
 ) -> Vec<Vec<Vec<Atom>>> {
     let region = canvas_region_for_export(state, visible_canvas);
+    visible_layer_atoms(state, region)
+}
+
+fn visible_layer_atoms(state: &EditorState, region: CanvasRegion) -> Vec<Vec<Vec<Atom>>> {
     state
         .layer_views()
         .into_iter()
@@ -960,6 +973,67 @@ mod tests {
         assert_eq!(text_export(&state, visible), " x");
         assert!(state.toggle_layer_visibility(upper));
         assert_eq!(text_export(&state, visible), "😀");
+    }
+
+    #[test]
+    fn clipboard_txt_combines_visible_layers_with_the_topmost_nonblank_winning() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("AAA");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        state.grid.lines = lines_from_text("  BBB");
+        let visible = VisibleCanvasCells {
+            origin: (0, 0),
+            columns: 5,
+            rows: 1,
+        };
+        let mut platform = MockPlatform::default();
+        let mut viewport = ViewportOffset::default();
+
+        assert_eq!(
+            perform(
+                ExportAction::ClipboardTxt,
+                &mut state,
+                &mut viewport,
+                visible,
+                &mut platform,
+            )
+            .unwrap(),
+            ExportOutcome::Unchanged
+        );
+        assert_eq!(platform.clipboard.as_deref(), Some("AABBB"));
+    }
+
+    #[test]
+    fn edit_copy_and_cut_flatten_visible_layers_but_cut_only_the_active_layer() {
+        let mut state = EditorState::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("AAA");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        state.grid.lines = lines_from_text("  BBB");
+        state.move_to(Coord::default());
+        for _ in 0..4 {
+            state.extend_selection(crate::model::Direction::Right);
+        }
+        let mut platform = MockPlatform::default();
+
+        copy_selection(&state, &mut platform).unwrap();
+        assert_eq!(platform.clipboard.as_deref(), Some("AABBB"));
+
+        assert!(cut_selection(&mut state, &mut platform).unwrap());
+        assert_eq!(platform.clipboard.as_deref(), Some("AABBB"));
+        assert_eq!(state.selected_text(), "     ");
+        assert_eq!(
+            text_export(
+                &state,
+                VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 5,
+                    rows: 1,
+                },
+            ),
+            "AAA  "
+        );
     }
 
     #[test]
