@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use winit::keyboard::{Key, ModifiersState};
 
-use crate::jump::{JumpMode, JumpOverlay, JumpUpdate};
+use crate::jump::{JumpMode, JumpOverlay, JumpUpdate, JumpViewportPan};
 use crate::layout::VisibleCanvasCells;
 
 use super::Editor;
@@ -62,6 +62,12 @@ impl Editor {
 
     pub fn jump_deadline(&self) -> Option<Instant> {
         self.jump_mode.as_ref().and_then(JumpMode::deadline)
+    }
+
+    pub fn take_jump_viewport_pan(&mut self) -> JumpViewportPan {
+        self.jump_mode
+            .as_mut()
+            .map_or_else(JumpViewportPan::default, JumpMode::take_viewport_pan)
     }
 
     pub fn cancel_jump(&mut self) -> bool {

@@ -17,6 +17,7 @@ use crate::editor::Editor;
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
+use crate::jump::JumpViewportPan;
 use crate::layout::{
     LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
     content_top_padding, cursor_is_visible, cursor_origin, layout_metrics, navigation_origin,
@@ -703,6 +704,20 @@ impl EditorWindow {
         changed
     }
 
+    pub fn apply_jump_viewport_pan(&mut self) -> bool {
+        let pan = self.state.take_jump_viewport_pan();
+        if pan == JumpViewportPan::default() {
+            return false;
+        }
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        pan_viewport_by_cells(
+            &mut self.viewport,
+            pan,
+            (metrics.cell_width, metrics.cell_height),
+        )
+    }
+
     fn current_layout(&self) -> LayoutMetrics {
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
@@ -819,6 +834,23 @@ fn pan_viewport(
     let changed = candidate != *viewport;
     *viewport = candidate;
     changed
+}
+
+fn pan_viewport_by_cells(
+    viewport: &mut ViewportOffset,
+    pan: JumpViewportPan,
+    cell_size: (usize, usize),
+) -> bool {
+    let old = *viewport;
+    viewport.x = viewport.x.saturating_sub(
+        pan.columns
+            .saturating_mul(i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX)),
+    );
+    viewport.y = viewport.y.saturating_sub(
+        pan.rows
+            .saturating_mul(i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX)),
+    );
+    *viewport != old
 }
 
 fn center_viewport(
@@ -1271,6 +1303,26 @@ mod tests {
             ));
         }
         assert_eq!(viewport, original);
+    }
+
+    #[test]
+    fn jump_pan_moves_the_viewport_by_whole_sector_cells_and_preserves_residuals() {
+        let mut viewport = ViewportOffset { x: 7, y: -3 };
+        assert!(pan_viewport_by_cells(
+            &mut viewport,
+            JumpViewportPan {
+                columns: 21,
+                rows: -15,
+            },
+            (9, 13),
+        ));
+        assert_eq!(
+            viewport,
+            ViewportOffset {
+                x: 7 - 21 * 9,
+                y: -3 + 15 * 13,
+            }
+        );
     }
 
     #[test]

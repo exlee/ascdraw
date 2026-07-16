@@ -40,6 +40,12 @@ pub struct JumpOverlay {
     pub selected: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JumpViewportPan {
+    pub columns: i64,
+    pub rows: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JumpUpdate {
     Pending,
@@ -62,6 +68,7 @@ pub struct JumpMode {
     selected: usize,
     start: Coord,
     select_on_land: bool,
+    pending_viewport_pan: JumpViewportPan,
     level: JumpLevel,
     inactivity: Duration,
     deadline: Option<Instant>,
@@ -78,6 +85,7 @@ impl JumpMode {
             selected,
             start: cursor,
             select_on_land: false,
+            pending_viewport_pan: JumpViewportPan::default(),
             level: JumpLevel::Initial,
             inactivity,
             deadline: None,
@@ -93,6 +101,10 @@ impl JumpMode {
 
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
+    }
+
+    pub fn take_viewport_pan(&mut self) -> JumpViewportPan {
+        std::mem::take(&mut self.pending_viewport_pan)
     }
 
     pub fn handle_key(&mut self, key: &Key, modifiers: ModifiersState, now: Instant) -> JumpUpdate {
@@ -159,9 +171,43 @@ impl JumpMode {
             Direction::Right if column + 1 < self.columns => self.selected + 1,
             Direction::Up if row > 0 => self.selected - self.columns,
             Direction::Down if row + 1 < self.rows => self.selected + self.columns,
-            _ => return false,
+            _ => return self.pan_at_edge(direction),
         };
         self.selected = next;
+        true
+    }
+
+    fn pan_at_edge(&mut self, direction: Direction) -> bool {
+        let selected = self.sectors[self.selected];
+        let sector_columns = i64::try_from(selected.columns).unwrap_or(i64::MAX);
+        let sector_rows = i64::try_from(selected.rows).unwrap_or(i64::MAX);
+        let (column_delta, line_delta) = match direction {
+            Direction::Left => (-sector_columns, 0),
+            Direction::Right => (sector_columns, 0),
+            Direction::Up => (0, -sector_rows),
+            Direction::Down => (0, sector_rows),
+        };
+        let next_center_column = selected
+            .column
+            .saturating_add(column_delta)
+            .saturating_add(sector_columns / 2);
+        let next_center_line = selected
+            .line
+            .saturating_add(line_delta)
+            .saturating_add(sector_rows / 2);
+        if next_center_column < 0 || next_center_line < 0 {
+            return false;
+        }
+
+        for sector in &mut self.sectors {
+            sector.column = sector.column.saturating_add(column_delta);
+            sector.line = sector.line.saturating_add(line_delta);
+        }
+        self.pending_viewport_pan.columns = self
+            .pending_viewport_pan
+            .columns
+            .saturating_add(column_delta);
+        self.pending_viewport_pan.rows = self.pending_viewport_pan.rows.saturating_add(line_delta);
         true
     }
 }
@@ -363,6 +409,83 @@ mod tests {
             JumpUpdate::Changed
         );
         assert_eq!(jump.overlay().selected, 1);
+    }
+
+    #[test]
+    fn moving_past_the_initial_grid_edge_pans_by_one_initial_sector() {
+        let now = Instant::now();
+        let mut jump = start(80, 24);
+        for _ in 0..2 {
+            jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now);
+        }
+        let before = jump.sectors[jump.selected].center();
+
+        assert_eq!(
+            jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now),
+            JumpUpdate::Changed
+        );
+        assert_eq!(
+            jump.take_viewport_pan(),
+            JumpViewportPan {
+                columns: 21,
+                rows: 0,
+            }
+        );
+        assert_eq!(
+            jump.sectors[jump.selected].center(),
+            Coord {
+                line: before.line,
+                column: before.column + 21,
+            }
+        );
+        assert_eq!(jump.take_viewport_pan(), JumpViewportPan::default());
+    }
+
+    #[test]
+    fn moving_past_the_refined_grid_edge_pans_by_one_refined_sector() {
+        let now = Instant::now();
+        let mut jump = start(80, 24);
+        jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now);
+        jump.advance(now + Duration::from_millis(10));
+        for _ in 0..2 {
+            jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now);
+        }
+        let before = jump.sectors[jump.selected].center();
+
+        assert_eq!(
+            jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now),
+            JumpUpdate::Changed
+        );
+        assert_eq!(
+            jump.take_viewport_pan(),
+            JumpViewportPan {
+                columns: 5,
+                rows: 0,
+            }
+        );
+        assert_eq!(
+            jump.sectors[jump.selected].center(),
+            Coord {
+                line: before.line,
+                column: before.column + 5,
+            }
+        );
+    }
+
+    #[test]
+    fn edge_panning_accumulates_until_the_runtime_applies_it() {
+        let now = Instant::now();
+        let mut jump = start(80, 24);
+        for _ in 0..4 {
+            jump.handle_key(&Key::Character("l".into()), ModifiersState::empty(), now);
+        }
+        assert_eq!(
+            jump.take_viewport_pan(),
+            JumpViewportPan {
+                columns: 42,
+                rows: 0,
+            }
+        );
     }
 
     #[test]

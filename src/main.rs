@@ -288,6 +288,7 @@ fn try_main() -> Result<ExitCode> {
                                     config.jump.inactivity(),
                                     keypress_at,
                                 );
+                                editor.apply_jump_viewport_pan();
                                 editor.finish_state_change(
                                     previous_state,
                                     previous_viewport,

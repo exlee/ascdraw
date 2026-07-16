@@ -94,7 +94,8 @@ after normal movement moves only the cursor. Landing after Shift + direction sel
 from the cursor position where Jump started to the landed position; continue extending that
 selection with Shift + direction. The most recent direction press determines whether landing
 selects. In the second level, every direction press restarts the landing timer, including a press
-against the grid edge.
+against the grid edge. Moving past a grid edge pans the canvas by one sector, so Jump can continue
+beyond the currently visible pane.
 Configure the delay with `jump.inactivity-ms` (500 ms by default).
 
 The first key of a toolbar path selects its group. Press `1`, then a mode number:

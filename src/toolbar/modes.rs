@@ -121,7 +121,7 @@ impl Tooltip {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; cancel key collapses; Backspace clears; r then KEY replaces"
             }
             Self::Jump => {
-                "Jump: direction lands cursor; Shift-direction lands selection; Esc cancels"
+                "Jump: direction lands cursor; Shift lands selection; edges pan; Esc cancels"
             }
         };
         if matches!(
