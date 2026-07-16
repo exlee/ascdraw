@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Direction};
+use crate::model::{Atom, Coord, Direction, LayerId};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_atoms,
@@ -16,9 +16,15 @@ pub(super) struct MoveLift {
     source_bounds: SelectionBounds,
     origin: Coord,
     rectangle: TextRectangle,
+    layers: Vec<LiftedLayer>,
+}
+
+#[derive(Debug, Clone)]
+struct LiftedLayer {
+    id: LayerId,
     edited_atoms: Vec<LiftedAtom>,
     markers: Vec<PlacedLineMarker>,
-    rendered_lines: Vec<Vec<crate::model::Atom>>,
+    rendered_lines: Vec<Vec<Atom>>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,24 +55,35 @@ impl EditorState {
         self.toolbar.cancel_shortcut();
         let source_selection = self.selection;
         let source_bounds = source_selection.bounds();
-        let rectangle = TextRectangle {
-            rows: selected_atoms(&self.grid.lines, source_bounds),
-            width: source_bounds.width(),
-        };
-        let edited_atoms = lifted_edited_atoms(&rectangle);
         let source_origin = Coord {
             line: source_bounds.top,
             column: source_bounds.left,
         };
-        let markers = self
-            .line_markers
-            .iter()
-            .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
-            .cloned()
-            .map(|mut marker| {
-                marker.coord.line -= source_bounds.top;
-                marker.coord.column -= source_bounds.left;
-                marker
+        let layers = self
+            .layers
+            .layer_contents(&self.grid.lines, &self.line_markers)
+            .into_iter()
+            .map(|(id, lines, markers)| {
+                let rectangle = TextRectangle {
+                    rows: selected_atoms(&lines, source_bounds),
+                    width: source_bounds.width(),
+                };
+                let edited_atoms = lifted_edited_atoms(&rectangle);
+                let markers = markers
+                    .into_iter()
+                    .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
+                    .map(|mut marker| {
+                        marker.coord.line -= source_bounds.top;
+                        marker.coord.column -= source_bounds.left;
+                        marker
+                    })
+                    .collect();
+                LiftedLayer {
+                    id,
+                    edited_atoms,
+                    markers,
+                    rendered_lines: lines,
+                }
             })
             .collect();
         self.move_lift = Some(MoveLift {
@@ -78,10 +95,11 @@ impl EditorState {
                 line: source_bounds.top,
                 column: source_bounds.left,
             },
-            rectangle,
-            edited_atoms,
-            markers,
-            rendered_lines: Vec::new(),
+            rectangle: TextRectangle {
+                rows: vec![vec![super::blank_atom()]; source_bounds.height()],
+                width: source_bounds.width(),
+            },
+            layers,
         });
         self.refresh_move_lift_render();
         true
@@ -143,33 +161,38 @@ impl EditorState {
         {
             return false;
         }
-        let before_lines = self.grid.lines.clone();
-        let before_markers = self.line_markers.clone();
         let source_origin = Coord {
             line: lift.source_bounds.top,
             column: lift.source_bounds.left,
         };
-        self.line_markers.retain(|marker| {
-            !lifted_atoms_cover(&lift.edited_atoms, source_origin, marker.coord)
-                && !lifted_atoms_cover(&lift.edited_atoms, lift.origin, marker.coord)
-        });
-        compose_sparse_move(
+        let mut changed = false;
+        self.layers.for_each_layer_mut(
             &mut self.grid.lines,
-            source_origin,
-            lift.origin,
-            &lift.edited_atoms,
+            &mut self.line_markers,
+            |id, lines, markers| {
+                let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
+                    return;
+                };
+                let before_lines = lines.clone();
+                let before_markers = markers.clone();
+                markers.retain(|marker| {
+                    !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
+                        && !lifted_atoms_cover(&layer.edited_atoms, lift.origin, marker.coord)
+                });
+                compose_sparse_move(lines, source_origin, lift.origin, &layer.edited_atoms);
+                markers.extend(layer.markers.iter().cloned().map(|mut marker| {
+                    marker.coord.line = marker.coord.line.saturating_add(lift.origin.line);
+                    marker.coord.column = marker.coord.column.saturating_add(lift.origin.column);
+                    marker
+                }));
+                changed |= *lines != before_lines || *markers != before_markers;
+            },
         );
-        self.line_markers
-            .extend(lift.markers.into_iter().map(|mut marker| {
-                marker.coord.line = marker.coord.line.saturating_add(lift.origin.line);
-                marker.coord.column = marker.coord.column.saturating_add(lift.origin.column);
-                marker
-            }));
         self.cursor_index = index_for_column(
             &self.grid.lines[self.grid.cursor_pos.line],
             self.grid.cursor_pos.column,
         );
-        self.grid.lines != before_lines || self.line_markers != before_markers
+        changed
     }
 
     pub fn cancel_move_lift(&mut self) -> bool {
@@ -189,35 +212,53 @@ impl EditorState {
     }
 
     pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<crate::model::Atom>>> {
-        self.move_lift
-            .as_ref()
-            .map(|lift| lift.rendered_lines.clone())
+        self.move_lift_render_lines().map(<[_]>::to_vec)
     }
 
     pub(super) fn move_lift_render_lines(&self) -> Option<&[Vec<crate::model::Atom>]> {
-        self.move_lift
-            .as_ref()
-            .map(|lift| lift.rendered_lines.as_slice())
+        self.move_lift_render_lines_for_layer(self.active_layer_id())
+    }
+
+    pub(crate) fn move_lift_render_lines_for_layer(
+        &self,
+        id: LayerId,
+    ) -> Option<&[Vec<crate::model::Atom>]> {
+        self.move_lift.as_ref().and_then(|lift| {
+            lift.layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.rendered_lines.as_slice())
+        })
     }
 
     fn refresh_move_lift_render(&mut self) {
         let Some(lift) = self.move_lift.as_ref() else {
             return;
         };
-        let mut lines = self.grid.lines.clone();
-        compose_sparse_move(
-            &mut lines,
-            Coord {
-                line: lift.source_bounds.top,
-                column: lift.source_bounds.left,
-            },
-            lift.origin,
-            &lift.edited_atoms,
-        );
-        self.move_lift
+        let source_origin = Coord {
+            line: lift.source_bounds.top,
+            column: lift.source_bounds.left,
+        };
+        let destination_origin = lift.origin;
+        let contents = self
+            .layers
+            .layer_contents(&self.grid.lines, &self.line_markers);
+        let lift = self
+            .move_lift
             .as_mut()
-            .expect("move lift remains active while composing")
-            .rendered_lines = lines;
+            .expect("move lift remains active while composing");
+        for layer in &mut lift.layers {
+            let Some((_, lines, _)) = contents.iter().find(|(id, _, _)| *id == layer.id) else {
+                continue;
+            };
+            layer.rendered_lines = lines.clone();
+            compose_sparse_move(
+                &mut layer.rendered_lines,
+                source_origin,
+                destination_origin,
+                &layer.edited_atoms,
+            );
+        }
     }
 }
 

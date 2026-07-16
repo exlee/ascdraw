@@ -229,11 +229,15 @@ fn render_canvas(canvas: &Canvas, state: &EditorState, config: &AppConfig, frame
         .into_iter()
         .filter(|layer| layer.visible)
     {
-        let lines = if layer.id == active_layer {
-            active_lines
-        } else {
-            layer.lines
-        };
+        let lines = state
+            .move_lift_render_lines_for_layer(layer.id)
+            .unwrap_or_else(|| {
+                if layer.id == active_layer {
+                    active_lines
+                } else {
+                    layer.lines
+                }
+            });
         for (row_index, line) in lines
             .iter()
             .enumerate()

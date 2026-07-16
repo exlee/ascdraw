@@ -55,6 +55,58 @@ impl Default for LayerStack {
 }
 
 impl LayerStack {
+    pub(super) fn layer_contents(
+        &self,
+        active_lines: &[Vec<Atom>],
+        active_markers: &[PlacedLineMarker],
+    ) -> Vec<(LayerId, Vec<Vec<Atom>>, Vec<PlacedLineMarker>)> {
+        self.layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| {
+                if index == self.active {
+                    (layer.id, active_lines.to_vec(), active_markers.to_vec())
+                } else {
+                    (layer.id, layer.lines.clone(), layer.line_markers.clone())
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn for_each_layer_mut(
+        &mut self,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<PlacedLineMarker>,
+        mut apply: impl FnMut(LayerId, &mut Vec<Vec<Atom>>, &mut Vec<PlacedLineMarker>),
+    ) {
+        for (index, layer) in self.layers.iter_mut().enumerate() {
+            if index == self.active {
+                apply(layer.id, active_lines, active_markers);
+            } else {
+                apply(layer.id, &mut layer.lines, &mut layer.line_markers);
+            }
+        }
+    }
+
+    pub(super) fn clear_contents(
+        &mut self,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<PlacedLineMarker>,
+        cursor: crate::model::Coord,
+    ) {
+        self.for_each_layer_mut(active_lines, active_markers, |_, lines, markers| {
+            *lines = vec![Vec::new()];
+            markers.clear();
+        });
+        *active_lines = (0..=cursor.line).map(|_| Vec::new()).collect();
+        active_lines[cursor.line] = (0..cursor.column)
+            .map(|_| Atom {
+                face: crate::model::Face::default(),
+                contents: " ".to_owned(),
+            })
+            .collect();
+    }
+
     pub(super) fn from_persisted(
         persisted: Vec<PersistedLayer>,
         active_id: LayerId,

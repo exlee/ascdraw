@@ -1005,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_copy_and_cut_flatten_visible_layers_but_cut_only_the_active_layer() {
+    fn edit_copy_and_cut_flatten_visible_layers_and_cut_clears_every_layer() {
         let mut state = EditorState::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("AAA");
         let base = state.active_layer_id();
@@ -1032,7 +1032,7 @@ mod tests {
                     rows: 1,
                 },
             ),
-            "AAA  "
+            "     "
         );
     }
 

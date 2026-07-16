@@ -825,24 +825,31 @@ impl EditorState {
             return;
         }
         let bounds = self.selection.bounds();
-        self.line_markers
-            .retain(|marker| !bounds.contains(marker.coord));
-        replace_range(&mut self.grid.lines, bounds, None);
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                markers.retain(|marker| !bounds.contains(marker.coord));
+                replace_range(lines, bounds, None);
+            },
+        );
         self.restore_active_cursor_index();
     }
 
     fn selection_contains_nonblank(&self) -> bool {
         let bounds = self.selection.bounds();
-        (bounds.top..=bounds.bottom).any(|line_index| {
-            let Some(line) = self.grid.lines.get(line_index) else {
-                return false;
-            };
-            let mut column: usize = 0;
-            line.iter().any(|atom| {
-                let end = column.saturating_add(atom_width(atom));
-                let overlaps = column <= bounds.right && end > bounds.left;
-                column = end;
-                overlaps && !atom.contents.chars().all(char::is_whitespace)
+        self.layer_views().into_iter().any(|layer| {
+            (bounds.top..=bounds.bottom).any(|line_index| {
+                let Some(line) = layer.lines.get(line_index) else {
+                    return false;
+                };
+                let mut column: usize = 0;
+                line.iter().any(|atom| {
+                    let end = column.saturating_add(atom_width(atom));
+                    let overlaps = column <= bounds.right && end > bounds.left;
+                    column = end;
+                    overlaps && !atom.contents.chars().all(char::is_whitespace)
+                })
             })
         })
     }
@@ -957,26 +964,8 @@ impl EditorState {
     pub fn clear_canvas(&mut self) {
         self.cancel_line_preview();
         let cursor = self.grid.cursor_pos;
-        let already_blank = self.layers.layers().len() == 1
-            && self.content_cells().is_empty()
-            && self.line_markers.is_empty()
-            && self
-                .grid
-                .lines
-                .iter()
-                .flatten()
-                .all(|atom| atom.face == Face::default());
-
-        if !already_blank {
-            self.layers.reset();
-            self.grid.lines = (0..=cursor.line).map(|_| Vec::new()).collect();
-            self.grid.lines[cursor.line] = (0..cursor.column)
-                .map(|_| Atom {
-                    face: Face::default(),
-                    contents: " ".to_string(),
-                })
-                .collect();
-        }
+        self.layers
+            .clear_contents(&mut self.grid.lines, &mut self.line_markers, cursor);
 
         self.grid.cursor_pos = cursor;
         self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
@@ -1200,6 +1189,7 @@ fn index_for_column(atoms: &[Atom], column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export::lines_from_text;
     use crate::toolbar::{ToggleKind, UtilityKind};
 
     fn state() -> EditorState {
@@ -1393,6 +1383,106 @@ mod tests {
         let active = state.active_layer_id();
         assert!(state.delete_layer(active));
         assert_eq!(state.active_layer_id(), base);
+    }
+
+    #[test]
+    fn clear_and_move_apply_to_every_layer_without_flattening_the_stack() {
+        let mut state = state();
+        state.grid.lines = lines_from_text("A");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.grid.lines = lines_from_text(" B");
+        assert!(state.toggle_layer_visibility(base));
+        let summaries = state.layer_summaries();
+
+        state.move_to(Coord::default());
+        state.extend_selection(Direction::Right);
+        state.clear_selection();
+        assert_eq!(state.layer_summaries(), summaries);
+        assert!(state.layer_views().iter().all(|layer| {
+            layer
+                .lines
+                .iter()
+                .flatten()
+                .all(|atom| atom.contents.chars().all(char::is_whitespace))
+        }));
+
+        assert!(state.select_layer(base));
+        state.grid.lines = lines_from_text("A");
+        assert!(state.select_layer(upper));
+        state.grid.lines = lines_from_text(" B");
+        state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        state.color_written_bounds(SelectionBounds {
+            left: 1,
+            right: 1,
+            top: 0,
+            bottom: 0,
+        });
+        let upper_face = state.grid.lines[0][1].face.clone();
+        assert_ne!(upper_face, Face::default());
+        state.move_to(Coord::default());
+        state.extend_selection(Direction::Right);
+        assert!(state.begin_selected_move_lift());
+        assert!(state.move_lift(Direction::Right));
+        assert_eq!(
+            contents(
+                &state
+                    .move_lift_render_lines_for_layer(base)
+                    .expect("base layer preview")[0]
+            ),
+            " A"
+        );
+        assert_eq!(
+            contents(
+                &state
+                    .move_lift_render_lines_for_layer(upper)
+                    .expect("upper layer preview")[0]
+            ),
+            "  B"
+        );
+        assert!(state.confirm_move_lift());
+
+        let views = state.layer_views();
+        assert_eq!(contents(&views[0].lines[0]), " A");
+        assert_eq!(contents(&views[1].lines[0]), "  B");
+        assert_eq!(views[1].lines[0][2].face, upper_face);
+        assert_eq!(state.layer_summaries(), summaries);
+
+        state.clear_canvas();
+        assert_eq!(state.layer_summaries(), summaries);
+        assert!(
+            state
+                .layer_views()
+                .iter()
+                .all(|layer| layer.lines.iter().flatten().all(|atom| {
+                    atom.contents.chars().all(char::is_whitespace) && atom.face == Face::default()
+                }))
+        );
+    }
+
+    #[test]
+    fn push_and_pull_apply_the_same_structural_change_to_every_layer() {
+        let mut state = utility_state(&["ABC"], UtilityKind::Push, Coord::default());
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.grid.lines = lines_from_text(" xyz");
+
+        assert!(state.apply_utility(Direction::Right));
+        let views = state.layer_views();
+        assert_eq!(contents(&views[0].lines[0]), "A BC");
+        assert_eq!(contents(&views[1].lines[0]), "  xyz");
+
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 1,
+        });
+        assert!(state.apply_utility(Direction::Left));
+        let views = state.layer_views();
+        assert_eq!(contents(&views[0].lines[0]), "ABC");
+        assert_eq!(contents(&views[1].lines[0]), " xyz");
+        assert_eq!(state.active_layer_id(), upper);
     }
 
     #[test]

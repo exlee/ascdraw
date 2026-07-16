@@ -4,7 +4,11 @@ use crate::toolbar::UtilityKind;
 
 impl EditorState {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
-        super::grid::expand_blank_runs(&mut self.grid.lines);
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, _| super::grid::expand_blank_runs(lines),
+        );
         match self.toolbar.utility_kind() {
             UtilityKind::Push => self.push_blank(direction),
             UtilityKind::Pull => self.pull_all(direction),
@@ -51,19 +55,40 @@ impl EditorState {
     }
 
     fn insert_blank_column(&mut self, column: usize) -> bool {
-        let mut indices = Vec::with_capacity(self.grid.lines.len());
-        for line in &self.grid.lines {
-            let Some(index) = boundary_index(line, column) else {
-                return false;
-            };
-            indices.push(index);
+        let height = self
+            .layer_views()
+            .into_iter()
+            .map(|layer| layer.lines.len())
+            .max()
+            .unwrap_or(1);
+        if self.layer_views().into_iter().any(|layer| {
+            layer
+                .lines
+                .iter()
+                .any(|line| boundary_index(line, column).is_none())
+        }) {
+            return false;
         }
-        for (line, index) in self.grid.lines.iter_mut().zip(indices) {
-            let width = display_width(line);
-            line.extend((width..column).map(|_| blank_atom()));
-            line.insert(index + column.saturating_sub(width), blank_atom());
-        }
-        self.map_coordinate_state(|mut coord| {
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                lines.resize_with(height, Vec::new);
+                for line in lines {
+                    let index = boundary_index(line, column)
+                        .expect("all layer boundaries were validated before mutation");
+                    let width = display_width(line);
+                    line.extend((width..column).map(|_| blank_atom()));
+                    line.insert(index + column.saturating_sub(width), blank_atom());
+                }
+                for marker in markers {
+                    if marker.coord.column >= column {
+                        marker.coord.column = marker.coord.column.saturating_add(1);
+                    }
+                }
+            },
+        );
+        self.map_global_coordinate_state(|mut coord| {
             if coord.column >= column {
                 coord.column = coord.column.saturating_add(1);
             }
@@ -73,11 +98,22 @@ impl EditorState {
     }
 
     fn insert_blank_line(&mut self, line: usize) -> bool {
-        while self.grid.lines.len() < line {
-            self.grid.lines.push(Vec::new());
-        }
-        self.grid.lines.insert(line, Vec::new());
-        self.map_coordinate_state(|mut coord| {
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                while lines.len() < line {
+                    lines.push(Vec::new());
+                }
+                lines.insert(line, Vec::new());
+                for marker in markers {
+                    if marker.coord.line >= line {
+                        marker.coord.line = marker.coord.line.saturating_add(1);
+                    }
+                }
+            },
+        );
+        self.map_global_coordinate_state(|mut coord| {
             if coord.line >= line {
                 coord.line = coord.line.saturating_add(1);
             }
@@ -88,28 +124,60 @@ impl EditorState {
 
     fn pull_column_left(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let slots = self
-            .grid
-            .lines
-            .iter()
-            .map(|line| cell_slot(line, column))
-            .collect::<Vec<_>>();
-        if slots.contains(&CellSlot::Interior) {
+        let height = self
+            .layer_views()
+            .into_iter()
+            .map(|layer| layer.lines.len())
+            .max()
+            .unwrap_or(0);
+        let views = self.layer_views();
+        if views.iter().any(|layer| {
+            layer
+                .lines
+                .iter()
+                .any(|line| cell_slot(line, column) == CellSlot::Interior)
+        }) {
             return false;
         }
-        let removed = slots
-            .iter()
-            .map(|slot| matches!(slot, CellSlot::Exact(_)))
+        let removed = (0..height)
+            .map(|row| {
+                views.iter().any(|layer| {
+                    layer
+                        .lines
+                        .get(row)
+                        .is_some_and(|line| matches!(cell_slot(line, column), CellSlot::Exact(_)))
+                })
+            })
             .collect::<Vec<_>>();
         if !removed.iter().any(|removed| *removed) {
             return false;
         }
 
-        for (line, slot) in self.grid.lines.iter_mut().zip(slots) {
-            if let CellSlot::Exact(index) = slot {
-                line.remove(index);
-            }
-        }
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                for (row, line) in lines.iter_mut().enumerate() {
+                    if !removed.get(row).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    if let CellSlot::Exact(index) = cell_slot(line, column) {
+                        line.remove(index);
+                    }
+                }
+                markers.retain(|marker| {
+                    !(removed.get(marker.coord.line).copied().unwrap_or(false)
+                        && marker.coord.column == column)
+                });
+                for marker in markers {
+                    if removed.get(marker.coord.line).copied().unwrap_or(false)
+                        && marker.coord.column > column
+                    {
+                        marker.coord.column -= 1;
+                    }
+                }
+            },
+        );
         self.remap_after_pull(
             |coord| removed.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -124,38 +192,57 @@ impl EditorState {
 
     fn pull_column_right(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let slots = self
-            .grid
-            .lines
-            .iter()
-            .map(|line| cell_slot(line, column))
-            .collect::<Vec<_>>();
-        if slots.contains(&CellSlot::Interior) {
+        let views = self.layer_views();
+        if views.iter().any(|layer| {
+            layer
+                .lines
+                .iter()
+                .any(|line| cell_slot(line, column) == CellSlot::Interior)
+        }) {
             return false;
         }
-        let affected = self
-            .grid
-            .lines
+        let height = views
             .iter()
-            .map(|line| !line.is_empty())
+            .map(|layer| layer.lines.len())
+            .max()
+            .unwrap_or(0);
+        let affected = (0..height)
+            .map(|row| {
+                views
+                    .iter()
+                    .any(|layer| layer.lines.get(row).is_some_and(|line| !line.is_empty()))
+            })
             .collect::<Vec<_>>();
         if !affected.iter().any(|affected| *affected) {
             return false;
         }
 
-        let old_lines = self.grid.lines.clone();
-        for ((line, slot), affected) in self.grid.lines.iter_mut().zip(slots).zip(&affected) {
-            if !affected {
-                continue;
-            }
-            if let CellSlot::Exact(index) = slot {
-                line.remove(index);
-            }
-            line.insert(0, blank_atom());
-        }
-        if self.grid.lines == old_lines {
-            return false;
-        }
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                for (row, line) in lines.iter_mut().enumerate() {
+                    if !affected.get(row).copied().unwrap_or(false) || line.is_empty() {
+                        continue;
+                    }
+                    if let CellSlot::Exact(index) = cell_slot(line, column) {
+                        line.remove(index);
+                    }
+                    line.insert(0, blank_atom());
+                }
+                markers.retain(|marker| {
+                    !(affected.get(marker.coord.line).copied().unwrap_or(false)
+                        && marker.coord.column == column)
+                });
+                for marker in markers {
+                    if affected.get(marker.coord.line).copied().unwrap_or(false)
+                        && marker.coord.column < column
+                    {
+                        marker.coord.column = marker.coord.column.saturating_add(1);
+                    }
+                }
+            },
+        );
         self.remap_after_pull(
             |coord| affected.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -170,10 +257,28 @@ impl EditorState {
 
     fn pull_row_up(&mut self) -> bool {
         let target = self.grid.cursor_pos.line.saturating_add(1);
-        if target >= self.grid.lines.len() {
+        if self
+            .layer_views()
+            .into_iter()
+            .all(|layer| target >= layer.lines.len())
+        {
             return false;
         }
-        self.grid.lines.remove(target);
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                if target < lines.len() {
+                    lines.remove(target);
+                }
+                markers.retain(|marker| marker.coord.line != target);
+                for marker in markers {
+                    if marker.coord.line > target {
+                        marker.coord.line -= 1;
+                    }
+                }
+            },
+        );
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {
@@ -189,10 +294,16 @@ impl EditorState {
     fn pull_row_down(&mut self) -> bool {
         let cursor_line = self.grid.cursor_pos.line;
         if cursor_line == 0 {
-            if self.grid.lines.iter().all(Vec::is_empty)
-                && self.line_markers.is_empty()
-                && self.active_stroke.is_none()
-            {
+            let has_content = self
+                .layer_views()
+                .into_iter()
+                .any(|layer| layer.lines.iter().any(|line| !line.is_empty()));
+            let has_markers = self
+                .layers
+                .layer_contents(&self.grid.lines, &self.line_markers)
+                .into_iter()
+                .any(|(_, _, markers)| !markers.is_empty());
+            if !has_content && !has_markers && self.active_stroke.is_none() {
                 return false;
             }
             self.prepend_line();
@@ -201,19 +312,38 @@ impl EditorState {
         }
 
         let target = cursor_line - 1;
-        if target >= self.grid.lines.len() {
-            return false;
-        }
-        if self.grid.lines[..=target].iter().all(Vec::is_empty)
-            && !self
-                .line_markers
+        let has_content = self.layer_views().into_iter().any(|layer| {
+            layer
+                .lines
                 .iter()
-                .any(|marker| marker.coord.line <= target)
-        {
+                .take(target.saturating_add(1))
+                .any(|line| !line.is_empty())
+        });
+        let has_markers = self
+            .layers
+            .layer_contents(&self.grid.lines, &self.line_markers)
+            .into_iter()
+            .flat_map(|(_, _, markers)| markers)
+            .any(|marker| marker.coord.line <= target);
+        if !has_content && !has_markers {
             return false;
         }
-        self.grid.lines.remove(target);
-        self.grid.lines.insert(0, Vec::new());
+        self.layers.for_each_layer_mut(
+            &mut self.grid.lines,
+            &mut self.line_markers,
+            |_, lines, markers| {
+                if target < lines.len() {
+                    lines.remove(target);
+                }
+                lines.insert(0, Vec::new());
+                markers.retain(|marker| marker.coord.line != target);
+                for marker in markers {
+                    if marker.coord.line < target {
+                        marker.coord.line = marker.coord.line.saturating_add(1);
+                    }
+                }
+            },
+        );
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {
@@ -242,10 +372,6 @@ impl EditorState {
                 Some(stroke)
             }
         });
-        self.line_markers.retain(|marker| !deleted(marker.coord));
-        for marker in &mut self.line_markers {
-            marker.coord = map(marker.coord);
-        }
         self.shape_preview = None;
         self.cursor_index = index_for_column(
             &self.grid.lines[self.grid.cursor_pos.line],
@@ -253,15 +379,12 @@ impl EditorState {
         );
     }
 
-    fn map_coordinate_state(&mut self, mut map: impl FnMut(Coord) -> Coord) {
+    fn map_global_coordinate_state(&mut self, mut map: impl FnMut(Coord) -> Coord) {
         self.grid.cursor_pos = map(self.grid.cursor_pos);
         self.selection
             .select(map(self.selection.anchor()), map(self.selection.active()));
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end = map(stroke.end);
-        }
-        for marker in &mut self.line_markers {
-            marker.coord = map(marker.coord);
         }
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.anchor = map(preview.anchor);
