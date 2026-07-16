@@ -2671,6 +2671,27 @@ mod tests {
     }
 
     #[test]
+    fn dashed_style_honors_sharp_corner_selection() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 2,
+            option: 3,
+        });
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 3,
+            option: 1,
+        });
+
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Right, true);
+        state.move_or_draw(Direction::Down, true);
+
+        assert_eq!(contents(&state.grid.lines[0]), "╴╴┐");
+        assert_eq!(contents(&state.grid.lines[1]), "  ╵");
+    }
+
+    #[test]
     fn dashed_stroke_keeps_the_incoming_direction_when_turning_left_then_up() {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));

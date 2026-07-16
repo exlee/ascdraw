@@ -907,11 +907,12 @@ impl ToolbarState {
     fn layout(&self) -> Option<MenuLayout<'_>> {
         match self.main_mode {
             MainMode::Line => {
-                let category_count = if self.line_style() == LineStyle::Thin {
-                    4
-                } else {
-                    3
-                };
+                let category_count =
+                    if matches!(self.line_style(), LineStyle::Thin | LineStyle::Dashed) {
+                        4
+                    } else {
+                        3
+                    };
                 Some(MenuLayout {
                     labels: &LINE_LABELS[..category_count],
                     options: &LINE_OPTIONS[..category_count],
@@ -1391,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn corner_is_available_only_for_thin_lines() {
+    fn corner_is_available_for_thin_and_dashed_lines() {
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Style:"));
@@ -1412,7 +1413,11 @@ mod tests {
         }));
         assert_eq!(toolbar.line_style(), LineStyle::Dashed);
         assert_eq!(UnicodeWidthChar::width('╴'), Some(1));
-        assert!(!row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
+        assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
+        for key in ["5", "2"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
 
         assert!(toolbar.apply_action(ToolbarAction::SelectSubmenu {
             submenu: 2,

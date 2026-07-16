@@ -156,7 +156,7 @@ Space starts an orthogonal preview. Move to size the current segment, then:
 - press Escape to cancel.
 
 Line options control the start marker, end marker, style (thin, heavy, double, or dashed), and
-thin-line corner style. Dashed lines repeat `╴` horizontally and `╵` vertically.
+corner style for thin and dashed lines. Dashed lines repeat `╴` horizontally and `╵` vertically.
 
 ### Shape
 
