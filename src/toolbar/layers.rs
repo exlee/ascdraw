@@ -3,8 +3,9 @@ use unicode_width::UnicodeWidthStr;
 use crate::model::{LayerId, LayerSummary};
 
 use super::{
-    MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_prefix_span,
-    plain_span,
+    GAP, MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState,
+    menu_prefix_width, pad_right_to_width, pad_spans_to_width, plain_span, push_shortcut_path,
+    spans_width, submenu_cell_width, submenu_option_column_widths,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,33 +46,50 @@ impl ToolbarState {
         let mut spans = Vec::new();
         for (index, layer) in layers.iter().enumerate() {
             if index > 0 {
-                spans.push(plain_span("    ".to_owned()));
+                spans.push(plain_span(GAP.to_owned()));
             }
-            let cell_start = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
-                .sum::<usize>();
             let items = operations(index);
+            let labels = items.iter().map(|(label, _)| *label).collect::<Vec<_>>();
+            let path = format!("{}.", index + 2);
+            let prefix_width = menu_prefix_width(
+                &format!("Layer {}", layer.id.symbol()),
+                std::iter::once(path.as_str()),
+            );
+            let cell_width = submenu_cell_width(prefix_width, &labels);
+            let cell_start = spans_width(&spans);
             if header {
                 let label = format!("Layer {}:", layer.id.symbol());
-                spans.push(bold_prefix_span(label.clone(), &label));
-                for number in 1..=items.len() {
-                    spans.push(plain_span(format!(" {number}")));
-                }
-            } else {
-                let prefix = format!("{}.", index + 2);
                 spans.push(ToolbarSpan {
-                    contents: prefix.clone(),
-                    bold_prefix: UnicodeWidthStr::width(prefix.as_str()),
+                    contents: pad_right_to_width(label.clone(), prefix_width),
+                    bold_prefix: UnicodeWidthStr::width(label.as_str()),
                     selected: false,
-                    highlighted: self.pending_shortcut() == Some(PendingShortcut::Layer(layer.id)),
+                    highlighted: false,
                     tooltip: false,
                     action: None,
                     right_aligned: false,
                     foreground: None,
                 });
+                for (position, width) in submenu_option_column_widths(&labels)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if position > 0 {
+                        spans.push(plain_span(" ".to_owned()));
+                    }
+                    spans.push(plain_span(pad_right_to_width(
+                        (position + 1).to_string(),
+                        width,
+                    )));
+                }
+            } else {
+                let highlighted = (self.pending_shortcut()
+                    == Some(PendingShortcut::Layer(layer.id)))
+                .then_some(path.as_str());
+                push_shortcut_path(&mut spans, &path, prefix_width, highlighted);
                 for (position, (label, operation)) in items.iter().enumerate() {
-                    spans.push(plain_span(" ".to_owned()));
+                    if position > 0 {
+                        spans.push(plain_span(" ".to_owned()));
+                    }
                     spans.push(ToolbarSpan {
                         contents: (*label).to_owned(),
                         bold_prefix: 0,
@@ -89,20 +107,9 @@ impl ToolbarState {
                         right_aligned: false,
                         foreground: None,
                     });
-                    if position + 1 == items.len() {
-                        break;
-                    }
                 }
             }
-            let cell_width = if index == 0 { 24 } else { 36 };
-            let used = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
-                .sum::<usize>()
-                .saturating_sub(cell_start);
-            if used < cell_width {
-                spans.push(plain_span(" ".repeat(cell_width - used)));
-            }
+            pad_spans_to_width(&mut spans, cell_start + cell_width);
         }
         spans
     }
@@ -129,6 +136,34 @@ mod tests {
 
     fn text(spans: Vec<ToolbarSpan>) -> String {
         spans.into_iter().map(|span| span.contents).collect()
+    }
+
+    fn action_starts(spans: &[ToolbarSpan]) -> Vec<usize> {
+        let mut start = 0;
+        spans
+            .iter()
+            .filter_map(|span| {
+                let span_start = start;
+                start += UnicodeWidthStr::width(span.contents.as_str());
+                span.action.is_some().then_some(span_start)
+            })
+            .collect()
+    }
+
+    fn digit_starts(spans: &[ToolbarSpan]) -> Vec<usize> {
+        let mut start = 0;
+        spans
+            .iter()
+            .filter_map(|span| {
+                let span_start = start;
+                start += UnicodeWidthStr::width(span.contents.as_str());
+                span.contents
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .map(|_| span_start)
+            })
+            .collect()
     }
 
     fn press(toolbar: &mut ToolbarState, layers: &[LayerSummary], key: &str) {
@@ -159,10 +194,14 @@ mod tests {
 
         let header = text(toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW, &layers));
         let values = text(toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW + 1, &layers));
-        assert!(header.contains("Layer ⍺: 1 2 3"));
-        assert!(header.contains("Layer β: 1 2 3 4 5 6"));
+        assert!(header.contains("Layer ⍺: 1   2   3"));
+        assert!(header.contains("Layer β: 1   2   3   4   5   6"));
         assert!(values.contains("2. Sel Shw New"));
         assert!(values.contains("3. Sel Shw Mv↑ Mv↓ New Del"));
+        assert_eq!(
+            digit_starts(&toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW, &layers)),
+            action_starts(&toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW + 1, &layers))
+        );
 
         press(&mut toolbar, &layers, "3");
         press(&mut toolbar, &layers, "4");
