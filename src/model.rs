@@ -37,7 +37,7 @@ pub struct Coord {
 }
 
 pub const MAX_LAYERS: usize = 6;
-pub const LAYER_SYMBOLS: [&str; 10] = ["⍺", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
+pub const LAYER_SYMBOLS: [&str; 10] = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
 pub const BASE_COLORS: [&str; 8] = [
     "#000000", "#cd0000", "#00cd00", "#cdcd00", "#0000ee", "#cd00cd", "#00cdcd", "#e5e5e5",
 ];

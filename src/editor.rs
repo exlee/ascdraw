@@ -148,6 +148,7 @@ impl Editor {
     ) -> anyhow::Result<()> {
         let (stack, lines) = LayerStack::from_persisted(layers, active_layer)?;
         self.layers = stack;
+        self.toolbar.sync_layer_count(self.layers.layers().len());
         self.grid.lines = lines;
         self.line_markers.clear();
         Ok(())
@@ -161,6 +162,7 @@ impl Editor {
             .layers
             .activate(index, &mut self.grid.lines, &mut self.line_markers);
         if changed {
+            self.toolbar.sync_layer_count(self.layers.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
         }
@@ -176,6 +178,7 @@ impl Editor {
             .add_above(index, &mut self.grid.lines, &mut self.line_markers)
             .is_some();
         if changed {
+            self.toolbar.sync_layer_count(self.layers.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
         }
@@ -208,6 +211,7 @@ impl Editor {
             .layers
             .delete(index, &mut self.grid.lines, &mut self.line_markers);
         if changed {
+            self.toolbar.sync_layer_count(self.layers.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
         }
@@ -296,6 +300,7 @@ impl Editor {
         self.line_markers = snapshot.line_markers;
         self.canvas_origin = snapshot.canvas_origin;
         self.layers = snapshot.layers;
+        self.toolbar.sync_layer_count(self.layers.layers().len());
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -347,6 +352,7 @@ impl Editor {
         self.single_replace_pending = false;
         self.collapse_selection();
         self.toolbar.restore_durable_selections(selections);
+        self.toolbar.sync_layer_count(self.layers.layers().len());
         self.sync_cursor_mode_with_toolbar();
     }
 
@@ -483,6 +489,7 @@ impl Editor {
             self.cancel_move_lift();
         }
         let dark_was_enabled = self.toolbar.dark_mode();
+        let old_mode = self.toolbar.main_mode();
         if !self.toolbar.apply_action(action) {
             return false;
         }
@@ -490,6 +497,11 @@ impl Editor {
         if self.toolbar.dark_mode() != dark_was_enabled {
             reverse_theme_colors(&mut self.theme);
             self.sync_theme_faces();
+        }
+        if matches!(action, ToolbarAction::Toggle(_)) && self.toolbar.main_mode() != old_mode {
+            self.end_stroke();
+            self.shape_preview = None;
+            self.sync_cursor_mode_with_toolbar();
         }
         if matches!(
             action,
@@ -936,6 +948,7 @@ impl Editor {
 
     pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
         self.layers.reset();
+        self.toolbar.sync_layer_count(self.layers.layers().len());
         self.grid.lines = if lines.is_empty() {
             vec![Vec::new()]
         } else {
@@ -1292,6 +1305,19 @@ mod tests {
         assert_eq!(editor.state(), EditorState::UtilityMode);
         assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Layers)));
         assert_eq!(editor.state(), EditorState::NavigationMode);
+    }
+
+    #[test]
+    fn disabling_multi_layer_mode_returns_the_editor_to_stamp() {
+        let mut editor = state();
+        assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
+        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleLayers));
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Layers);
+        assert_eq!(editor.cursor_mode, CursorMode::Navigation);
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(editor.cursor_mode, CursorMode::Stamp);
     }
 
     #[test]

@@ -300,6 +300,7 @@ pub struct ToolbarState {
     pending_export_action: Option<ExportAction>,
     successful_export_action: Option<ExportAction>,
     pending_layer_action: Option<(LayerId, LayerOperation)>,
+    layer_count: usize,
     active_color: ColorId,
 }
 
@@ -323,6 +324,7 @@ pub enum ToolbarAction {
         option: usize,
     },
     ToggleExportMenu,
+    ToggleLayers,
     Toggle(ToggleKind),
     Layer {
         layer: LayerId,
@@ -337,6 +339,7 @@ const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
 const EXPORT_MODE_OFFSET: usize = 2;
 const EXPORT_CLEAR_DIGIT: usize = 9;
 const FILES_TOGGLE_DIGIT: usize = 5;
+const LAYERS_DIGIT: usize = 8;
 pub(crate) const FILES_TOGGLE_CATEGORY: usize = EXPORT_LABELS.len();
 const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
@@ -374,6 +377,7 @@ impl ToolbarState {
         modifiers: ModifiersState,
         layers: &[LayerSummary],
     ) -> bool {
+        self.sync_layer_count(layers.len());
         if matches!(key, Key::Named(NamedKey::Escape))
             && (self.shortcut_prefix.is_some() || self.export_open)
         {
@@ -401,6 +405,13 @@ impl ToolbarState {
                     self.toggle_export_menu();
                 } else if self.export_open {
                     self.select_export_mode_digit(digit);
+                } else if digit == LAYERS_DIGIT && self.multi_layer_mode() {
+                    self.toggle_layers_mode();
+                } else if self.main_mode == MainMode::Layers {
+                    self.shortcut_prefix = digit
+                        .checked_sub(1)
+                        .and_then(|index| layers.get(index))
+                        .map(|layer| PendingShortcut::Layer(layer.id));
                 } else if digit == 1 {
                     self.shortcut_prefix = Some(PendingShortcut::Mode);
                 } else if self.main_mode == MainMode::Utilities
@@ -409,11 +420,6 @@ impl ToolbarState {
                         .filter(|option| *option < UTILITY_OPTIONS[0].len())
                 {
                     self.apply_action(ToolbarAction::SelectSubmenu { submenu: 0, option });
-                } else if self.main_mode == MainMode::Layers {
-                    self.shortcut_prefix = digit
-                        .checked_sub(2)
-                        .and_then(|index| layers.get(index))
-                        .map(|layer| PendingShortcut::Layer(layer.id));
                 } else if self.main_mode == MainMode::Colors {
                     self.shortcut_prefix = digit
                         .checked_sub(2)
@@ -521,13 +527,23 @@ impl ToolbarState {
 
     pub fn available_modes(&self) -> Vec<MainMode> {
         let mut modes = MainMode::ALL.to_vec();
-        if self.multi_layer_mode() {
-            modes.push(MainMode::Layers);
-        }
         if self.multi_color_mode() {
             modes.push(MainMode::Colors);
         }
         modes
+    }
+
+    pub(super) fn sync_layer_count(&mut self, layer_count: usize) {
+        self.layer_count = layer_count;
+    }
+
+    fn toggle_layers_mode(&mut self) {
+        self.close_export_menu();
+        self.main_mode = if self.main_mode == MainMode::Layers {
+            MainMode::Stamp
+        } else {
+            MainMode::Layers
+        };
     }
 
     fn queue_export(&mut self, action: ExportAction) {
@@ -637,7 +653,7 @@ impl ToolbarState {
             return 1;
         }
         if self.main_mode == MainMode::Layers {
-            return 2;
+            return 1 + self.layer_count.max(1);
         }
         if self.main_mode == MainMode::Colors {
             return 2;
@@ -971,6 +987,13 @@ impl ToolbarState {
             }
             ToolbarAction::ToggleExportMenu => {
                 self.toggle_export_menu();
+                true
+            }
+            ToolbarAction::ToggleLayers => {
+                if !self.multi_layer_mode() {
+                    return false;
+                }
+                self.toggle_layers_mode();
                 true
             }
             ToolbarAction::Toggle(toggle) => {

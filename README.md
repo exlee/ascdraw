@@ -116,14 +116,16 @@ The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and do
 Press `0 5` to select Togls in the Files/Togls menu. Dark Mode (`0 5 1`) reverses the default
 foreground and background while preserving explicit selection, highlight, cursor, and tooltip
 accent colors. Multi Color Mode (`0 5 2`) adds the Colors mode, and Multi Layer Mode (`0 5 3`)
-adds the Layers mode.
+adds the dedicated Layers surface at `8`.
 
 Colors provides base and bright eight-color ANSI-style palettes. The selected color applies only to
 future nonblank text, replacements, stamps, lines, shapes, and pasted text. Existing glyph colors
 and colors carried by move/cut operations are preserved. TXT export ignores color; PNG keeps it.
 
-Layers are ordered bottom-to-top. Select, hide/show, reorder, add, or delete them from the Layers
-menu; the base `⍺` layer cannot be moved or deleted. Editing affects only the selected layer.
+Layers are ordered bottom-to-top. Enable Multi Layer Mode, then press `8`, a layer row, and an
+operation column. Column `1` selects by its Greek symbol; columns `2` through `7` select, hide/show,
+move up, move down, add, or delete. The base `α` layer cannot be moved or deleted. Editing affects
+only the selected layer.
 TXT export chooses the highest visible nonblank glyph at each position, while PNG preserves every
 visible layer.
 
