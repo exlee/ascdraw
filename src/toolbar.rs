@@ -167,11 +167,20 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     " ", "▷", "▶", "→", "▹", "▸", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø",
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
+const LINE_STYLE_OPTIONS: [&str; 4] = ["─", "━", "═", "╴"];
+const LINE_CORNER_OPTIONS: [&str; 2] = ["Smooth", "Sharp"];
+const LINE_CORNER_LABELS: [&str; 2] = ["Smth", "Shrp"];
 const LINE_OPTIONS: [&[&str]; 4] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
-    &["─", "━", "═", "╴"],
-    &["Smooth", "Sharp"],
+    &LINE_STYLE_OPTIONS,
+    &LINE_CORNER_OPTIONS,
+];
+const LINE_DISPLAY_OPTIONS: [&[&str]; 4] = [
+    &LINE_START_OPTIONS,
+    &LINE_END_OPTIONS,
+    &LINE_STYLE_OPTIONS,
+    &LINE_CORNER_LABELS,
 ];
 // Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
 // lines remain the responsibility of the connection-mask engine in drawing.rs;
@@ -915,7 +924,7 @@ impl ToolbarState {
                     };
                 Some(MenuLayout {
                     labels: &LINE_LABELS[..category_count],
-                    options: &LINE_OPTIONS[..category_count],
+                    options: &LINE_DISPLAY_OPTIONS[..category_count],
                     selected: &self.line_selected[..category_count],
                     exclusive_submenu: None,
                 })
@@ -1428,7 +1437,7 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smooth Sharp"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smth Shrp"));
     }
 
     #[test]
