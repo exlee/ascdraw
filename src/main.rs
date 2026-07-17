@@ -475,6 +475,7 @@ fn try_main() -> Result<ExitCode> {
                         WindowEvent::CursorMoved { position, .. } => {
                             #[cfg(target_os = "macos")]
                             editor.note_cursor_activity(Instant::now());
+                            editor.mouse_position = Some((position.x, position.y));
                             editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
                                 position.x,
                                 position.y,
@@ -494,6 +495,21 @@ fn try_main() -> Result<ExitCode> {
                                 editor.viewport,
                             );
                             editor.continue_mouse_drag();
+                        }
+                        WindowEvent::MouseWheel { delta, .. } => {
+                            if editor.pan_from_scroll(delta)
+                                && let Some((x, y)) = editor.mouse_position
+                            {
+                                editor.mouse_cell = pointer_position_to_coord(
+                                    x,
+                                    y,
+                                    &editor.renderer,
+                                    editor.window.scale_factor(),
+                                    &config,
+                                    &editor.state.toolbar,
+                                    editor.viewport,
+                                );
+                            }
                         }
                         WindowEvent::MouseInput {
                             state: ElementState::Pressed,

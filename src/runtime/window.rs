@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use anyhow::anyhow;
 use anyhow::{Context, Result};
+use winit::event::MouseScrollDelta;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -121,9 +122,11 @@ pub struct EditorWindow {
     pub surface: WindowSurface,
     pub modifiers: ModifiersState,
     pub ordered_modifiers: OrderedModifierTracker,
+    pub mouse_position: Option<(f64, f64)>,
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_drag: Option<MouseDrag>,
+    scroll_delta: ScrollDeltaAccumulator,
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -156,6 +159,23 @@ struct MouseDrag {
 enum MouseDragOverride {
     Control,
     Space,
+}
+
+#[derive(Debug, Default)]
+struct ScrollDeltaAccumulator {
+    x: f64,
+    y: f64,
+}
+
+impl ScrollDeltaAccumulator {
+    fn whole_pixels(&mut self, delta: (f64, f64)) -> (i64, i64) {
+        self.x += delta.0;
+        self.y += delta.1;
+        let whole = (self.x.trunc() as i64, self.y.trunc() as i64);
+        self.x -= whole.0 as f64;
+        self.y -= whole.1 as f64;
+        whole
+    }
 }
 
 fn finish_mouse_drag_state(state: &mut Editor, input_override: Option<MouseDragOverride>) -> bool {
@@ -704,6 +724,49 @@ impl EditorWindow {
         changed
     }
 
+    pub fn pan_from_scroll(&mut self, delta: MouseScrollDelta) -> bool {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        let pixel_delta = scroll_delta_in_pixels(delta, cell_size);
+        let pixel_delta = self.scroll_delta.whole_pixels(pixel_delta);
+        if pixel_delta == (0, 0) {
+            return false;
+        }
+
+        let layout = self.current_layout();
+        let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
+        let content = self.state.content_cells();
+        self.view_cursor_anchor.get_or_insert_with(|| {
+            ViewCursorAnchor::capture(
+                self.state.grid.cursor_pos,
+                self.viewport,
+                cell_size,
+                layout.grid_top,
+            )
+        });
+
+        let horizontal = pan_viewport_by_pixels(
+            &mut self.viewport,
+            (pixel_delta.0, 0),
+            cell_size,
+            viewport_cells,
+            &content,
+        );
+        let vertical = pan_viewport_by_pixels(
+            &mut self.viewport,
+            (0, pixel_delta.1),
+            cell_size,
+            viewport_cells,
+            &content,
+        );
+        let changed = horizontal || vertical;
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
     pub fn apply_jump_viewport_pan(&mut self) -> bool {
         let pan = self.state.take_jump_viewport_pan();
         if pan == JumpViewportPan::default() {
@@ -818,15 +881,38 @@ fn pan_viewport(
     viewport_cells: (usize, usize),
     content: &[Coord],
 ) -> bool {
-    let mut candidate = *viewport;
     let cell_width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
     let cell_height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
-    match direction {
-        Direction::Left => candidate.x = candidate.x.saturating_add(cell_width),
-        Direction::Right => candidate.x = candidate.x.saturating_sub(cell_width),
-        Direction::Up => candidate.y = candidate.y.saturating_add(cell_height),
-        Direction::Down => candidate.y = candidate.y.saturating_sub(cell_height),
+    let delta = match direction {
+        Direction::Left => (cell_width, 0),
+        Direction::Right => (-cell_width, 0),
+        Direction::Up => (0, cell_height),
+        Direction::Down => (0, -cell_height),
+    };
+    pan_viewport_by_pixels(viewport, delta, cell_size, viewport_cells, content)
+}
+
+fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (usize, usize)) -> (f64, f64) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (
+            f64::from(x) * cell_size.0.max(1) as f64,
+            f64::from(y) * cell_size.1.max(1) as f64,
+        ),
+        MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
     }
+}
+
+fn pan_viewport_by_pixels(
+    viewport: &mut ViewportOffset,
+    delta: (i64, i64),
+    cell_size: (usize, usize),
+    viewport_cells: (usize, usize),
+    content: &[Coord],
+) -> bool {
+    let candidate = ViewportOffset {
+        x: viewport.x.saturating_add(delta.0),
+        y: viewport.y.saturating_add(delta.1),
+    };
     let origin = candidate.origin(cell_size);
     if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, content) {
         return false;
@@ -1015,9 +1101,11 @@ pub fn create_editor_window(
         surface,
         modifiers: ModifiersState::empty(),
         ordered_modifiers: OrderedModifierTracker::default(),
+        mouse_position: None,
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
         mouse_drag: None,
+        scroll_delta: ScrollDeltaAccumulator::default(),
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
@@ -1187,6 +1275,7 @@ mod tests {
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
     use crate::model::{Atom, Direction, Face};
     use crate::toolbar::{MainMode, ToolbarAction};
+    use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
 
     #[derive(Default)]
@@ -1303,6 +1392,52 @@ mod tests {
             ));
         }
         assert_eq!(viewport, original);
+    }
+
+    #[test]
+    fn scroll_lines_map_to_canvas_cells_and_pixels_remain_precise() {
+        assert_eq!(
+            scroll_delta_in_pixels(MouseScrollDelta::LineDelta(2.0, -3.0), (9, 13)),
+            (18.0, -39.0),
+        );
+        assert_eq!(
+            scroll_delta_in_pixels(
+                MouseScrollDelta::PixelDelta(PhysicalPosition::new(1.25, -2.75)),
+                (9, 13),
+            ),
+            (1.25, -2.75),
+        );
+
+        let mut accumulator = ScrollDeltaAccumulator::default();
+        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (0, 0));
+        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (0, 0));
+        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (1, -1));
+        assert_eq!(accumulator.whole_pixels((-0.4, 0.4)), (0, 0));
+    }
+
+    #[test]
+    fn scroll_pan_moves_by_pixels_and_keeps_content_inside_the_viewport() {
+        let cell_size = (8, 12);
+        let viewport_cells = (10, 10);
+        let content = [Coord { line: 3, column: 3 }];
+        let mut viewport = ViewportOffset::default();
+
+        assert!(pan_viewport_by_pixels(
+            &mut viewport,
+            (5, 7),
+            cell_size,
+            viewport_cells,
+            &content,
+        ));
+        assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
+        assert!(!pan_viewport_by_pixels(
+            &mut viewport,
+            (-80, 0),
+            cell_size,
+            viewport_cells,
+            &content,
+        ));
+        assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
     }
 
     #[test]
