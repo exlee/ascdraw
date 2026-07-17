@@ -126,6 +126,7 @@ pub struct EditorWindow {
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_drag: Option<MouseDrag>,
+    last_line_click: Option<(Instant, Coord)>,
     scroll_pan: ScrollPan,
     pinch_zoom_remainder: f64,
     wheel_zoom_remainder: f64,
@@ -160,7 +161,22 @@ struct MouseDrag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseDragOverride {
     Control,
+    Line,
     Space,
+}
+
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+
+fn is_line_double_click(
+    previous: Option<(Instant, Coord)>,
+    now: Instant,
+    coord: Coord,
+    moved: bool,
+) -> bool {
+    !moved
+        && previous.is_some_and(|(at, previous_coord)| {
+            previous_coord == coord && now.saturating_duration_since(at) <= DOUBLE_CLICK_INTERVAL
+        })
 }
 
 #[derive(Debug, Default)]
@@ -215,9 +231,12 @@ impl EditorWindow {
     pub fn begin_mouse_drag(&mut self, coord: Coord) {
         self.state.cancel_jump();
         let input_override = if self.modifiers == ModifiersState::empty() {
-            match self.state.cursor_mode {
-                crate::app::CursorMode::MoveDraw => Some(MouseDragOverride::Control),
-                crate::app::CursorMode::Stamp | crate::app::CursorMode::Shapes => {
+            match (self.state.toolbar.main_mode(), self.state.cursor_mode) {
+                (crate::toolbar::MainMode::Line, crate::app::CursorMode::MoveDraw) => {
+                    Some(MouseDragOverride::Line)
+                }
+                (_, crate::app::CursorMode::MoveDraw) => Some(MouseDragOverride::Control),
+                (_, crate::app::CursorMode::Stamp | crate::app::CursorMode::Shapes) => {
                     Some(MouseDragOverride::Space)
                 }
                 _ => None,
@@ -225,18 +244,34 @@ impl EditorWindow {
         } else {
             None
         };
+        let previous_state = self.state.clone();
+        let previous_viewport = self.viewport;
         let target = self.state.cursor_target_for_coord(coord);
-        let preserve_selection =
-            self.modifiers == ModifiersState::ALT && !self.state.selection.is_collapsed();
-        if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
-            self.finish_history_transaction();
-            self.state.move_to(coord);
-            self.finish_navigation(origin);
+        if input_override == Some(MouseDragOverride::Line) {
+            if self.state.has_line_preview() {
+                self.state.move_line_preview_to(target);
+            } else {
+                if let Some(origin) = self.navigation_origin_for(target) {
+                    self.finish_history_transaction();
+                    self.state.move_to(coord);
+                    self.finish_navigation(origin);
+                }
+                self.state.start_or_advance_line_preview();
+            }
             self.request_redraw();
+        } else {
+            let preserve_selection =
+                self.modifiers == ModifiersState::ALT && !self.state.selection.is_collapsed();
+            if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
+                self.finish_history_transaction();
+                self.state.move_to(coord);
+                self.finish_navigation(origin);
+                self.request_redraw();
+            }
         }
         self.mouse_drag = Some(MouseDrag {
-            previous_state: self.state.clone(),
-            previous_viewport: self.viewport,
+            previous_state,
+            previous_viewport,
             last_pointer: target,
             active: false,
             document_changed: false,
@@ -269,9 +304,17 @@ impl EditorWindow {
             }
             drag.active = true;
         }
+        if drag.input_override == Some(MouseDragOverride::Line) {
+            self.state.move_line_preview_to(target);
+            drag.last_pointer = target;
+            self.mouse_drag = Some(drag);
+            self.request_redraw();
+            return;
+        }
         let (modifiers, space_held) = match drag.input_override {
             Some(MouseDragOverride::Control) => (ModifiersState::CONTROL, false),
             Some(MouseDragOverride::Space) => (ModifiersState::empty(), true),
+            Some(MouseDragOverride::Line) => unreachable!("line drags return above"),
             None => (self.modifiers, false),
         };
         while drag.last_pointer.column != target.column {
@@ -322,6 +365,10 @@ impl EditorWindow {
         let Some(drag) = self.mouse_drag.take() else {
             return;
         };
+        if drag.input_override == Some(MouseDragOverride::Line) {
+            self.finish_line_mouse_gesture(drag);
+            return;
+        }
         if !drag.active {
             return;
         }
@@ -336,6 +383,52 @@ impl EditorWindow {
             self.mark_document_dirty();
         }
         self.request_redraw();
+    }
+
+    fn finish_line_mouse_gesture(&mut self, drag: MouseDrag) {
+        let now = Instant::now();
+        let coord = drag.last_pointer;
+        let moved = self
+            .state
+            .line_preview_anchor()
+            .is_some_and(|anchor| anchor != coord);
+        let double_click = is_line_double_click(self.last_line_click, now, coord, moved);
+        let document_changed = if moved {
+            self.state.start_or_advance_line_preview()
+        } else if double_click {
+            self.state.finish_line_preview()
+        } else {
+            false
+        };
+        if drag.active && moved {
+            self.state.finish_line_preview();
+        }
+        let recorded = self.finish_grouped_state_change(
+            drag.previous_state,
+            drag.previous_viewport,
+            document_changed,
+            HistoryGroup::LineRoute,
+        );
+        if !self.state.has_line_preview() {
+            self.finish_history_transaction();
+            self.last_line_click = None;
+        } else {
+            self.last_line_click = Some((now, coord));
+        }
+        if recorded {
+            self.mark_document_dirty();
+        }
+        self.request_redraw();
+    }
+
+    pub fn continue_passive_line_preview(&mut self) {
+        if self.mouse_drag.is_none()
+            && self.modifiers == ModifiersState::empty()
+            && let Some(coord) = self.mouse_cell
+            && self.state.move_line_preview_to(coord)
+        {
+            self.request_redraw();
+        }
     }
 
     pub fn request_redraw(&self) {
@@ -1327,6 +1420,7 @@ pub fn create_editor_window(
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
         mouse_drag: None,
+        last_line_click: None,
         scroll_pan: ScrollPan::default(),
         pinch_zoom_remainder: 0.0,
         wheel_zoom_remainder: 0.0,
@@ -1501,6 +1595,36 @@ mod tests {
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    #[test]
+    fn line_double_click_requires_same_stationary_cell_within_interval() {
+        let first = Instant::now();
+        let coord = Coord { line: 2, column: 3 };
+        assert!(is_line_double_click(
+            Some((first, coord)),
+            first + DOUBLE_CLICK_INTERVAL,
+            coord,
+            false,
+        ));
+        assert!(!is_line_double_click(
+            Some((first, coord)),
+            first + DOUBLE_CLICK_INTERVAL + Duration::from_millis(1),
+            coord,
+            false,
+        ));
+        assert!(!is_line_double_click(
+            Some((first, coord)),
+            first + Duration::from_millis(10),
+            Coord { line: 2, column: 4 },
+            false,
+        ));
+        assert!(!is_line_double_click(
+            Some((first, coord)),
+            first + Duration::from_millis(10),
+            coord,
+            true,
+        ));
+    }
 
     #[derive(Default)]
     struct NoopExportPlatform;

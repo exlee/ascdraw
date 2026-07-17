@@ -1,9 +1,10 @@
-use winit::keyboard::{Key, ModifiersState};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::editor::Editor;
 use crate::history::HistoryGroup;
 use crate::input::{EditCommand, OrderedModifierTracker, edit_command, ordered_direction_command};
 use crate::model::Coord;
+use crate::toolbar::MainMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangePolicy {
@@ -18,6 +19,13 @@ pub fn history_group_for_key(
     modifiers: ModifiersState,
     ordered_modifiers: &OrderedModifierTracker,
 ) -> Option<HistoryGroup> {
+    if state.has_line_preview()
+        || (state.toolbar.main_mode() == MainMode::Line
+            && modifiers == ModifiersState::empty()
+            && matches!(key, Key::Named(NamedKey::Space)))
+    {
+        return Some(HistoryGroup::LineRoute);
+    }
     if state.cursor_mode.accepts_text() {
         return Some(HistoryGroup::TextSession);
     }
@@ -38,7 +46,7 @@ pub fn change_policy_for_key(
     modifiers: ModifiersState,
     ordered_modifiers: &OrderedModifierTracker,
 ) -> ChangePolicy {
-    if state.jump_active() || state.move_lift_active() || state.has_line_preview() {
+    if state.jump_active() || state.move_lift_active() {
         return ChangePolicy::Edit;
     }
     if state.cursor_mode.accepts_text()

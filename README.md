@@ -71,7 +71,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Jump across the visible canvas | `m`, then `hjkl` or arrow keys |
 | Pan around the canvas | scroll or two-finger drag |
 | Zoom the canvas | pinch or Ctrl/Cmd + scroll |
-| Use the active tool with the mouse | click-drag (unmodified Line holds Ctrl; Stamp/Shape hold Space) |
+| Use the active tool with the mouse | click or click-drag (Line routes; Stamp/Shape hold Space) |
 | Draw or apply the active Line/Stamp/Utils operation | Ctrl + direction |
 | Place the active stamp | Space |
 | Grow the rectangular selection | Shift + direction |
@@ -150,15 +150,21 @@ quadrant blocks.
 Ctrl + direction draws connected lines immediately. Starting on an existing segment extends the
 connection; corners, tees, and crossings update automatically.
 
-Space starts an orthogonal preview. Move to size the current segment, then:
+Space starts a routed preview. Move freely to reroute the current segment, then:
 
-- press Space to anchor another segment;
-- press Space again without moving to commit;
-- press Backspace to remove the latest anchor;
-- press Escape to cancel.
+- press Space to commit the segment and start from its new anchor;
+- press Space again without moving to finish;
+- press Backspace to remove the latest committed segment;
+- press Escape to cancel the live segment while keeping committed segments.
 
-Line options control the start marker, end marker, style (thin, heavy, double, or dashed), and
-corner style for thin and dashed lines. Dashed lines repeat `╴` horizontally and `╵` vertically.
+With the mouse, click once to anchor, move to preview, and click to commit another segment. Double
+click finishes. A press-drag-release commits one segment and finishes immediately. Shift- and
+Alt-drag keep their selection and move behavior.
+
+Line options control the start marker, end marker, style (thin, heavy, double, or dashed), routing
+(`H->V`, `V->H`, horizontal/vertical diagonal, or stairs), and corner style for thin and dashed
+lines. Routing changes affect only the live or next segment. Dashed lines repeat `╴` horizontally
+and `╵` vertically.
 
 ### Shape
 

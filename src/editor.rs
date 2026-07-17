@@ -25,6 +25,7 @@ mod layers;
 mod line_preview;
 mod line_tool;
 mod move_tool;
+mod routing;
 mod shape_tool;
 mod state;
 mod text_tool;
@@ -241,7 +242,11 @@ impl Editor {
     }
     pub fn edit_snapshot(&self) -> EditSnapshot {
         let (lines, cursor_pos, cursor_index, selection, line_markers, canvas_origin) =
-            if let Some(preview) = self.line_preview.as_ref() {
+            if let Some(preview) = self
+                .line_preview
+                .as_ref()
+                .filter(|preview| !preview.has_committed_segments())
+            {
                 (
                     preview.source_lines.clone(),
                     preview.source_cursor,
@@ -433,6 +438,7 @@ impl Editor {
         let dark_was_enabled = self.toolbar.dark_mode();
         let old_mode = self.toolbar.main_mode();
         let old_utility = self.toolbar.utility_kind();
+        let old_routing = self.toolbar.routing_mode();
         if !self
             .toolbar
             .handle_shortcut_with_layers(key, modifiers, &self.layer_summaries())
@@ -453,6 +459,9 @@ impl Editor {
             self.shape_preview = None;
             self.sync_cursor_mode_with_toolbar();
         }
+        if self.has_line_preview() && self.toolbar.routing_mode() != old_routing {
+            self.refresh_line_preview_render();
+        }
         if self.move_lift.is_some()
             && (self.toolbar.export_menu_open()
                 || self.toolbar.toggles_menu_open()
@@ -467,7 +476,12 @@ impl Editor {
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
         self.toolbar_document_changed = false;
         self.cancel_jump();
-        self.cancel_line_preview();
+        let updates_live_route = self.has_line_preview()
+            && matches!(action, ToolbarAction::SelectSubmenu { submenu: 3, .. })
+            && self.toolbar.main_mode() == MainMode::Line;
+        if !updates_live_route {
+            self.cancel_line_preview();
+        }
         if self.move_lift.is_some() {
             self.cancel_move_lift();
         }
@@ -493,6 +507,9 @@ impl Editor {
         self.shape_preview = None;
         self.move_lift = None;
         self.sync_cursor_mode_with_toolbar();
+        if updates_live_route {
+            self.refresh_line_preview_render();
+        }
         true
     }
 
@@ -2679,7 +2696,7 @@ mod tests {
             option: 3,
         });
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 3,
+            submenu: 4,
             option: 1,
         });
 

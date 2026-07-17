@@ -24,6 +24,25 @@ pub(super) struct PlacedLineMarker {
 
 impl Editor {
     pub fn move_or_draw(&mut self, direction: Direction, draw: bool) -> bool {
+        self.move_or_draw_with_endings(
+            direction,
+            draw,
+            self.toolbar.line_start(),
+            self.toolbar.line_end(),
+        )
+    }
+
+    pub(super) fn move_or_draw_routed(&mut self, direction: Direction) -> bool {
+        self.move_or_draw_with_endings(direction, true, LineEnding::None, LineEnding::None)
+    }
+
+    fn move_or_draw_with_endings(
+        &mut self,
+        direction: Direction,
+        draw: bool,
+        selected_start: LineEnding,
+        selected_end: LineEnding,
+    ) -> bool {
         let prepended = self.prepare_adjacent(direction);
         let from = self.grid.cursor_pos;
         let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
@@ -56,7 +75,7 @@ impl Editor {
             } else {
                 (
                     self.cell_contents(from).is_some_and(is_line_glyph),
-                    self.toolbar.line_end(),
+                    selected_end,
                     None,
                 )
             };
@@ -87,13 +106,7 @@ impl Editor {
             && !from_was_existing_line
             && let Some(from_base) = from_base
         {
-            self.apply_line_ending(
-                from,
-                self.toolbar.line_start(),
-                direction,
-                line_style,
-                &from_base,
-            );
+            self.apply_line_ending(from, selected_start, direction, line_style, &from_base);
         }
         if !to_was_existing_line {
             self.apply_line_ending(
@@ -215,7 +228,7 @@ impl Editor {
         }
     }
 
-    fn apply_line_ending(
+    pub(super) fn apply_line_ending(
         &mut self,
         coord: Coord,
         ending: LineEnding,
@@ -252,6 +265,38 @@ impl Editor {
             replace_cell(&mut self.grid.lines, coord, contents);
             self.color_written_cell(coord);
         }
+    }
+
+    pub(super) fn write_diagonal_cell(
+        &mut self,
+        coord: Coord,
+        glyph: &str,
+        overwrite_active_endpoint: bool,
+        consume_marker: bool,
+    ) -> bool {
+        let cell_boundary_is_writable = self.grid.lines.get(coord.line).is_none_or(|line| {
+            let (index, column) = index_and_column_for_coord(line, coord.column);
+            column == coord.column
+                || index == line.len()
+                || line.get(index).is_some_and(grid::is_blank_run)
+        });
+        if !cell_boundary_is_writable {
+            return false;
+        }
+        if consume_marker && let Some(marker) = self.take_line_marker(coord) {
+            self.set_cell_contents(coord, marker.base_glyph);
+        }
+        let writable = self.cell_contents(coord).is_none_or(|contents| {
+            contents.chars().all(char::is_whitespace)
+                || matches!(contents, "╱" | "╲")
+                || (overwrite_active_endpoint && is_line_glyph(contents))
+        });
+        if !writable {
+            return false;
+        }
+        replace_cell(&mut self.grid.lines, coord, glyph.to_owned());
+        self.color_written_cell(coord);
+        true
     }
 
     pub fn end_stroke(&mut self) {

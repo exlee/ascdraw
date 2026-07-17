@@ -158,7 +158,7 @@ fn clipped_to_width(contents: &str, max_width: usize) -> (String, usize) {
     (clipped, width)
 }
 
-const LINE_LABELS: [&str; 4] = ["Start", "End", "Style", "Corner"];
+const LINE_LABELS: [&str; 5] = ["Start", "End", "Style", "Routing", "Corner"];
 const LINE_START_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     " ", "◁", "◀", "←", "◃", "◂", "↔", "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø",
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
@@ -168,20 +168,71 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
 const LINE_STYLE_OPTIONS: [&str; 4] = ["─", "━", "═", "╴"];
+const LINE_ROUTING_OPTIONS: [&str; 5] = ["H->V", "V->H", "H-Diag", "V-Diag", "Stairs"];
 const LINE_CORNER_OPTIONS: [&str; 2] = ["Smooth", "Sharp"];
 const LINE_CORNER_LABELS: [&str; 2] = ["Smth", "Shrp"];
-const LINE_OPTIONS: [&[&str]; 4] = [
+const LINE_OPTIONS: [&[&str]; 5] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
     &LINE_STYLE_OPTIONS,
+    &LINE_ROUTING_OPTIONS,
     &LINE_CORNER_OPTIONS,
 ];
-const LINE_DISPLAY_OPTIONS: [&[&str]; 4] = [
+const LINE_DISPLAY_OPTIONS: [&[&str]; 5] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
     &LINE_STYLE_OPTIONS,
+    &LINE_ROUTING_OPTIONS,
     &LINE_CORNER_LABELS,
 ];
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingMode {
+    #[default]
+    HorizontalVertical,
+    VerticalHorizontal,
+    HorizontalDiagonal,
+    VerticalDiagonal,
+    Stairs,
+}
+
+impl RoutingMode {
+    const fn from_index(index: usize) -> Self {
+        match index {
+            0 => Self::HorizontalVertical,
+            1 => Self::VerticalHorizontal,
+            2 => Self::HorizontalDiagonal,
+            3 => Self::VerticalDiagonal,
+            4 => Self::Stairs,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(super) const fn durable_name(self) -> &'static str {
+        match self {
+            Self::HorizontalVertical => "horizontal-vertical",
+            Self::VerticalHorizontal => "vertical-horizontal",
+            Self::HorizontalDiagonal => "horizontal-diagonal",
+            Self::VerticalDiagonal => "vertical-diagonal",
+            Self::Stairs => "stairs",
+        }
+    }
+
+    pub(super) fn from_durable_name(name: &str) -> Option<Self> {
+        match name {
+            "horizontal-vertical" => Some(Self::HorizontalVertical),
+            "vertical-horizontal" => Some(Self::VerticalHorizontal),
+            "horizontal-diagonal" => Some(Self::HorizontalDiagonal),
+            "vertical-diagonal" => Some(Self::VerticalDiagonal),
+            "stairs" => Some(Self::Stairs),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn index(self) -> usize {
+        self as usize
+    }
+}
 // Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
 // lines remain the responsibility of the connection-mask engine in drawing.rs;
 // only the three standalone diagonal operators are repeated here.
@@ -785,8 +836,12 @@ impl ToolbarState {
         line_ending(self.line_selected[1])
     }
 
+    pub fn routing_mode(&self) -> RoutingMode {
+        RoutingMode::from_index(self.line_selected[3])
+    }
+
     pub fn line_corner(&self) -> CornerStyle {
-        match self.line_selected[3] {
+        match self.line_selected[4] {
             0 => CornerStyle::Smooth,
             1 => CornerStyle::Sharp,
             _ => unreachable!("line corner selection is always normalized"),
@@ -918,9 +973,9 @@ impl ToolbarState {
             MainMode::Line => {
                 let category_count =
                     if matches!(self.line_style(), LineStyle::Thin | LineStyle::Dashed) {
-                        4
+                        5
                     } else {
-                        3
+                        4
                     };
                 Some(MenuLayout {
                     labels: &LINE_LABELS[..category_count],
@@ -1423,7 +1478,7 @@ mod tests {
         assert_eq!(toolbar.line_style(), LineStyle::Dashed);
         assert_eq!(UnicodeWidthChar::width('╴'), Some(1));
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Corner:"));
-        for key in ["5", "2"] {
+        for key in ["6", "2"] {
             press(&mut toolbar, key);
         }
         assert_eq!(toolbar.line_corner(), CornerStyle::Sharp);
@@ -1437,7 +1492,8 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. Smth Shrp"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. H->V V->H H-Diag V-Diag Stairs"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("6. Smth Shrp"));
     }
 
     #[test]

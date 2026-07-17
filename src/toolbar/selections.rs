@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::ColorId;
 
 use super::{
-    LINE_OPTIONS, MainMode, SHAPE_OPTIONS, STAMP_LABELS, STAMP_OPTIONS, ToolbarState,
+    LINE_OPTIONS, MainMode, RoutingMode, SHAPE_OPTIONS, STAMP_LABELS, STAMP_OPTIONS, ToolbarState,
     UTILITY_OPTIONS,
 };
 
@@ -70,6 +70,12 @@ struct DurableLineSelections {
         skip_serializing_if = "Option::is_none"
     )]
     pub style: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub routing: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_string",
@@ -161,7 +167,8 @@ impl ToolbarState {
                 start: selected_value(&LINE_OPTIONS, 0, self.line_selected[0]),
                 end: selected_value(&LINE_OPTIONS, 1, self.line_selected[1]),
                 style: selected_value(&LINE_OPTIONS, 2, self.line_selected[2]),
-                corner: selected_value(&LINE_OPTIONS, 3, self.line_selected[3]),
+                routing: Some(self.routing_mode().durable_name().to_owned()),
+                corner: selected_value(&LINE_OPTIONS, 4, self.line_selected[4]),
             },
             stamp: DurableStampSelections {
                 active_family: STAMP_LABELS
@@ -202,9 +209,17 @@ impl ToolbarState {
             &selections.line.end,
         );
         restore_line_style(&mut self.line_selected[2], &selections.line.style);
+        if let Some(routing) = selections
+            .line
+            .routing
+            .as_deref()
+            .and_then(RoutingMode::from_durable_name)
+        {
+            self.line_selected[3] = routing.index();
+        }
         restore_selected(
-            &mut self.line_selected[3],
-            LINE_OPTIONS[3],
+            &mut self.line_selected[4],
+            LINE_OPTIONS[4],
             &selections.line.corner,
         );
 
@@ -325,16 +340,12 @@ mod tests {
     fn durable_selections_round_trip_every_field_and_drop_transients() {
         let mut source = ToolbarState::default();
         for (mode, selections) in [
-            (MainMode::Line, [26, 25, 3, 1]),
-            (MainMode::Stamp, [19, 21, 3, 14]),
-            (MainMode::Shapes, [1, 2, 4, 0]),
+            (MainMode::Line, &[26, 25, 3, 4, 1][..]),
+            (MainMode::Stamp, &[19, 21, 3, 14][..]),
+            (MainMode::Shapes, &[1, 2, 4][..]),
         ] {
             source.apply_action(ToolbarAction::SelectMain(mode));
-            for (submenu, option) in selections
-                .into_iter()
-                .enumerate()
-                .take(if mode == MainMode::Shapes { 3 } else { 4 })
-            {
+            for (submenu, option) in selections.iter().copied().enumerate() {
                 source.apply_action(ToolbarAction::SelectSubmenu { submenu, option });
             }
         }
@@ -362,6 +373,7 @@ mod tests {
         restored.restore_durable_selections(&expected);
 
         assert_eq!(restored.durable_selections(), expected);
+        assert_eq!(restored.routing_mode(), RoutingMode::Stairs);
         assert!(!restored.export_menu_open());
         assert_eq!(restored.pending_shortcut(), None);
         assert_eq!(restored.pending_export_action, None);
@@ -400,6 +412,7 @@ line = "not-a-line"
         assert_eq!(restored.line.start.as_deref(), Some("¤"));
         assert_eq!(restored.line.end, defaults.line.end);
         assert_eq!(restored.line.style, defaults.line.style);
+        assert_eq!(restored.line.routing, defaults.line.routing);
         assert_eq!(restored.stamp.active_family.as_deref(), Some("Arrows"));
         assert_eq!(restored.stamp.arrows.as_deref(), Some("↔"));
         assert_eq!(restored.stamp.blocks, defaults.stamp.blocks);
@@ -425,5 +438,22 @@ width = "┄"
         let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
         assert!(serialized.contains("style = \"╴\""));
         assert!(!serialized.contains("width ="));
+    }
+
+    #[test]
+    fn routing_uses_stable_typed_durable_names() {
+        let selections: DurableMenuSelections = toml::from_str(
+            r#"
+[line]
+routing = "vertical-diagonal"
+"#,
+        )
+        .unwrap();
+        let mut toolbar = ToolbarState::default();
+        toolbar.restore_durable_selections(&selections);
+
+        assert_eq!(toolbar.routing_mode(), RoutingMode::VerticalDiagonal);
+        let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
+        assert!(serialized.contains("routing = \"vertical-diagonal\""));
     }
 }

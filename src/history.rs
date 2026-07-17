@@ -21,6 +21,7 @@ pub struct EditHistory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryGroup {
     ControlStroke,
+    LineRoute,
     TextSession,
 }
 

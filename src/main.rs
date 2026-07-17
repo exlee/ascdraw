@@ -473,6 +473,11 @@ fn try_main() -> Result<ExitCode> {
                                         {
                                             editor.finish_history_transaction();
                                         }
+                                        if history_group == Some(HistoryGroup::LineRoute)
+                                            && !editor.state.has_line_preview()
+                                        {
+                                            editor.finish_history_transaction();
+                                        }
                                         editor.request_redraw();
                                     }
                                     perform_pending_export(editor, &config);
@@ -504,6 +509,7 @@ fn try_main() -> Result<ExitCode> {
                                 editor.viewport,
                             );
                             editor.continue_mouse_drag();
+                            editor.continue_passive_line_preview();
                         }
                         WindowEvent::MouseWheel { delta, .. } => {
                             let changed = if modified_wheel_zooms(editor.modifiers) {
@@ -1075,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn line_preview_anchors_orthogonal_segments_and_zero_length_space_commits() {
+    fn line_preview_commits_each_routed_segment_and_zero_length_space_finishes() {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
@@ -1120,7 +1126,7 @@ mod tests {
             ),
             Some(false)
         );
-        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
+        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
         assert!(state.content_cells().is_empty());
         assert_eq!(
             state
@@ -1130,22 +1136,9 @@ mod tests {
                 .flatten()
                 .filter(|atom| drawing::is_line_glyph(&atom.contents))
                 .count(),
-            3
+            4
         );
 
-        for key in [
-            Key::Named(NamedKey::Space),
-            Key::Named(NamedKey::ArrowDown),
-            Key::Named(NamedKey::ArrowDown),
-            Key::Named(NamedKey::Space),
-        ] {
-            assert_eq!(
-                handle_editor_key(&mut state, &key, None, false, ModifiersState::empty(),),
-                Some(false)
-            );
-        }
-        assert!(state.content_cells().is_empty());
-        assert_eq!(state.edit_snapshot(), before.edit);
         assert_eq!(
             handle_editor_key(
                 &mut state,
@@ -1156,6 +1149,41 @@ mod tests {
             ),
             Some(true)
         );
+        for _ in 0..2 {
+            assert_eq!(
+                handle_editor_key(
+                    &mut state,
+                    &Key::Named(NamedKey::ArrowDown),
+                    None,
+                    false,
+                    ModifiersState::empty(),
+                ),
+                Some(false)
+            );
+        }
+        assert!(!state.content_cells().is_empty());
+        assert_ne!(state.edit_snapshot(), before.edit);
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+        assert!(state.has_line_preview());
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Space),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(false)
+        );
         assert!(!state.has_line_preview());
         assert_eq!(
             state.content_cells(),
@@ -1165,6 +1193,7 @@ mod tests {
                 Coord { line: 0, column: 2 },
                 Coord { line: 1, column: 2 },
                 Coord { line: 2, column: 2 },
+                Coord { line: 3, column: 2 },
             ]
         );
 
@@ -1259,7 +1288,7 @@ mod tests {
                 false,
                 ModifiersState::empty(),
             ),
-            Some(false)
+            Some(true)
         );
         assert_eq!(
             handle_editor_key(
@@ -1269,7 +1298,7 @@ mod tests {
                 false,
                 ModifiersState::empty(),
             ),
-            Some(true)
+            Some(false)
         );
         assert!(!state.has_line_preview());
         assert_eq!(
@@ -1284,7 +1313,7 @@ mod tests {
         let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
 
-        for key in [
+        for (key, changed) in [
             Key::Named(NamedKey::Space),
             Key::Named(NamedKey::ArrowRight),
             Key::Named(NamedKey::ArrowRight),
@@ -1293,10 +1322,13 @@ mod tests {
             Key::Named(NamedKey::ArrowDown),
             Key::Named(NamedKey::Space),
             Key::Named(NamedKey::Backspace),
-        ] {
+        ]
+        .into_iter()
+        .zip([false, false, false, true, false, false, true, true])
+        {
             assert_eq!(
                 handle_editor_key(&mut state, &key, None, false, ModifiersState::empty(),),
-                Some(false)
+                Some(changed)
             );
         }
         assert!(state.has_line_preview());
@@ -1311,7 +1343,7 @@ mod tests {
                 .count(),
             3
         );
-        assert!(state.content_cells().is_empty());
+        assert!(!state.content_cells().is_empty());
 
         assert_eq!(
             handle_editor_key(
@@ -1321,7 +1353,7 @@ mod tests {
                 false,
                 ModifiersState::empty(),
             ),
-            Some(true)
+            Some(false)
         );
         assert!(!state.has_line_preview());
         assert_eq!(
@@ -1404,6 +1436,17 @@ mod tests {
                 &input::OrderedModifierTracker::default(),
             ),
             None
+        );
+
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+        assert_eq!(
+            history_group_for_key(
+                &state,
+                &Key::Named(NamedKey::Space),
+                ModifiersState::empty(),
+                &input::OrderedModifierTracker::default(),
+            ),
+            Some(HistoryGroup::LineRoute)
         );
 
         for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
