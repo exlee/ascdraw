@@ -197,6 +197,18 @@ fn try_main() -> Result<ExitCode> {
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
+                            let scroll_changed = editor.advance_scroll_pan();
+                            if scroll_changed && let Some((x, y)) = editor.mouse_position {
+                                editor.mouse_cell = pointer_position_to_coord(
+                                    x,
+                                    y,
+                                    &editor.renderer,
+                                    editor.window.scale_factor(),
+                                    &config,
+                                    &editor.state.toolbar,
+                                    editor.viewport,
+                                );
+                            }
                             match editor.surface.render(
                                 &editor.window,
                                 &editor.state,
@@ -210,6 +222,9 @@ fn try_main() -> Result<ExitCode> {
                                 }
                                 Ok(timing) => {
                                     editor.record_present(timing, Instant::now());
+                                    if editor.scroll_pan_active() {
+                                        editor.request_redraw();
+                                    }
                                     #[cfg(target_os = "macos")]
                                     if should_apply_app_icon {
                                         should_apply_app_icon = false;
@@ -265,6 +280,7 @@ fn try_main() -> Result<ExitCode> {
                         WindowEvent::KeyboardInput { event, .. }
                             if event.state == ElementState::Pressed =>
                         {
+                            editor.cancel_scroll_pan();
                             let keypress_at = Instant::now();
                             editor.note_keypress(keypress_at);
                             let key_type = classify_key(
@@ -497,25 +513,14 @@ fn try_main() -> Result<ExitCode> {
                             editor.continue_mouse_drag();
                         }
                         WindowEvent::MouseWheel { delta, .. } => {
-                            if editor.pan_from_scroll(delta)
-                                && let Some((x, y)) = editor.mouse_position
-                            {
-                                editor.mouse_cell = pointer_position_to_coord(
-                                    x,
-                                    y,
-                                    &editor.renderer,
-                                    editor.window.scale_factor(),
-                                    &config,
-                                    &editor.state.toolbar,
-                                    editor.viewport,
-                                );
-                            }
+                            editor.queue_scroll_pan(delta);
                         }
                         WindowEvent::MouseInput {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
                         } => {
+                            editor.cancel_scroll_pan();
                             let toolbar_action =
                                 editor
                                     .mouse_toolbar_position

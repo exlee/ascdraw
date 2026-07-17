@@ -126,7 +126,7 @@ pub struct EditorWindow {
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_drag: Option<MouseDrag>,
-    scroll_delta: ScrollDeltaAccumulator,
+    scroll_pan: ScrollPan,
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -162,19 +162,31 @@ enum MouseDragOverride {
 }
 
 #[derive(Debug, Default)]
-struct ScrollDeltaAccumulator {
+struct ScrollPan {
     x: f64,
     y: f64,
 }
 
-impl ScrollDeltaAccumulator {
-    fn whole_pixels(&mut self, delta: (f64, f64)) -> (i64, i64) {
+impl ScrollPan {
+    fn queue(&mut self, delta: (f64, f64)) {
         self.x += delta.0;
         self.y += delta.1;
-        let whole = (self.x.trunc() as i64, self.y.trunc() as i64);
-        self.x -= whole.0 as f64;
-        self.y -= whole.1 as f64;
-        whole
+    }
+
+    fn next_step(&self, cell_size: (usize, usize)) -> (i64, i64) {
+        (
+            scroll_animation_step(self.x, cell_size.0),
+            scroll_animation_step(self.y, cell_size.1),
+        )
+    }
+
+    fn consume(&mut self, requested: (i64, i64), applied: (i64, i64)) {
+        consume_scroll_axis(&mut self.x, requested.0, applied.0);
+        consume_scroll_axis(&mut self.y, requested.1, applied.1);
+    }
+
+    fn is_active(&self) -> bool {
+        self.x.abs() >= 1.0 || self.y.abs() >= 1.0
     }
 }
 
@@ -665,6 +677,7 @@ impl EditorWindow {
     }
 
     pub fn ensure_cursor_in_viewport(&mut self) {
+        self.cancel_scroll_pan();
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
@@ -692,6 +705,7 @@ impl EditorWindow {
     }
 
     pub fn apply_view_command(&mut self, command: ViewCommand) -> bool {
+        self.cancel_scroll_pan();
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
@@ -724,16 +738,27 @@ impl EditorWindow {
         changed
     }
 
-    pub fn pan_from_scroll(&mut self, delta: MouseScrollDelta) -> bool {
+    pub fn queue_scroll_pan(&mut self, delta: MouseScrollDelta) -> bool {
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let pixel_delta = scroll_delta_in_pixels(delta, cell_size);
-        let pixel_delta = self.scroll_delta.whole_pixels(pixel_delta);
+        if pixel_delta == (0.0, 0.0) {
+            return false;
+        }
+        self.scroll_pan.queue(pixel_delta);
+        self.request_redraw();
+        true
+    }
+
+    pub fn advance_scroll_pan(&mut self) -> bool {
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let cell_size = (metrics.cell_width, metrics.cell_height);
+        let pixel_delta = self.scroll_pan.next_step(cell_size);
         if pixel_delta == (0, 0) {
             return false;
         }
-
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let content = self.state.content_cells();
@@ -746,25 +771,32 @@ impl EditorWindow {
             )
         });
 
-        let horizontal = pan_viewport_by_pixels(
+        let horizontal = pan_viewport_by_pixels_clamped(
             &mut self.viewport,
-            (pixel_delta.0, 0),
+            pixel_delta.0,
+            true,
             cell_size,
             viewport_cells,
             &content,
         );
-        let vertical = pan_viewport_by_pixels(
+        let vertical = pan_viewport_by_pixels_clamped(
             &mut self.viewport,
-            (0, pixel_delta.1),
+            pixel_delta.1,
+            false,
             cell_size,
             viewport_cells,
             &content,
         );
-        let changed = horizontal || vertical;
-        if changed {
-            self.request_redraw();
-        }
-        changed
+        self.scroll_pan.consume(pixel_delta, (horizontal, vertical));
+        horizontal != 0 || vertical != 0
+    }
+
+    pub fn scroll_pan_active(&self) -> bool {
+        self.scroll_pan.is_active()
+    }
+
+    pub fn cancel_scroll_pan(&mut self) {
+        self.scroll_pan = ScrollPan::default();
     }
 
     pub fn apply_jump_viewport_pan(&mut self) -> bool {
@@ -902,6 +934,28 @@ fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (usize, usize)) ->
     }
 }
 
+fn scroll_animation_step(pending: f64, cell_size: usize) -> i64 {
+    let whole = pending.trunc() as i64;
+    let magnitude = whole.unsigned_abs();
+    if magnitude <= 2 {
+        return whole;
+    }
+    let maximum = u64::try_from((cell_size / 2).max(1)).unwrap_or(u64::MAX);
+    let step = magnitude.div_ceil(2).min(maximum);
+    i64::try_from(step).unwrap_or(i64::MAX) * whole.signum()
+}
+
+fn consume_scroll_axis(pending: &mut f64, requested: i64, applied: i64) {
+    if requested == 0 {
+        return;
+    }
+    if requested == applied {
+        *pending -= applied as f64;
+    } else {
+        *pending = 0.0;
+    }
+}
+
 fn pan_viewport_by_pixels(
     viewport: &mut ViewportOffset,
     delta: (i64, i64),
@@ -920,6 +974,26 @@ fn pan_viewport_by_pixels(
     let changed = candidate != *viewport;
     *viewport = candidate;
     changed
+}
+
+fn pan_viewport_by_pixels_clamped(
+    viewport: &mut ViewportOffset,
+    delta: i64,
+    horizontal: bool,
+    cell_size: (usize, usize),
+    viewport_cells: (usize, usize),
+    content: &[Coord],
+) -> i64 {
+    let unit = delta.signum();
+    let mut applied = 0_i64;
+    while applied != delta {
+        let pixel_delta = if horizontal { (unit, 0) } else { (0, unit) };
+        if !pan_viewport_by_pixels(viewport, pixel_delta, cell_size, viewport_cells, content) {
+            break;
+        }
+        applied = applied.saturating_add(unit);
+    }
+    applied
 }
 
 fn pan_viewport_by_cells(
@@ -1105,7 +1179,7 @@ pub fn create_editor_window(
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
         mouse_drag: None,
-        scroll_delta: ScrollDeltaAccumulator::default(),
+        scroll_pan: ScrollPan::default(),
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
@@ -1408,11 +1482,35 @@ mod tests {
             (1.25, -2.75),
         );
 
-        let mut accumulator = ScrollDeltaAccumulator::default();
-        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (0, 0));
-        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (0, 0));
-        assert_eq!(accumulator.whole_pixels((0.4, -0.4)), (1, -1));
-        assert_eq!(accumulator.whole_pixels((-0.4, 0.4)), (0, 0));
+        let mut pan = ScrollPan::default();
+        pan.queue((0.4, -0.4));
+        pan.queue((0.4, -0.4));
+        assert_eq!(pan.next_step((9, 13)), (0, 0));
+        pan.queue((0.4, -0.4));
+        assert_eq!(pan.next_step((9, 13)), (1, -1));
+        pan.consume((1, -1), (1, -1));
+        pan.queue((-0.4, 0.4));
+        assert_eq!(pan.next_step((9, 13)), (0, 0));
+    }
+
+    #[test]
+    fn queued_scroll_is_split_into_sub_cell_render_steps() {
+        let mut pan = ScrollPan::default();
+        pan.queue((16.0, -32.0));
+
+        let mut total = (0, 0);
+        let mut frames = 0;
+        while pan.is_active() {
+            let step = pan.next_step((8, 16));
+            assert!(step.0.unsigned_abs() <= 4);
+            assert!(step.1.unsigned_abs() <= 8);
+            pan.consume(step, step);
+            total.0 += step.0;
+            total.1 += step.1;
+            frames += 1;
+        }
+        assert_eq!(total, (16, -32));
+        assert!(frames > 1);
     }
 
     #[test]
@@ -1430,6 +1528,18 @@ mod tests {
             &content,
         ));
         assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
+        assert_eq!(
+            pan_viewport_by_pixels_clamped(
+                &mut viewport,
+                -80,
+                true,
+                cell_size,
+                viewport_cells,
+                &content,
+            ),
+            -12,
+        );
+        assert_eq!(viewport, ViewportOffset { x: -7, y: 7 });
         assert!(!pan_viewport_by_pixels(
             &mut viewport,
             (-80, 0),
@@ -1437,7 +1547,7 @@ mod tests {
             viewport_cells,
             &content,
         ));
-        assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
+        assert_eq!(viewport, ViewportOffset { x: -7, y: 7 });
     }
 
     #[test]
