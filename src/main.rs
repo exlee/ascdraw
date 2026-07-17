@@ -59,7 +59,8 @@ use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 use runtime::window::{
-    EditorWindow, close_window, create_editor_window, handle_command, save_windows_on_exit,
+    EditorWindow, close_window, create_editor_window, handle_command, modified_wheel_zooms,
+    save_windows_on_exit,
 };
 use user_keys::{FontSizeAction, UserAction, UserKeys};
 
@@ -198,16 +199,8 @@ fn try_main() -> Result<ExitCode> {
                         }
                         WindowEvent::RedrawRequested => {
                             let scroll_changed = editor.advance_scroll_pan();
-                            if scroll_changed && let Some((x, y)) = editor.mouse_position {
-                                editor.mouse_cell = pointer_position_to_coord(
-                                    x,
-                                    y,
-                                    &editor.renderer,
-                                    editor.window.scale_factor(),
-                                    &config,
-                                    &editor.state.toolbar,
-                                    editor.viewport,
-                                );
+                            if scroll_changed {
+                                refresh_mouse_cell(editor, &config);
                             }
                             match editor.surface.render(
                                 &editor.window,
@@ -513,7 +506,20 @@ fn try_main() -> Result<ExitCode> {
                             editor.continue_mouse_drag();
                         }
                         WindowEvent::MouseWheel { delta, .. } => {
-                            editor.queue_scroll_pan(delta);
+                            let changed = if modified_wheel_zooms(editor.modifiers) {
+                                editor.zoom_from_mouse_wheel(delta)
+                            } else {
+                                editor.queue_scroll_pan(delta);
+                                false
+                            };
+                            if changed {
+                                refresh_mouse_cell(editor, &config);
+                            }
+                        }
+                        WindowEvent::PinchGesture { delta, phase, .. } => {
+                            if editor.zoom_from_pinch(delta, phase) {
+                                refresh_mouse_cell(editor, &config);
+                            }
                         }
                         WindowEvent::MouseInput {
                             state: ElementState::Pressed,
@@ -593,6 +599,20 @@ fn try_main() -> Result<ExitCode> {
     })?;
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
+    if let Some((x, y)) = editor.mouse_position {
+        editor.mouse_cell = pointer_position_to_coord(
+            x,
+            y,
+            &editor.renderer,
+            editor.window.scale_factor(),
+            config,
+            &editor.state.toolbar,
+            editor.viewport,
+        );
+    }
 }
 
 #[cfg(test)]

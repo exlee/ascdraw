@@ -1675,6 +1675,19 @@ mod tests {
     }
 
     #[test]
+    fn canvas_zoom_stops_at_the_existing_minimum_font_size() {
+        let config = AppConfig {
+            font_size: 12.0,
+            ..AppConfig::default()
+        };
+        let renderer = load_renderer(&config);
+
+        assert!(renderer.adjust_font_size(-100.0));
+        assert!(!renderer.adjust_font_size(-1.0));
+        assert!(renderer.adjust_font_size(1.0));
+    }
+
+    #[test]
     fn parses_rgba_colors_by_ignoring_alpha() {
         let resolved = resolve_root_face(
             &Face {

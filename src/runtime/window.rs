@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use anyhow::anyhow;
 use anyhow::{Context, Result};
-use winit::event::MouseScrollDelta;
+use winit::event::{MouseScrollDelta, TouchPhase};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
@@ -20,9 +20,9 @@ use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::jump::JumpViewportPan;
 use crate::layout::{
-    LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, content_intersects_inner_screen,
-    content_top_padding, cursor_is_visible, cursor_origin, layout_metrics, navigation_origin,
-    normalized_cursor_and_origin,
+    LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, constrained_origin,
+    content_intersects_inner_screen, content_top_padding, cursor_is_visible, cursor_origin,
+    layout_metrics, navigation_origin, normalized_cursor_and_origin,
 };
 #[cfg(target_os = "macos")]
 use crate::macos;
@@ -127,6 +127,8 @@ pub struct EditorWindow {
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_drag: Option<MouseDrag>,
     scroll_pan: ScrollPan,
+    pinch_zoom_remainder: f64,
+    wheel_zoom_remainder: f64,
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -739,6 +741,7 @@ impl EditorWindow {
     }
 
     pub fn queue_scroll_pan(&mut self, delta: MouseScrollDelta) -> bool {
+        self.wheel_zoom_remainder = 0.0;
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
@@ -797,6 +800,86 @@ impl EditorWindow {
 
     pub fn cancel_scroll_pan(&mut self) {
         self.scroll_pan = ScrollPan::default();
+    }
+
+    pub fn zoom_from_pinch(&mut self, delta: f64, phase: TouchPhase) -> bool {
+        self.cancel_scroll_pan();
+        self.wheel_zoom_remainder = 0.0;
+        if phase == TouchPhase::Started {
+            self.pinch_zoom_remainder = 0.0;
+        }
+        let units = pinch_zoom_units(delta);
+        let steps = take_zoom_steps(&mut self.pinch_zoom_remainder, units);
+        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            self.pinch_zoom_remainder = 0.0;
+        }
+        self.zoom_canvas_by(steps)
+    }
+
+    pub fn zoom_from_mouse_wheel(&mut self, delta: MouseScrollDelta) -> bool {
+        self.cancel_scroll_pan();
+        self.pinch_zoom_remainder = 0.0;
+        let scale_factor = self.window.scale_factor();
+        let metrics = self.renderer.metrics(scale_factor);
+        let units = wheel_zoom_units(delta, (metrics.cell_width, metrics.cell_height));
+        let steps = take_zoom_steps(&mut self.wheel_zoom_remainder, units);
+        self.zoom_canvas_by(steps)
+    }
+
+    fn zoom_canvas_by(&mut self, steps: i64) -> bool {
+        if steps == 0 {
+            return false;
+        }
+        let scale_factor = self.window.scale_factor();
+        let old_metrics = self.renderer.metrics(scale_factor);
+        let old_cell_size = (old_metrics.cell_width, old_metrics.cell_height);
+        let old_layout = self.current_layout();
+        let anchor = self.mouse_position.unwrap_or_else(|| {
+            canvas_cell_center(
+                self.state.grid.cursor_pos,
+                old_layout.grid_top,
+                old_cell_size,
+                self.viewport,
+            )
+        });
+        if !self.renderer.adjust_font_size(steps as f32) {
+            return false;
+        }
+
+        let new_metrics = self.renderer.metrics(scale_factor);
+        let new_cell_size = (new_metrics.cell_width, new_metrics.cell_height);
+        let new_layout = self.current_layout();
+        self.viewport = zoom_anchored_viewport(
+            self.viewport,
+            anchor,
+            old_cell_size,
+            new_cell_size,
+            old_layout.grid_top,
+            new_layout.grid_top,
+        );
+
+        let viewport_cells = (new_layout.cols.max(1), new_layout.rows.max(1));
+        let content = self.state.content_cells();
+        let origin = self.viewport.origin(new_cell_size);
+        if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, &content)
+        {
+            if let Some(origin) =
+                constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, &content)
+            {
+                self.viewport.set_origin(origin, new_cell_size);
+            } else {
+                let (cursor, origin) = normalized_cursor_and_origin(
+                    origin,
+                    self.state.grid.cursor_pos,
+                    viewport_cells,
+                    &content,
+                );
+                self.state.clamp_cursor_to_content(cursor);
+                self.viewport.set_origin(origin, new_cell_size);
+            }
+        }
+        self.request_redraw();
+        true
     }
 
     pub fn apply_jump_viewport_pan(&mut self) -> bool {
@@ -931,6 +1014,71 @@ fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (usize, usize)) ->
             f64::from(y) * cell_size.1.max(1) as f64,
         ),
         MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
+    }
+}
+
+pub(crate) fn modified_wheel_zooms(modifiers: ModifiersState) -> bool {
+    !modifiers.shift_key()
+        && !modifiers.alt_key()
+        && (modifiers.control_key() || modifiers.super_key())
+}
+
+fn pinch_zoom_units(delta: f64) -> f64 {
+    if delta.is_finite() {
+        (delta * 20.0).clamp(-4.0, 4.0)
+    } else {
+        0.0
+    }
+}
+
+fn wheel_zoom_units(delta: MouseScrollDelta, cell_size: (usize, usize)) -> f64 {
+    let units = match delta {
+        MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+        MouseScrollDelta::PixelDelta(position) => position.y / cell_size.1.max(1) as f64,
+    };
+    units.clamp(-4.0, 4.0)
+}
+
+fn take_zoom_steps(remainder: &mut f64, units: f64) -> i64 {
+    *remainder += units;
+    let steps = remainder.trunc() as i64;
+    *remainder -= steps as f64;
+    steps
+}
+
+fn canvas_cell_center(
+    coord: Coord,
+    grid_top: usize,
+    cell_size: (usize, usize),
+    viewport: ViewportOffset,
+) -> (f64, f64) {
+    (
+        PADDING as f64
+            + coord.column as f64 * cell_size.0 as f64
+            + cell_size.0 as f64 / 2.0
+            + viewport.x as f64,
+        grid_top as f64
+            + coord.line as f64 * cell_size.1 as f64
+            + cell_size.1 as f64 / 2.0
+            + viewport.y as f64,
+    )
+}
+
+fn zoom_anchored_viewport(
+    viewport: ViewportOffset,
+    anchor: (f64, f64),
+    old_cell_size: (usize, usize),
+    new_cell_size: (usize, usize),
+    old_grid_top: usize,
+    new_grid_top: usize,
+) -> ViewportOffset {
+    let canvas_x = (anchor.0 - PADDING as f64 - viewport.x as f64) / old_cell_size.0.max(1) as f64;
+    let canvas_y =
+        (anchor.1 - old_grid_top as f64 - viewport.y as f64) / old_cell_size.1.max(1) as f64;
+    ViewportOffset {
+        x: (anchor.0 - PADDING as f64 - canvas_x * new_cell_size.0.max(1) as f64).round() as i64,
+        y: (anchor.1 - new_grid_top as f64 - canvas_y * new_cell_size.1.max(1) as f64).round()
+            as i64,
     }
 }
 
@@ -1180,6 +1328,8 @@ pub fn create_editor_window(
         mouse_toolbar_position: None,
         mouse_drag: None,
         scroll_pan: ScrollPan::default(),
+        pinch_zoom_remainder: 0.0,
+        wheel_zoom_remainder: 0.0,
         state,
         renderer: load_renderer(config),
         viewport: ViewportOffset::default(),
@@ -1511,6 +1661,52 @@ mod tests {
         }
         assert_eq!(total, (16, -32));
         assert!(frames > 1);
+    }
+
+    #[test]
+    fn pinch_and_modified_wheel_route_zoom_without_stealing_plain_scroll() {
+        assert_eq!(pinch_zoom_units(0.05), 1.0);
+        assert_eq!(pinch_zoom_units(-0.05), -1.0);
+        assert_eq!(pinch_zoom_units(f64::NAN), 0.0);
+        let mut pinch_remainder = 0.0;
+        assert_eq!(take_zoom_steps(&mut pinch_remainder, 0.4), 0);
+        assert_eq!(take_zoom_steps(&mut pinch_remainder, 0.6), 1);
+        assert_eq!(
+            wheel_zoom_units(MouseScrollDelta::LineDelta(0.0, 1.0), (8, 16)),
+            1.0,
+        );
+        assert_eq!(
+            wheel_zoom_units(
+                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -8.0)),
+                (8, 16),
+            ),
+            -0.5,
+        );
+
+        assert!(!modified_wheel_zooms(ModifiersState::empty()));
+        assert!(modified_wheel_zooms(ModifiersState::CONTROL));
+        assert!(modified_wheel_zooms(ModifiersState::SUPER));
+        assert!(!modified_wheel_zooms(
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        ));
+    }
+
+    #[test]
+    fn pointer_anchored_zoom_preserves_the_canvas_point_under_it() {
+        let viewport = ViewportOffset { x: -4, y: 8 };
+        let anchor = (40.0, 80.0);
+        let zoomed = zoom_anchored_viewport(viewport, anchor, (8, 16), (10, 20), 40, 40);
+
+        assert_eq!(zoomed, ViewportOffset { x: -10, y: 0 });
+        let coord = Coord { line: 2, column: 3 };
+        assert_eq!(
+            canvas_screen_position(coord, 40, (8, 16), viewport),
+            (40, 80)
+        );
+        assert_eq!(
+            canvas_screen_position(coord, 40, (10, 20), zoomed),
+            (40, 80)
+        );
     }
 
     #[test]
