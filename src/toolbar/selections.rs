@@ -275,7 +275,8 @@ impl ToolbarState {
 
         if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode)
             && (self.available_modes().contains(&main_mode)
-                || (main_mode == MainMode::Layers && self.multi_layer_mode()))
+                || (main_mode == MainMode::Layers && self.multi_layer_mode())
+                || (main_mode == MainMode::Colors && self.multi_color_mode()))
         {
             self.main_mode = main_mode;
         }

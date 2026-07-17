@@ -79,6 +79,19 @@ impl ToolbarState {
                 foreground: None,
             });
         }
+        if row == MAIN_LABEL_ROW && self.multi_color_mode() {
+            spans.push(plain_span("    ".to_string()));
+            spans.push(ToolbarSpan {
+                contents: "Colors 9".to_string(),
+                bold_prefix: UnicodeWidthStr::width("Colors"),
+                selected: self.main_mode == MainMode::Colors && !self.export_open,
+                highlighted: false,
+                tooltip: false,
+                action: Some(ToolbarAction::ToggleColors),
+                right_aligned: false,
+                foreground: None,
+            });
+        }
         if row == MAIN_LABEL_ROW {
             spans.push(ToolbarSpan {
                 contents: "0. Files/Togls".to_string(),
@@ -301,52 +314,27 @@ mod tests {
     }
 
     #[test]
-    fn colors_remain_under_mode_one_while_layers_use_only_top_level_eight() {
+    fn feature_surfaces_stay_outside_mode_one_at_top_level_eight_and_nine() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        assert_eq!(
-            toolbar.available_modes(),
-            [
-                MainMode::Stamp,
-                MainMode::Line,
-                MainMode::Shapes,
-                MainMode::Utilities,
-                MainMode::Colors
-            ]
-        );
+        assert_eq!(toolbar.available_modes(), MainMode::ALL);
         press(&mut toolbar, "0");
         press(&mut toolbar, "1");
         press(&mut toolbar, "5");
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+        press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Colors);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
-        assert_eq!(
-            toolbar.available_modes(),
-            [
-                MainMode::Stamp,
-                MainMode::Line,
-                MainMode::Shapes,
-                MainMode::Utilities,
-                MainMode::Colors,
-            ]
-        );
+        assert_eq!(toolbar.available_modes(), MainMode::ALL);
         press(&mut toolbar, "0");
         press(&mut toolbar, "8");
         assert_eq!(toolbar.main_mode(), MainMode::Layers);
 
-        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
-        assert_eq!(
-            toolbar.available_modes(),
-            [
-                MainMode::Stamp,
-                MainMode::Line,
-                MainMode::Shapes,
-                MainMode::Utilities,
-                MainMode::Colors,
-            ]
-        );
-        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        assert_eq!(toolbar.available_modes(), MainMode::ALL);
+        assert_eq!(toolbar.main_mode(), MainMode::Layers);
     }
 }

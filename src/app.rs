@@ -131,6 +131,7 @@ pub struct ThemeConfig {
     pub default: Face,
     pub selection: Face,
     pub selection_highlight: Face,
+    pub color_selection: Face,
     pub jump_grid: Face,
     pub cursor_drawing: Face,
     pub cursor_block: Face,
@@ -375,6 +376,7 @@ mod tests {
             "default",
             "selection",
             "selection-highlight",
+            "color-selection",
             "jump-grid",
             "cursor-drawing",
             "cursor-block",
@@ -387,6 +389,7 @@ mod tests {
             &theme.default,
             &theme.selection,
             &theme.selection_highlight,
+            &theme.color_selection,
             &theme.jump_grid,
             &theme.cursor_drawing,
             &theme.cursor_block,
@@ -433,6 +436,10 @@ mod tests {
         assert_eq!(config.theme.default.fg, "#0000ff");
         assert_eq!(config.theme.default.bg, "#ffffff");
         assert_eq!(config.theme.selection.fg, "#ff0000");
+        assert_eq!(
+            config.theme.color_selection,
+            ThemeConfig::default().color_selection
+        );
         assert_eq!(config.theme.tooltip.fg, "#00ffff");
         assert_eq!(config.theme.tooltip.bg, "default");
         assert_eq!(config.jump, JumpConfig::default());

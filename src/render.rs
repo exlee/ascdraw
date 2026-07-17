@@ -674,6 +674,13 @@ fn toolbar_span_outlines(
 fn toolbar_span_outline_color(state: &Editor, span: &crate::toolbar::ToolbarSpan) -> Option<Rgba> {
     let face = if span.highlighted {
         &state.theme.selection_highlight
+    } else if span.selected
+        && matches!(
+            span.action,
+            Some(crate::toolbar::ToolbarAction::SelectColor(_))
+        )
+    {
+        &state.theme.color_selection
     } else if span.selected {
         &state.theme.selection
     } else {
@@ -1975,13 +1982,11 @@ mod tests {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Colors));
-        let atoms = toolbar_atoms(
-            &state
-                .toolbar
-                .toolbar_spans(crate::toolbar::MENU_FIRST_ROW + 1),
-            &state,
-        );
+        state.apply_toolbar_action(ToolbarAction::ToggleColors);
+        let spans = (crate::toolbar::MENU_FIRST_ROW + 1..crate::toolbar::MENU_FIRST_ROW + 3)
+            .flat_map(|row| state.toolbar.toolbar_spans(row))
+            .collect::<Vec<_>>();
+        let atoms = toolbar_atoms(&spans, &state);
         let blocks = atoms
             .iter()
             .filter(|atom| atom.contents == "■")
@@ -1991,6 +1996,16 @@ mod tests {
         for (index, atom) in blocks.into_iter().enumerate() {
             assert_eq!(atom.face.fg, ColorId(index as u8).hex().unwrap());
         }
+
+        let selected = spans.iter().find(|span| span.selected).unwrap();
+        let expected = resolve_derived_face(
+            &state.grid.default_face,
+            &config.theme.color_selection,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        )
+        .fg;
+        assert_eq!(toolbar_span_outline_color(&state, selected), Some(expected));
     }
 
     #[test]

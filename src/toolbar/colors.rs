@@ -1,75 +1,56 @@
+#[cfg(test)]
 use unicode_width::UnicodeWidthStr;
 
 use crate::model::{BASE_COLORS, BRIGHT_COLORS, ColorId};
 
 use super::{
-    GAP, MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState,
-    menu_prefix_width, pad_right_to_width, pad_spans_to_width, plain_span, push_shortcut_path,
-    spans_width, submenu_cell_width, submenu_option_column_widths,
+    MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_prefix_span,
+    bold_span, plain_span,
 };
 
-const GROUPS: [(&str, &[&str; 8]); 2] = [("Base", &BASE_COLORS), ("Bright", &BRIGHT_COLORS)];
-const COLOR_BLOCKS: [&str; 8] = ["■"; 8];
+const GROUPS: [&[&str; 8]; 2] = [&BASE_COLORS, &BRIGHT_COLORS];
 
 impl ToolbarState {
     pub(super) fn color_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let header = row == MENU_FIRST_ROW;
-        let mut spans = Vec::new();
-        for (group, (label, colors)) in GROUPS.iter().enumerate() {
-            if group > 0 {
-                spans.push(plain_span(GAP.to_owned()));
-            }
-            let path = format!("{}.", group + 2);
-            let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
-            let cell_width = submenu_cell_width(prefix_width, &COLOR_BLOCKS);
-            let cell_start = spans_width(&spans);
-            if header {
-                let label = format!("{label}:");
-                spans.push(ToolbarSpan {
-                    contents: pad_right_to_width(label.clone(), prefix_width),
-                    bold_prefix: UnicodeWidthStr::width(label.as_str()),
-                    selected: false,
-                    highlighted: false,
-                    tooltip: false,
-                    action: None,
-                    right_aligned: false,
-                    foreground: None,
-                });
-                for (position, width) in submenu_option_column_widths(&COLOR_BLOCKS)
-                    .into_iter()
-                    .enumerate()
-                {
-                    if position > 0 {
-                        spans.push(plain_span(" ".to_owned()));
-                    }
-                    spans.push(plain_span(pad_right_to_width(
-                        (position + 1).to_string(),
-                        width,
-                    )));
+        if row == MENU_FIRST_ROW {
+            let mut title = bold_prefix_span("Colors 9:".to_owned(), "Colors");
+            title.selected = true;
+            title.action = Some(ToolbarAction::ToggleColors);
+            let mut spans = vec![title, plain_span(" ".to_owned())];
+            for digit in 1..=8 {
+                if digit > 1 {
+                    spans.push(plain_span(" ".to_owned()));
                 }
-            } else {
-                let highlighted = (self.pending_shortcut()
-                    == Some(PendingShortcut::ColorGroup(group)))
-                .then_some(path.as_str());
-                push_shortcut_path(&mut spans, &path, prefix_width, highlighted);
-                for index in 0..colors.len() {
-                    let color = ColorId((group * colors.len() + index) as u8);
-                    if index > 0 {
-                        spans.push(plain_span(" ".to_owned()));
-                    }
-                    spans.push(ToolbarSpan {
-                        contents: "■".to_owned(),
-                        bold_prefix: 0,
-                        selected: self.active_color == color,
-                        highlighted: false,
-                        tooltip: false,
-                        action: Some(ToolbarAction::SelectColor(color)),
-                        right_aligned: false,
-                        foreground: color.hex().map(str::to_owned),
-                    });
-                }
+                spans.push(bold_span(digit.to_string()));
             }
-            pad_spans_to_width(&mut spans, cell_start + cell_width);
+            return spans;
+        }
+
+        let Some(group) = row
+            .checked_sub(MENU_FIRST_ROW + 1)
+            .filter(|group| *group < GROUPS.len())
+        else {
+            return Vec::new();
+        };
+        let mut row_prefix = bold_span(format!("{}.", group + 1));
+        row_prefix.highlighted =
+            self.pending_shortcut() == Some(PendingShortcut::ColorGroup(group));
+        let mut spans = vec![row_prefix, plain_span(" ".to_owned())];
+        for index in 0..GROUPS[group].len() {
+            if index > 0 {
+                spans.push(plain_span(" ".to_owned()));
+            }
+            let color = ColorId((group * GROUPS[group].len() + index) as u8);
+            spans.push(ToolbarSpan {
+                contents: "■".to_owned(),
+                bold_prefix: 0,
+                selected: self.active_color == color,
+                highlighted: false,
+                tooltip: false,
+                action: Some(ToolbarAction::SelectColor(color)),
+                right_aligned: false,
+                foreground: color.hex().map(str::to_owned),
+            });
         }
         spans
     }
@@ -90,87 +71,159 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MainMode, ToggleKind};
+    use crate::toolbar::{MAIN_LABEL_ROW, MainMode, ToggleKind, boxed_toolbar_spans};
     use winit::keyboard::{Key, ModifiersState};
 
-    fn action_starts(spans: &[ToolbarSpan]) -> Vec<usize> {
-        let mut start = 0;
-        spans
-            .iter()
-            .filter_map(|span| {
-                let span_start = start;
-                start += UnicodeWidthStr::width(span.contents.as_str());
-                span.action.is_some().then_some(span_start)
-            })
-            .collect()
+    fn text(spans: Vec<ToolbarSpan>) -> String {
+        spans.into_iter().map(|span| span.contents).collect()
     }
 
-    fn digit_starts(spans: &[ToolbarSpan]) -> Vec<usize> {
+    fn press(toolbar: &mut ToolbarState, key: &str) {
+        assert!(toolbar.handle_shortcut_with_layers(
+            &Key::Character(key.into()),
+            ModifiersState::empty(),
+            &[],
+        ));
+    }
+
+    fn enter_colors(toolbar: &mut ToolbarState) {
+        assert!(toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
+        press(toolbar, "0");
+        press(toolbar, "9");
+        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+    }
+
+    fn action_columns(spans: &[ToolbarSpan]) -> Vec<(usize, ToolbarAction)> {
         let mut start = 0;
         spans
             .iter()
             .filter_map(|span| {
                 let span_start = start;
                 start += UnicodeWidthStr::width(span.contents.as_str());
-                span.contents
-                    .trim()
-                    .parse::<usize>()
-                    .ok()
-                    .map(|_| span_start)
+                span.action.map(|action| (span_start, action))
             })
             .collect()
     }
 
     #[test]
-    fn all_sixteen_palette_entries_have_exact_colors_and_actions() {
+    fn exact_palette_grid_has_two_rows_and_sixteen_typed_actions() {
         let mut toolbar = ToolbarState::default();
-        assert!(toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
-        assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Colors)));
-        let spans = toolbar.color_menu_spans(MENU_FIRST_ROW + 1);
-        let colors = spans
-            .iter()
+        enter_colors(&mut toolbar);
+
+        assert_eq!(
+            (MENU_FIRST_ROW..MENU_FIRST_ROW + 3)
+                .map(|row| text(toolbar.toolbar_spans(row)))
+                .collect::<Vec<_>>(),
+            [
+                "Colors 9: 1 2 3 4 5 6 7 8",
+                "1. ■ ■ ■ ■ ■ ■ ■ ■",
+                "2. ■ ■ ■ ■ ■ ■ ■ ■",
+            ]
+        );
+        assert_eq!(toolbar.menu_row_count(), 3);
+
+        let colors = (MENU_FIRST_ROW + 1..MENU_FIRST_ROW + 3)
+            .flat_map(|row| toolbar.toolbar_spans(row))
             .filter_map(|span| {
                 let ToolbarAction::SelectColor(color) = span.action? else {
                     return None;
                 };
-                Some((color, span.foreground.as_deref()))
+                Some((color, span.foreground))
             })
             .collect::<Vec<_>>();
-
         assert_eq!(colors.len(), ColorId::COUNT);
         for (index, (color, foreground)) in colors.into_iter().enumerate() {
             assert_eq!(color, ColorId(index as u8));
-            assert_eq!(foreground, color.hex());
+            assert_eq!(foreground.as_deref(), color.hex());
         }
-        assert_eq!(
-            digit_starts(&toolbar.color_menu_spans(MENU_FIRST_ROW)),
-            action_starts(&toolbar.color_menu_spans(MENU_FIRST_ROW + 1))
-        );
     }
 
     #[test]
-    fn keyboard_paths_select_the_eighth_color_in_each_group() {
+    fn exact_keyboard_paths_select_the_eighth_color_in_each_row() {
         let mut toolbar = ToolbarState::default();
-        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Colors));
-        for (group, expected) in [("2", ColorId(7)), ("3", ColorId(15))] {
-            assert!(
-                toolbar.handle_shortcut(&Key::Character(group.into()), ModifiersState::empty())
+        enter_colors(&mut toolbar);
+        for (row, expected) in [("1", ColorId(7)), ("2", ColorId(15))] {
+            press(&mut toolbar, row);
+            assert_eq!(
+                toolbar.pending_shortcut(),
+                Some(PendingShortcut::ColorGroup(
+                    row.parse::<usize>().unwrap() - 1
+                ))
             );
-            assert!(toolbar.handle_shortcut(&Key::Character("8".into()), ModifiersState::empty()));
+            press(&mut toolbar, "8");
             assert_eq!(toolbar.active_color(), expected);
+            assert_eq!(toolbar.pending_shortcut(), None);
+            assert_eq!(toolbar.main_mode(), MainMode::Colors);
         }
     }
 
     #[test]
-    fn mode_shortcut_leaves_colors_mode() {
+    fn mouse_hit_testing_matches_every_visible_swatch_column() {
         let mut toolbar = ToolbarState::default();
-        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Colors));
+        enter_colors(&mut toolbar);
+        let width = 80;
+        for group in 0..2 {
+            let row = MENU_FIRST_ROW + 1 + group;
+            let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+            let actions = action_columns(&boxed);
+            assert_eq!(actions.len(), 8);
+            for (index, (column, action)) in actions.into_iter().enumerate() {
+                let expected = ToolbarAction::SelectColor(ColorId((group * 8 + index) as u8));
+                assert_eq!(action, expected);
+                assert_eq!(toolbar.action_at(row, column, width), Some(expected));
+            }
+        }
+    }
 
-        assert!(toolbar.handle_shortcut(&Key::Character("1".into()), ModifiersState::empty()));
-        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
-        assert!(toolbar.handle_shortcut(&Key::Character("1".into()), ModifiersState::empty()));
+    #[test]
+    fn top_level_nine_exposure_tracks_only_multi_color() {
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        press(&mut toolbar, "0");
+        assert_eq!(toolbar.available_modes(), MainMode::ALL);
+        assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+        press(&mut toolbar, "1");
+        press(&mut toolbar, "5");
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+        press(&mut toolbar, "0");
+        press(&mut toolbar, "9");
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+    }
+
+    #[test]
+    fn durable_colors_mode_restores_outside_mode_one_with_one_selected_swatch() {
+        let mut source = ToolbarState::default();
+        enter_colors(&mut source);
+        press(&mut source, "2");
+        press(&mut source, "4");
+        let durable = source.durable_selections();
+
+        let mut restored = ToolbarState::default();
+        restored.restore_durable_selections(&durable);
+        assert!(restored.multi_color_mode());
+        assert_eq!(restored.main_mode(), MainMode::Colors);
+        assert_eq!(restored.available_modes(), MainMode::ALL);
+        assert_eq!(restored.active_color(), ColorId(11));
+        let selected = (MENU_FIRST_ROW + 1..MENU_FIRST_ROW + 3)
+            .flat_map(|row| restored.toolbar_spans(row))
+            .filter(|span| span.selected)
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].action,
+            Some(ToolbarAction::SelectColor(ColorId(11)))
+        );
     }
 }

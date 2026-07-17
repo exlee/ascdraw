@@ -114,7 +114,7 @@ impl Tooltip {
                 "Files/Togls: copy/export, save/load files, clear, or toggle display modes"
             }
             Self::Layers => "Layers: select, show, reorder, add, or delete a layer",
-            Self::Colors => "Colors: select the foreground color for future writes",
+            Self::Colors => "Colors 9: select the foreground color for future writes",
             Self::Selection => {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; cancel key collapses; Backspace clears; r then KEY replaces"
             }

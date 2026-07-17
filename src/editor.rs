@@ -1321,6 +1321,19 @@ mod tests {
     }
 
     #[test]
+    fn disabling_multi_color_mode_returns_the_editor_to_stamp() {
+        let mut editor = state();
+        assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
+        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleColors));
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Colors);
+        assert_eq!(editor.cursor_mode, CursorMode::Navigation);
+
+        assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(editor.cursor_mode, CursorMode::Stamp);
+    }
+
+    #[test]
     fn dark_mode_reverses_root_and_preserves_explicit_ui_accent_colors() {
         let source = ThemeConfig::default();
         let mut reversed = source.clone();
@@ -1333,6 +1346,7 @@ mod tests {
         assert_eq!(state.grid.cursor_face, reversed.cursor_block);
         assert_eq!(state.theme.selection, source.selection);
         assert_eq!(state.theme.selection_highlight, source.selection_highlight);
+        assert_eq!(state.theme.color_selection, source.color_selection);
         assert_eq!(state.theme.jump_grid, source.jump_grid);
         assert_eq!(state.theme.cursor_drawing, source.cursor_drawing);
         assert_eq!(state.theme.tooltip, source.tooltip);
