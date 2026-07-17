@@ -510,10 +510,8 @@ impl EditorWindow {
 
     #[cfg(target_os = "macos")]
     pub fn note_cursor_activity(&mut self, now: Instant) {
-        self.last_cursor_activity = now;
-        if self.cursor_hidden {
+        if record_cursor_activity(&mut self.last_cursor_activity, &mut self.cursor_hidden, now) {
             self.window.set_cursor_visible(true);
-            self.cursor_hidden = false;
         }
     }
 
@@ -1039,6 +1037,16 @@ impl EditorWindow {
             document::save,
         )
     }
+}
+
+#[cfg(target_os = "macos")]
+fn record_cursor_activity(
+    last_cursor_activity: &mut Instant,
+    cursor_hidden: &mut bool,
+    now: Instant,
+) -> bool {
+    *last_cursor_activity = now;
+    std::mem::take(cursor_hidden)
 }
 
 fn durable_menu_selections_changed(
@@ -1595,6 +1603,32 @@ mod tests {
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cursor_activity_reveals_once_and_always_refreshes_the_idle_deadline() {
+        let initial = Instant::now();
+        let first_motion = initial + CURSOR_IDLE_TIMEOUT;
+        let mut last_activity = initial;
+        let mut hidden = true;
+
+        assert!(record_cursor_activity(
+            &mut last_activity,
+            &mut hidden,
+            first_motion
+        ));
+        assert_eq!(last_activity, first_motion);
+        assert!(!hidden);
+
+        let next_motion = first_motion + Duration::from_millis(1);
+        assert!(!record_cursor_activity(
+            &mut last_activity,
+            &mut hidden,
+            next_motion
+        ));
+        assert_eq!(last_activity, next_motion);
+        assert!(!hidden);
+    }
 
     #[test]
     fn line_double_click_requires_same_stationary_cell_within_interval() {
