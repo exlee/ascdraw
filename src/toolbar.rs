@@ -1320,10 +1320,10 @@ mod tests {
     fn only_structural_labels_and_numeric_paths_are_bold() {
         let mut toolbar = ToolbarState::default();
         let main_labels = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        assert_eq!(bold_contents(&main_labels), ["Mode:", "0."]);
+        assert_eq!(bold_contents(&main_labels), ["Mode:", "Files/Togls"]);
         assert!(main_labels.iter().any(|span| {
             span.contents.contains("Files/Togls")
-                && span.bold_prefix == UnicodeWidthStr::width("0.")
+                && span.bold_prefix == UnicodeWidthStr::width("Files/Togls")
         }));
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MAIN_SHORTCUT_ROW)),
@@ -2329,7 +2329,7 @@ mod tests {
     fn export_entry_is_right_aligned_and_narrow_box_stays_valid_unicode_width() {
         let toolbar = ToolbarState::default();
         let wide = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 60));
-        assert!(wide.ends_with("0. Files/Togls │"));
+        assert!(wide.ends_with("Files/Togls 0 │"));
         assert!(wide.starts_with("│ Mode: 1"));
         for width in 0..32 {
             let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
@@ -2656,7 +2656,7 @@ mod tests {
     fn mouse_export_entry_and_action_match_keyboard_paths() {
         let mut toolbar = ToolbarState::default();
         let width = 60;
-        let entry_column = width - 2 - UnicodeWidthStr::width("0. Files/Togls");
+        let entry_column = width - 2 - UnicodeWidthStr::width("Files/Togls 0");
         let toggle = toolbar
             .action_at(0, entry_column, width)
             .expect("export entry clickable");

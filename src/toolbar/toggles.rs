@@ -94,8 +94,8 @@ impl ToolbarState {
         }
         if row == MAIN_LABEL_ROW {
             spans.push(ToolbarSpan {
-                contents: "0. Files/Togls".to_string(),
-                bold_prefix: UnicodeWidthStr::width("0."),
+                contents: "Files/Togls 0".to_string(),
+                bold_prefix: UnicodeWidthStr::width("Files/Togls"),
                 selected: self.export_open,
                 highlighted: false,
                 tooltip: false,
@@ -261,7 +261,7 @@ mod tests {
     fn top_level_has_only_the_exact_combined_files_entry() {
         let toolbar = ToolbarState::default();
         let spans = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        assert!(spans.iter().any(|span| span.contents == "0. Files/Togls"));
+        assert!(spans.iter().any(|span| span.contents == "Files/Togls 0"));
         assert!(
             !spans
                 .iter()
