@@ -354,7 +354,7 @@ impl Editor {
         if self.jump_mode.is_some() {
             return Tooltip::Jump;
         }
-        if self.toolbar.export_menu_open() || self.toolbar.toggles_menu_open() {
+        if self.toolbar.export_menu_open() {
             return self.toolbar.tooltip();
         }
         if self.move_lift.is_some() {
@@ -424,7 +424,6 @@ impl Editor {
             && self.toolbar.main_mode() == MainMode::Utilities
             && self.toolbar.utility_kind() == UtilityKind::View
             && !self.toolbar.export_menu_open()
-            && !self.toolbar.toggles_menu_open()
     }
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
@@ -434,7 +433,6 @@ impl Editor {
             return false;
         }
         let export_was_open = self.toolbar.export_menu_open();
-        let toggles_was_open = self.toolbar.toggles_menu_open();
         let dark_was_enabled = self.toolbar.dark_mode();
         let old_mode = self.toolbar.main_mode();
         let old_utility = self.toolbar.utility_kind();
@@ -446,7 +444,7 @@ impl Editor {
             return false;
         }
         self.apply_pending_layer_action();
-        if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open && !toggles_was_open {
+        if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open {
             self.collapse_selection();
         }
         if self.toolbar.dark_mode() != dark_was_enabled {
@@ -464,7 +462,6 @@ impl Editor {
         }
         if self.move_lift.is_some()
             && (self.toolbar.export_menu_open()
-                || self.toolbar.toggles_menu_open()
                 || self.toolbar.main_mode() != old_mode
                 || self.toolbar.utility_kind() != old_utility)
         {
@@ -497,7 +494,6 @@ impl Editor {
         if matches!(
             action,
             ToolbarAction::ToggleExportMenu
-                | ToolbarAction::ToggleTogglesMenu
                 | ToolbarAction::Toggle(_)
                 | ToolbarAction::RunExport(_)
         ) {
@@ -1246,8 +1242,13 @@ mod tests {
         assert!(editor.cancel_current_state());
         assert_eq!(editor.state(), EditorState::StampMode);
 
-        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleTogglesMenu));
-        assert_eq!(editor.state(), EditorState::TogglesMode);
+        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleExportMenu));
+        assert!(
+            editor.apply_toolbar_action(ToolbarAction::SelectExportCategory(
+                crate::toolbar::FILES_TOGGLE_CATEGORY,
+            ))
+        );
+        assert_eq!(editor.state(), EditorState::ExportMode);
         assert!(editor.cancel_current_state());
 
         assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));

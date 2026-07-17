@@ -658,9 +658,7 @@ mod tests {
         );
         assert_eq!(
             crate::toolbar::ToolbarState::default().action_at(0, 8, 20),
-            Some(crate::toolbar::ToolbarAction::SelectMain(
-                crate::toolbar::MainMode::Stamp
-            ))
+            Some(crate::toolbar::ToolbarAction::ToggleExportMenu)
         );
         for border_column in [0, 1, 18, 19] {
             assert_eq!(

@@ -1,12 +1,12 @@
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW, MainMode, PendingShortcut, ToolbarAction, ToolbarSpan,
-    ToolbarState, aligned_shortcut, bold_prefix_span, bold_span, plain_span,
+    FILES_TOGGLE_CATEGORY, MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW, MainMode, PendingShortcut,
+    ToolbarAction, ToolbarSpan, ToolbarState, aligned_shortcut, bold_prefix_span, bold_span,
+    plain_span,
 };
 
-const TOGGLE_LABELS: [&str; 3] = ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"];
-const TOGGLE_SHORTCUT_OFFSET: usize = 2;
+pub(super) const TOGGLE_LABELS: [&str; 3] = ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -17,9 +17,9 @@ pub enum ToggleKind {
 }
 
 impl ToggleKind {
-    const ALL: [Self; 3] = [Self::DarkMode, Self::MultiColorMode, Self::MultiLayerMode];
+    pub(super) const ALL: [Self; 3] = [Self::DarkMode, Self::MultiColorMode, Self::MultiLayerMode];
 
-    fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         match self {
             Self::DarkMode => 0,
             Self::MultiColorMode => 1,
@@ -58,10 +58,7 @@ impl ToolbarState {
             spans.push(ToolbarSpan {
                 contents,
                 bold_prefix: 0,
-                selected: row == MAIN_SHORTCUT_ROW
-                    && *mode == self.main_mode
-                    && !self.export_open
-                    && !self.toggles_open,
+                selected: row == MAIN_SHORTCUT_ROW && *mode == self.main_mode && !self.export_open,
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
@@ -71,20 +68,7 @@ impl ToolbarState {
         }
         if row == MAIN_LABEL_ROW {
             spans.push(ToolbarSpan {
-                contents: "9. Toggles".to_string(),
-                bold_prefix: UnicodeWidthStr::width("9."),
-                selected: self.toggles_open,
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::ToggleTogglesMenu),
-                right_aligned: true,
-                foreground: None,
-            });
-            let mut gap = plain_span("  ".to_string());
-            gap.right_aligned = true;
-            spans.push(gap);
-            spans.push(ToolbarSpan {
-                contents: "0. Save/Load/Export".to_string(),
+                contents: "0. Files/Togls".to_string(),
                 bold_prefix: UnicodeWidthStr::width("0."),
                 selected: self.export_open,
                 highlighted: false,
@@ -95,30 +79,6 @@ impl ToolbarState {
             });
         }
         spans
-    }
-
-    pub(super) fn toggles_menu_spans(&self, _row: usize) -> Vec<ToolbarSpan> {
-        let mut spans = Vec::new();
-        for (index, (toggle, label)) in ToggleKind::ALL.iter().zip(TOGGLE_LABELS).enumerate() {
-            if index > 0 {
-                spans.push(plain_span("  ".to_string()));
-            }
-            spans.push(ToolbarSpan {
-                contents: format!("{}: {}", label, index + TOGGLE_SHORTCUT_OFFSET),
-                bold_prefix: UnicodeWidthStr::width(label) + 1,
-                selected: self.toggles[toggle.index()],
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::Toggle(*toggle)),
-                right_aligned: false,
-                foreground: None,
-            });
-        }
-        spans
-    }
-
-    pub fn toggles_menu_open(&self) -> bool {
-        self.toggles_open
     }
 
     pub fn dark_mode(&self) -> bool {
@@ -133,23 +93,6 @@ impl ToolbarState {
         self.toggles[ToggleKind::MultiColorMode.index()]
     }
 
-    pub fn close_toggles_menu(&mut self) {
-        self.toggles_open = false;
-        if self.shortcut_prefix == Some(PendingShortcut::Toggles) {
-            self.shortcut_prefix = None;
-        }
-    }
-
-    pub(super) fn toggle_toggles_menu(&mut self) {
-        if self.toggles_open {
-            self.close_toggles_menu();
-        } else {
-            self.close_export_menu();
-            self.toggles_open = true;
-            self.shortcut_prefix = Some(PendingShortcut::Toggles);
-        }
-    }
-
     pub(super) fn toggle_setting(&mut self, toggle: ToggleKind) {
         let enabled = &mut self.toggles[toggle.index()];
         *enabled = !*enabled;
@@ -159,13 +102,14 @@ impl ToolbarState {
         if toggle == ToggleKind::MultiColorMode && !*enabled && self.main_mode == MainMode::Colors {
             self.main_mode = MainMode::Stamp;
         }
-        self.toggles_open = true;
-        self.shortcut_prefix = Some(PendingShortcut::Toggles);
+        self.export_open = true;
+        self.active_export_category = Some(FILES_TOGGLE_CATEGORY);
+        self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
     }
 
     pub(super) fn select_toggle_digit(&mut self, digit: usize) {
         if let Some(toggle) = digit
-            .checked_sub(TOGGLE_SHORTCUT_OFFSET)
+            .checked_sub(1)
             .and_then(|index| ToggleKind::ALL.get(index))
         {
             self.toggle_setting(*toggle);
@@ -176,51 +120,88 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MENU_FIRST_ROW, ToolbarAction};
+    use crate::toolbar::{MENU_FIRST_ROW, ToolbarAction, boxed_toolbar_spans};
     use winit::keyboard::{Key, ModifiersState};
 
     fn press(toolbar: &mut ToolbarState, key: &str) {
         assert!(toolbar.handle_shortcut(&Key::Character(key.into()), ModifiersState::empty()));
     }
 
+    fn toggle_category_open(toolbar: &ToolbarState) -> bool {
+        toolbar.export_open && toolbar.active_export_category == Some(FILES_TOGGLE_CATEGORY)
+    }
+
+    fn action_column(
+        toolbar: &ToolbarState,
+        row: usize,
+        width: usize,
+        expected: ToolbarAction,
+    ) -> usize {
+        let mut column = 0;
+        for span in boxed_toolbar_spans(&toolbar.toolbar_spans(row), width) {
+            let span_width = UnicodeWidthStr::width(span.contents.as_str());
+            if span.action == Some(expected) {
+                return column;
+            }
+            column += span_width;
+        }
+        panic!("action {expected:?} is not visible on toolbar row {row}");
+    }
+
     #[test]
-    fn keyboard_opens_toggles_and_changes_each_visible_state() {
+    fn files_keyboard_paths_toggle_every_setting_and_keep_the_menu_open() {
         let mut toolbar = ToolbarState::default();
-        press(&mut toolbar, "9");
-        assert!(toolbar.toggles_menu_open());
-        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Toggles));
-        let labels: Vec<_> = toolbar
+        press(&mut toolbar, "0");
+        press(&mut toolbar, "5");
+        assert!(toggle_category_open(&toolbar));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ToggleOptions)
+        );
+        let actions: Vec<_> = toolbar
             .toolbar_spans(MENU_FIRST_ROW)
             .into_iter()
-            .filter_map(|span| span.action.map(|action| (span.contents, action)))
+            .filter_map(|span| match span.action {
+                Some(action @ ToolbarAction::Toggle(_)) => Some(action),
+                _ => None,
+            })
             .collect();
         assert_eq!(
-            labels,
+            actions,
             [
-                (
-                    "Dark Mode: 2".to_string(),
-                    ToolbarAction::Toggle(ToggleKind::DarkMode)
-                ),
-                (
-                    "Multi Color Mode: 3".to_string(),
-                    ToolbarAction::Toggle(ToggleKind::MultiColorMode),
-                ),
-                (
-                    "Multi Layer Mode: 4".to_string(),
-                    ToolbarAction::Toggle(ToggleKind::MultiLayerMode),
-                ),
+                ToolbarAction::Toggle(ToggleKind::DarkMode),
+                ToolbarAction::Toggle(ToggleKind::MultiColorMode),
+                ToolbarAction::Toggle(ToggleKind::MultiLayerMode),
             ]
         );
+        let option_labels: Vec<_> = toolbar
+            .toolbar_spans(MENU_FIRST_ROW + 1)
+            .into_iter()
+            .filter_map(|span| match span.action {
+                Some(ToolbarAction::Toggle(_)) => Some(span.contents),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            option_labels,
+            ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"]
+        );
 
-        for key in ["2", "3", "4"] {
+        for key in ["1", "2", "3"] {
             press(&mut toolbar, key);
+            assert!(toolbar.export_menu_open());
+            assert!(toggle_category_open(&toolbar));
+            assert_eq!(
+                toolbar.pending_shortcut(),
+                Some(PendingShortcut::ToggleOptions)
+            );
         }
         assert!(toolbar.dark_mode());
         assert!(
             toolbar
-                .toolbar_spans(MENU_FIRST_ROW)
+                .toolbar_spans(MENU_FIRST_ROW + 1)
                 .iter()
-                .filter(|span| span.action.is_some())
+                .filter(|span| matches!(span.action, Some(ToolbarAction::Toggle(_))))
                 .all(|span| span.selected)
         );
         let durable = toolbar.durable_selections();
@@ -232,48 +213,78 @@ mod tests {
     }
 
     #[test]
-    fn mode_prefix_remains_available_while_toggles_are_open() {
+    fn escape_and_zero_close_the_combined_menu_from_toggle_options() {
         let mut toolbar = ToolbarState::default();
-
-        press(&mut toolbar, "9");
-        press(&mut toolbar, "1");
-        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Mode));
-
-        press(&mut toolbar, "2");
-        assert_eq!(toolbar.main_mode(), MainMode::Line);
-        assert!(!toolbar.toggles_menu_open());
+        for close_with in ["escape", "0"] {
+            press(&mut toolbar, "0");
+            press(&mut toolbar, "5");
+            if close_with == "escape" {
+                assert!(toolbar.handle_shortcut(
+                    &Key::Named(winit::keyboard::NamedKey::Escape),
+                    ModifiersState::empty()
+                ));
+            } else {
+                press(&mut toolbar, "0");
+            }
+            assert!(!toolbar.export_menu_open());
+            assert_eq!(toolbar.pending_shortcut(), None);
+        }
     }
 
     #[test]
-    fn toggles_selection_ends_at_the_label_before_the_unselected_gap() {
-        let mut toolbar = ToolbarState::default();
-        toolbar.apply_action(ToolbarAction::ToggleTogglesMenu);
-
+    fn top_level_has_only_the_exact_combined_files_entry() {
+        let toolbar = ToolbarState::default();
         let spans = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        let toggle = spans
-            .iter()
-            .position(|span| span.action == Some(ToolbarAction::ToggleTogglesMenu))
-            .expect("Toggles action is visible");
-        assert_eq!(spans[toggle].contents, "9. Toggles");
-        assert!(spans[toggle].selected);
-        assert_eq!(spans[toggle + 1].contents, "  ");
-        assert!(!spans[toggle + 1].selected);
-        assert_eq!(spans[toggle + 1].action, None);
+        assert!(spans.iter().any(|span| span.contents == "0. Files/Togls"));
+        assert!(
+            !spans
+                .iter()
+                .any(|span| span.contents.contains("9. Toggles"))
+        );
+        assert!(
+            !spans
+                .iter()
+                .any(|span| span.contents.contains("Save/Load/Export"))
+        );
     }
 
     #[test]
-    fn mouse_toggles_are_peer_actions_of_export() {
+    fn mouse_category_and_toggle_actions_keep_the_combined_menu_open() {
         let mut toolbar = ToolbarState::default();
-        assert!(toolbar.apply_action(ToolbarAction::ToggleTogglesMenu));
-        assert!(toolbar.toggles_menu_open());
-
-        assert!(toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::DarkMode)));
-        assert!(toolbar.dark_mode());
-        assert!(toolbar.toggles_menu_open());
-
         assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+        let width = 180;
+        let category = ToolbarAction::SelectExportCategory(FILES_TOGGLE_CATEGORY);
+        let category_column = action_column(&toolbar, MENU_FIRST_ROW, width, category);
+        assert_eq!(
+            toolbar.action_at(MENU_FIRST_ROW, category_column, width),
+            Some(category)
+        );
+        assert!(toolbar.apply_action(category));
+        assert!(toggle_category_open(&toolbar));
+
+        let toggle = ToolbarAction::Toggle(ToggleKind::DarkMode);
+        let toggle_column = action_column(&toolbar, MENU_FIRST_ROW + 1, width, toggle);
+        assert_eq!(
+            toolbar.action_at(MENU_FIRST_ROW + 1, toggle_column, width),
+            Some(toggle)
+        );
+        assert!(toolbar.apply_action(toggle));
+        assert!(toolbar.dark_mode());
+        assert!(toggle_category_open(&toolbar));
+
+        let save = ToolbarAction::SelectExportCategory(1);
+        let save_column = action_column(&toolbar, MENU_FIRST_ROW, width, save);
+        assert_eq!(
+            toolbar.action_at(MENU_FIRST_ROW, save_column, width),
+            Some(save)
+        );
+        assert!(toolbar.apply_action(save));
         assert!(toolbar.export_menu_open());
-        assert!(!toolbar.toggles_menu_open());
+        assert!(!toggle_category_open(&toolbar));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ExportOption(1))
+        );
     }
 
     #[test]
@@ -292,6 +303,7 @@ mod tests {
                 MainMode::Colors
             ]
         );
+        press(&mut toolbar, "0");
         press(&mut toolbar, "1");
         press(&mut toolbar, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Colors);
@@ -308,6 +320,7 @@ mod tests {
                 MainMode::Colors,
             ]
         );
+        press(&mut toolbar, "0");
         press(&mut toolbar, "1");
         press(&mut toolbar, "6");
         assert_eq!(toolbar.main_mode(), MainMode::Colors);
@@ -323,6 +336,7 @@ mod tests {
                 MainMode::Layers,
             ]
         );
+        press(&mut toolbar, "0");
         press(&mut toolbar, "1");
         press(&mut toolbar, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Layers);

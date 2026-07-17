@@ -70,7 +70,6 @@ pub enum Tooltip {
     Text,
     Replace,
     Export,
-    Toggles,
     Layers,
     Colors,
     Selection,
@@ -112,9 +111,8 @@ impl Tooltip {
             Self::Text => "<Ret> exits text mode; arrows move freely over the canvas",
             Self::Replace => "<Esc>/Ctrl-C/Ctrl-G to exit replace mode",
             Self::Export => {
-                "TXT/PNG export selection or visible viewport; JSON exports the whole project"
+                "Files/Togls: copy/export, save/load files, clear, or toggle display modes"
             }
-            Self::Toggles => "Toggles: Dark Mode reverses theme colors",
             Self::Layers => "Layers: select, show, reorder, add, or delete a layer",
             Self::Colors => "Colors: select the foreground color for future writes",
             Self::Selection => {
@@ -132,7 +130,6 @@ impl Tooltip {
                 | Self::SingleReplace
                 | Self::LineStroke
                 | Self::Export
-                | Self::Toggles
                 | Self::Layers
                 | Self::Colors
                 | Self::Selection

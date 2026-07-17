@@ -11,9 +11,6 @@ impl Editor {
         if self.toolbar.export_menu_open() {
             return EditorState::ExportMode;
         }
-        if self.toolbar.toggles_menu_open() {
-            return EditorState::TogglesMode;
-        }
         if self.toolbar.pending_shortcut().is_some() {
             return EditorState::ToolbarMode;
         }
@@ -49,10 +46,6 @@ impl Editor {
             EditorState::JumpMode => self.cancel_jump(),
             EditorState::ExportMode => {
                 self.toolbar.close_export_menu();
-                true
-            }
-            EditorState::TogglesMode => {
-                self.toolbar.close_toggles_menu();
                 true
             }
             EditorState::ToolbarMode => {

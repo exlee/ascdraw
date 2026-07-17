@@ -83,8 +83,7 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Enter or leave continuous Replace mode | Return or Shift + `R` |
 | Copy / cut / paste | Cmd + `C` / Ctrl/Cmd + `X` / Ctrl/Cmd + `V` |
 | Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
-| Open Toggles | `9` |
-| Open Save/Load/Export | `0` |
+| Open Files/Togls | `0` |
 
 Jump shows non-overlapping 21×15 sectors covering the visible canvas, with the initial selected
 sector centered exactly on the cursor. A cursor-colored inner rectangle marks the selected sector;
@@ -114,9 +113,10 @@ as in `2 1 3`. On a page, `1` through `9` choose the first nine entries and `0` 
 Pending prefixes are highlighted, and Escape cancels an unfinished path.
 The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and down positive.
 
-Press `9` to open Toggles. Dark Mode (`9 2`) reverses the default foreground and background while
-preserving explicit selection, highlight, cursor, and tooltip accent colors. Multi Color Mode (`9 3`)
-adds the Colors mode, and Multi Layer Mode (`9 4`) adds the Layers mode.
+Press `0 5` to select Togls in the Files/Togls menu. Dark Mode (`0 5 1`) reverses the default
+foreground and background while preserving explicit selection, highlight, cursor, and tooltip
+accent colors. Multi Color Mode (`0 5 2`) adds the Colors mode, and Multi Layer Mode (`0 5 3`)
+adds the Layers mode.
 
 Colors provides base and bright eight-color ANSI-style palettes. The selected color applies only to
 future nonblank text, replacements, stamps, lines, shapes, and pasted text. Existing glyph colors
@@ -207,9 +207,9 @@ and trailing blanks, and selects the pasted result.
 Undo and redo histories are independent per window. Document edits include the viewport state;
 navigation and menu-only changes do not create history entries.
 
-## Save, load, and export
+## Files, toggles, and export
 
-Press `0` to open the top-right Save/Load/Export menu:
+Press `0` to open the top-right Files/Togls menu:
 
 | Sequence | Action |
 | --- | --- |
@@ -220,6 +220,9 @@ Press `0` to open the top-right Save/Load/Export menu:
 | `0 3 3` | Save JSON project |
 | `0 4 1` | Load TXT |
 | `0 4 2` | Load JSON project |
+| `0 5 1` | Toggle Dark Mode |
+| `0 5 2` | Toggle Multi Color Mode |
+| `0 5 3` | Toggle Multi Layer Mode |
 | `0 9` | Clear the canvas |
 
 TXT and PNG use the expanded selection when one exists; otherwise they use the visible canvas

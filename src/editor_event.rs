@@ -10,7 +10,6 @@ pub enum EditorState {
     JumpMode,
     ToolbarMode,
     ExportMode,
-    TogglesMode,
     ReplaceOneMode,
     MoveMode,
     LinePreviewMode,
