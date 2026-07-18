@@ -71,6 +71,44 @@ pub fn toolbar_border_spans(width: usize, top: bool) -> Vec<ToolbarSpan> {
     ))]
 }
 
+pub fn toolbar_minimap_border_spans(
+    width: usize,
+    minimap_width: usize,
+    coordinates: (i128, i128),
+) -> Vec<ToolbarSpan> {
+    if width < 3 || minimap_width < 3 {
+        return toolbar_border_spans(width, false);
+    }
+    let right = width - 2;
+    let left = right.saturating_sub(minimap_width.saturating_sub(1));
+    if left == 0 || left >= right {
+        return toolbar_border_spans(width, false);
+    }
+
+    let mut border = vec!['─'; width];
+    border[0] = '└';
+    border[left] = '┬';
+    border[right] = '┬';
+    border[width - 1] = '┘';
+
+    let label = format!("({},{})", coordinates.0, coordinates.1);
+    let label = label.chars().collect::<Vec<_>>();
+    if let Some(comma) = label.iter().position(|character| *character == ',')
+        && label.len() < right - left
+    {
+        let center = (left + right) / 2;
+        let start = center
+            .saturating_sub(comma)
+            .max(left + 1)
+            .min(right - label.len());
+        for (index, character) in label.into_iter().enumerate() {
+            border[start + index] = character;
+        }
+    }
+
+    vec![plain_span(border.into_iter().collect())]
+}
+
 pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSpan> {
     if width == 0 {
         return Vec::new();

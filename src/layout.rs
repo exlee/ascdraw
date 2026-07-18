@@ -8,7 +8,7 @@ pub const PADDING: usize = 20;
 pub const SCROLL_MARGIN_CELLS: i64 = 3;
 pub const TOOLTIP_GRID_GAP: usize = PADDING;
 pub const TOOLTIP_BOTTOM_PAD: usize = 15;
-const MINIMAP_COLUMNS: usize = 20;
+pub const MINIMAP_COLUMNS: usize = 20;
 const MINIMAP_ROWS: usize = 7;
 const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
@@ -53,18 +53,19 @@ pub fn minimap_rect(
     grid_top: usize,
     toolbar_cell_size: (usize, usize),
 ) -> ScreenRect {
-    let available_width = viewport_width.saturating_sub(PADDING * 2);
-    let width = MINIMAP_COLUMNS
-        .saturating_mul(toolbar_cell_size.0.max(1))
-        .min(available_width);
-    let right = viewport_width.saturating_sub(PADDING);
+    let cell_width = toolbar_cell_size.0.max(1);
+    let cell_height = toolbar_cell_size.1.max(1);
+    let toolbar_columns = viewport_width.saturating_sub(PADDING * 2) / cell_width;
+    let width_in_cells = MINIMAP_COLUMNS.min(toolbar_columns.saturating_sub(1));
+    let right_column = toolbar_columns.saturating_sub(2);
+    let left_column = right_column.saturating_sub(width_in_cells.saturating_sub(1));
     ScreenRect {
-        left: right.saturating_sub(width),
-        top: grid_top.saturating_sub(1),
-        right,
+        left: PADDING.saturating_add(left_column.saturating_mul(cell_width)),
+        top: grid_top.saturating_sub(cell_height),
+        right: PADDING.saturating_add(right_column.saturating_add(1).saturating_mul(cell_width)),
         bottom: grid_top
-            .saturating_sub(1)
-            .saturating_add(MINIMAP_ROWS.saturating_mul(toolbar_cell_size.1.max(1))),
+            .saturating_sub(cell_height)
+            .saturating_add(MINIMAP_ROWS.saturating_mul(cell_height)),
     }
 }
 
@@ -584,15 +585,15 @@ mod tests {
         assert_eq!(
             rect,
             ScreenRect {
-                left: 820,
-                top: 199,
-                right: 980,
-                bottom: 311,
+                left: 812,
+                top: 184,
+                right: 972,
+                bottom: 296,
             }
         );
         assert!(rect.contains(900.0, 250.0));
-        assert!(!rect.contains(819.0, 250.0));
-        assert!(!rect.contains(900.0, 311.0));
+        assert!(!rect.contains(811.0, 250.0));
+        assert!(!rect.contains(900.0, 296.0));
     }
 
     #[test]

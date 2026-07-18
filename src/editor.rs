@@ -397,34 +397,8 @@ impl Editor {
     }
 
     pub fn toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
-        let mut spans = self.toolbar.toolbar_spans_with_layers_for_width(
-            row,
-            box_width,
-            &self.layer_summaries(),
-        );
-        if row + 1 == self.toolbar.content_rows_for_width(box_width) {
-            let (x, y) = self.cursor_coordinates();
-            let contents = format!("  ({x},{y})");
-            let mut coordinates = ToolbarSpan {
-                contents,
-                bold_prefix: 0,
-                selected: false,
-                highlighted: false,
-                tooltip: false,
-                action: None,
-                right_aligned: false,
-                foreground: None,
-            };
-            if self.toolbar.auxiliary_panels_visible()
-                && let Some(panel_start) = spans.iter().position(|span| span.right_aligned)
-            {
-                spans.insert(panel_start, coordinates);
-            } else {
-                coordinates.right_aligned = true;
-                spans.push(coordinates);
-            }
-        }
-        spans
+        self.toolbar
+            .toolbar_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
     }
 
     pub fn cursor_coordinates(&self) -> (i128, i128) {
@@ -1461,21 +1435,15 @@ mod tests {
         let mut state = state();
 
         for (direction, expected) in [
-            (Direction::Right, "(1,0)"),
-            (Direction::Down, "(1,1)"),
-            (Direction::Left, "(0,1)"),
-            (Direction::Up, "(0,0)"),
-            (Direction::Left, "(-1,0)"),
-            (Direction::Up, "(-1,-1)"),
+            (Direction::Right, (1, 0)),
+            (Direction::Down, (1, 1)),
+            (Direction::Left, (0, 1)),
+            (Direction::Up, (0, 0)),
+            (Direction::Left, (-1, 0)),
+            (Direction::Up, (-1, -1)),
         ] {
             state.move_cursor(direction);
-            let last_row = state.toolbar.content_rows() - 1;
-            let coordinate = state
-                .toolbar_spans(last_row)
-                .into_iter()
-                .find(|span| span.right_aligned && span.contents.contains('('))
-                .expect("last toolbar row contains cursor coordinates");
-            assert_eq!(coordinate.contents.trim(), expected);
+            assert_eq!(state.cursor_coordinates(), expected);
         }
     }
 
@@ -1505,35 +1473,21 @@ mod tests {
     }
 
     #[test]
-    fn cursor_coordinates_are_right_aligned_on_the_last_toolbar_content_row() {
+    fn cursor_coordinates_are_centered_on_the_minimap_border_comma() {
         let mut state = state();
         state.move_to(Coord {
             line: 8,
             column: 10,
         });
 
-        for action in [
-            None,
-            Some(ToolbarAction::ToggleExportMenu),
-            Some(ToolbarAction::Toggle(ToggleKind::MultiColorMode)),
-        ] {
-            if let Some(action) = action {
-                assert!(state.apply_toolbar_action(action));
-            }
-            let last_row = state.toolbar.content_rows() - 1;
-            let coordinate = state
-                .toolbar_spans(last_row)
-                .into_iter()
-                .find(|span| span.right_aligned && span.contents.contains('('))
-                .expect("last toolbar row contains cursor coordinates");
-            assert_eq!(coordinate.contents.trim(), "(10,8)");
-            assert!(
-                state
-                    .toolbar_spans(last_row - 1)
-                    .iter()
-                    .all(|span| !span.contents.contains("(10,8)"))
-            );
-        }
+        let border = crate::toolbar::toolbar_minimap_border_spans(
+            80,
+            crate::layout::MINIMAP_COLUMNS,
+            state.cursor_coordinates(),
+        );
+        let contents = border[0].contents.as_str();
+        assert!(contents.contains("(10,8)"));
+        assert_eq!(contents.chars().nth((59 + 78) / 2), Some(','));
     }
 
     #[test]

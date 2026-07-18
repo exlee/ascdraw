@@ -5,7 +5,7 @@ use crate::face_resolution::ResolvedFace;
 use crate::layout::{ScreenRect, VisibleCanvasCells};
 use crate::model::Coord;
 
-use super::render_marching_edge;
+use super::{CellMetrics, draw_text_cluster, render_marching_edge};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MinimapBounds {
@@ -104,27 +104,34 @@ pub(super) fn render(
     viewport: VisibleCanvasCells,
     panel: ScreenRect,
     cell_aspect: f32,
+    border_metrics: &CellMetrics,
     default_face: &ResolvedFace,
 ) {
     let content = state.content_cells();
     let world = MinimapBounds::from_content_and_viewport(&content, viewport);
-    let Some(geometry) = MinimapGeometry::new(panel, world, cell_aspect) else {
+    let content_panel = ScreenRect {
+        left: panel.left.saturating_add(border_metrics.cell_width),
+        top: panel.top.saturating_add(border_metrics.cell_height),
+        right: panel.right.saturating_sub(border_metrics.cell_width),
+        bottom: panel.bottom.saturating_sub(border_metrics.cell_height),
+    };
+    let Some(geometry) = MinimapGeometry::new(content_panel, world, cell_aspect) else {
         return;
     };
-    let panel_rect = Rect::from_xywh(
+    let body_rect = Rect::from_xywh(
         panel.left as f32,
-        panel.top as f32,
+        panel.top.saturating_add(border_metrics.cell_height) as f32,
         panel.width() as f32,
-        panel.height() as f32,
+        panel.height().saturating_sub(border_metrics.cell_height) as f32,
     );
     let mut background = Paint::default();
     background
         .set_anti_alias(false)
         .set_color(default_face.bg.to_color());
-    canvas.draw_rect(panel_rect, &background);
+    canvas.draw_rect(body_rect, &background);
 
     canvas.save();
-    canvas.clip_rect(panel_rect, None, false);
+    canvas.clip_rect(body_rect, None, false);
     let mut foreground = Paint::default();
     foreground
         .set_anti_alias(false)
@@ -189,26 +196,61 @@ pub(super) fn render(
     }
     canvas.restore();
 
-    foreground.set_stroke_width(1.0);
-    for (start, end) in [
-        (
-            (panel_rect.left, panel_rect.top),
-            (panel_rect.right, panel_rect.top),
-        ),
-        (
-            (panel_rect.right, panel_rect.top),
-            (panel_rect.right, panel_rect.bottom),
-        ),
-        (
-            (panel_rect.right, panel_rect.bottom),
-            (panel_rect.left, panel_rect.bottom),
-        ),
-        (
-            (panel_rect.left, panel_rect.bottom),
-            (panel_rect.left, panel_rect.top),
-        ),
-    ] {
-        canvas.draw_line(start, end, &foreground);
+    let left_column = panel.left.saturating_sub(crate::layout::PADDING) / border_metrics.cell_width;
+    let right_column = panel
+        .right
+        .saturating_sub(crate::layout::PADDING)
+        .checked_div(border_metrics.cell_width)
+        .unwrap_or(0)
+        .saturating_sub(1);
+    let rows = panel.height() / border_metrics.cell_height;
+    let font = border_metrics.font.clone();
+    foreground.set_anti_alias(true);
+    for row in 1..rows.saturating_sub(1) {
+        let top = panel
+            .top
+            .saturating_add(row.saturating_mul(border_metrics.cell_height));
+        draw_text_cluster(
+            canvas,
+            left_column,
+            top,
+            "│",
+            &font,
+            border_metrics,
+            &foreground,
+        );
+        draw_text_cluster(
+            canvas,
+            right_column,
+            top,
+            "│",
+            &font,
+            border_metrics,
+            &foreground,
+        );
+    }
+    if rows >= 2 {
+        let top = panel
+            .top
+            .saturating_add(rows.saturating_sub(1) * border_metrics.cell_height);
+        for column in left_column..=right_column {
+            let glyph = if column == left_column {
+                "└"
+            } else if column == right_column {
+                "┘"
+            } else {
+                "─"
+            };
+            draw_text_cluster(
+                canvas,
+                column,
+                top,
+                glyph,
+                &font,
+                border_metrics,
+                &foreground,
+            );
+        }
     }
 }
 
