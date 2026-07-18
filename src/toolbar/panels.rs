@@ -10,11 +10,18 @@ use super::{
 pub(super) const LAYER_PANEL_WIDTH: usize = 18;
 pub(super) const COLOR_PANEL_WIDTH: usize = 20;
 pub(super) const FILES_HEADER_WIDTH: usize = 11;
-const PANEL_GAP: usize = 1;
+const PANEL_GAP: usize = 2;
 
 impl ToolbarState {
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
+        entries.push((
+            "Files/Togls",
+            0,
+            FILES_HEADER_WIDTH,
+            ToolbarAction::ToggleExportMenu,
+            self.export_menu_open(),
+        ));
         if self.multi_layer_mode() {
             entries.push((
                 "Lyrs",
@@ -39,13 +46,6 @@ impl ToolbarState {
                 ),
             ));
         }
-        entries.push((
-            "Files/Togls",
-            0,
-            FILES_HEADER_WIDTH,
-            ToolbarAction::ToggleExportMenu,
-            self.export_menu_open(),
-        ));
 
         for (index, (label, digit, width, action, active)) in entries.into_iter().enumerate() {
             if index > 0 {
@@ -68,7 +68,11 @@ impl ToolbarState {
                     && action != ToolbarAction::ToggleExportMenu,
                 tooltip: false,
                 action: Some(action),
-                right_aligned: index == 0,
+                right_aligned: matches!(action, ToolbarAction::BeginLayersPath)
+                    || (!self.multi_layer_mode()
+                        && matches!(action, ToolbarAction::BeginColorsPath))
+                    || (!self.auxiliary_panels_visible()
+                        && matches!(action, ToolbarAction::ToggleExportMenu)),
                 foreground: None,
             });
             if width > used {
@@ -195,19 +199,19 @@ mod tests {
         assert!(text(&rows[0]).starts_with("Decorators:"));
         assert_eq!(
             right_text(&rows[0]),
-            "     1 2 3 4 5 6 7      1 2 3 4 5 6 7 8"
+            "     1 2 3 4 5 6 7       1 2 3 4 5 6 7 8"
         );
         assert_eq!(
             right_text(&rows[1]),
-            "8.1. α × ▪ ↑ ↓ + ø 9.1. ■ ■ ■ ■ ■ ■ ■ ■"
+            "8.1. α × ▪ ↑ ↓ + ø  9.1. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[2]),
-            "8.2. β   ▫ ↑ ↓ + ø 9.2. ■ ■ ■ ■ ■ ■ ■ ■"
+            "8.2. β   ▫ ↑ ↓ + ø  9.2. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[3]),
-            "8.3. γ   ▪ ↑ ↓ + ø                     "
+            "8.3. γ   ▪ ↑ ↓ + ø                      "
         );
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }

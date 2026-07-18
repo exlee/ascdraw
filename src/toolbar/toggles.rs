@@ -116,7 +116,10 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MENU_FIRST_ROW, MainMode, ToolbarAction, boxed_toolbar_spans};
+    use crate::toolbar::{
+        MENU_FIRST_ROW, MainMode, ToolbarAction, boxed_toolbar_spans,
+        panels::{COLOR_PANEL_WIDTH, LAYER_PANEL_WIDTH},
+    };
     use std::ops::Range;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     use winit::keyboard::{Key, ModifiersState};
@@ -266,15 +269,23 @@ mod tests {
             (
                 false,
                 false,
-                "0          ",
-                "Files/Togls",
+                "0          ".to_owned(),
+                "Files/Togls".to_owned(),
                 vec![ToolbarAction::ToggleExportMenu],
             ),
             (
                 true,
                 false,
-                "8                  0          ",
-                "Lyrs               Files/Togls",
+                format!(
+                    "8{:layer_padding$}",
+                    "",
+                    layer_padding = LAYER_PANEL_WIDTH - 1
+                ),
+                format!(
+                    "Lyrs{:layer_padding$}",
+                    "",
+                    layer_padding = LAYER_PANEL_WIDTH - 4
+                ),
                 vec![
                     ToolbarAction::BeginLayersPath,
                     ToolbarAction::ToggleExportMenu,
@@ -283,8 +294,16 @@ mod tests {
             (
                 false,
                 true,
-                "9                    0          ",
-                "Clrs                 Files/Togls",
+                format!(
+                    "9{:color_padding$}",
+                    "",
+                    color_padding = COLOR_PANEL_WIDTH - 1
+                ),
+                format!(
+                    "Clrs{:color_padding$}",
+                    "",
+                    color_padding = COLOR_PANEL_WIDTH - 4
+                ),
                 vec![
                     ToolbarAction::BeginColorsPath,
                     ToolbarAction::ToggleExportMenu,
@@ -293,8 +312,20 @@ mod tests {
             (
                 true,
                 true,
-                "8                  9                    0          ",
-                "Lyrs               Clrs                 Files/Togls",
+                format!(
+                    "8{:layer_padding$}  9{:color_padding$}",
+                    "",
+                    "",
+                    layer_padding = LAYER_PANEL_WIDTH - 1,
+                    color_padding = COLOR_PANEL_WIDTH - 1,
+                ),
+                format!(
+                    "Lyrs{:layer_padding$}  Clrs{:color_padding$}",
+                    "",
+                    "",
+                    layer_padding = LAYER_PANEL_WIDTH - 4,
+                    color_padding = COLOR_PANEL_WIDTH - 4,
+                ),
                 vec![
                     ToolbarAction::BeginLayersPath,
                     ToolbarAction::BeginColorsPath,
@@ -308,8 +339,11 @@ mod tests {
 
             assert_eq!(right_group_text(&toolbar, MAIN_LABEL_ROW), top);
             assert_eq!(right_group_text(&toolbar, MAIN_SHORTCUT_ROW), bottom);
-            let expected_group_start = width - 2 - UnicodeWidthStr::width(bottom);
-            for action in &actions {
+            let expected_group_start = width - 2 - UnicodeWidthStr::width(bottom.as_str());
+            for action in actions
+                .iter()
+                .filter(|action| !layers && !colors || **action != ToolbarAction::ToggleExportMenu)
+            {
                 let top_range = action_range(&toolbar, MAIN_LABEL_ROW, width, *action);
                 let bottom_range = action_range(&toolbar, MAIN_SHORTCUT_ROW, width, *action);
                 assert_eq!(top_range, bottom_range);
