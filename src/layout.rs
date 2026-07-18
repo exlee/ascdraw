@@ -56,17 +56,27 @@ pub fn minimap_rect(
     let cell_width = toolbar_cell_size.0.max(1);
     let cell_height = toolbar_cell_size.1.max(1);
     let toolbar_columns = viewport_width.saturating_sub(PADDING * 2) / cell_width;
-    let width_in_cells = MINIMAP_COLUMNS.min(toolbar_columns.saturating_sub(1));
+    let width_in_cells = minimap_width_in_cells(toolbar_columns);
     let right_column = toolbar_columns.saturating_sub(2);
     let left_column = right_column.saturating_sub(width_in_cells.saturating_sub(1));
+    let right = PADDING.saturating_add(right_column.saturating_add(1).saturating_mul(cell_width));
     ScreenRect {
-        left: PADDING.saturating_add(left_column.saturating_mul(cell_width)),
+        left: if width_in_cells == 0 {
+            right
+        } else {
+            PADDING.saturating_add(left_column.saturating_mul(cell_width))
+        },
         top: grid_top.saturating_sub(cell_height),
-        right: PADDING.saturating_add(right_column.saturating_add(1).saturating_mul(cell_width)),
+        right,
         bottom: grid_top
             .saturating_sub(cell_height)
             .saturating_add(MINIMAP_ROWS.saturating_mul(cell_height)),
     }
+}
+
+pub fn minimap_width_in_cells(toolbar_columns: usize) -> usize {
+    let available = MINIMAP_COLUMNS.min(toolbar_columns.saturating_sub(1));
+    available - available % 2
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -594,6 +604,13 @@ mod tests {
         assert!(rect.contains(900.0, 250.0));
         assert!(!rect.contains(811.0, 250.0));
         assert!(!rect.contains(900.0, 296.0));
+
+        assert_eq!(minimap_width_in_cells(120), 20);
+        assert_eq!(minimap_width_in_cells(18), 16);
+        assert_eq!(minimap_width_in_cells(4), 2);
+        for columns in 0..40 {
+            assert_eq!(minimap_width_in_cells(columns) % 2, 0);
+        }
     }
 
     #[test]

@@ -504,7 +504,7 @@ fn render_toolbar(
         state.toolbar.rows_for_width(max_columns) - 1,
         crate::toolbar::toolbar_minimap_border_spans(
             max_columns,
-            crate::layout::MINIMAP_COLUMNS.min(max_columns.saturating_sub(1)),
+            crate::layout::minimap_width_in_cells(max_columns),
             state.cursor_coordinates(),
         ),
     ));
