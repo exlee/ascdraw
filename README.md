@@ -163,9 +163,10 @@ Space starts a routed preview. Move freely to reroute the current segment, then:
 - press Backspace to remove the latest committed segment;
 - press Escape to cancel the live segment while keeping committed segments.
 
-With the mouse, click once to anchor, move to preview, and click to commit another segment. Double
-click finishes. A press-drag-release commits one segment and finishes immediately. Shift- and
-Alt-drag keep their selection and move behavior.
+With the mouse, clicking a new cell once only moves the cursor; click it again to anchor. Clicking
+the current cursor anchors immediately. Once anchored, move to preview and click to commit another
+segment. Double click finishes. A press-drag-release commits one segment and finishes immediately.
+Shift- and Alt-drag keep their selection and move behavior.
 
 Line options control the start marker, end marker, style (thin, heavy, double, or dashed), routing
 (`H->V`, `V->H`, horizontal/vertical diagonal, or stairs), and corner style for thin and dashed

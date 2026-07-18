@@ -156,6 +156,7 @@ struct MouseDrag {
     active: bool,
     document_changed: bool,
     input_override: Option<MouseDragOverride>,
+    line_preview_was_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,77 @@ fn is_line_double_click(
         && previous.is_some_and(|(at, previous_coord)| {
             previous_coord == coord && now.saturating_duration_since(at) <= DOUBLE_CLICK_INTERVAL
         })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LineMousePress {
+    preview_was_active: bool,
+    cursor_moved: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LineMouseFinish {
+    document_changed: bool,
+    next_click: Option<(Instant, Coord)>,
+}
+
+fn begin_line_mouse_state(
+    state: &mut Editor,
+    coord: Coord,
+    target: Coord,
+    allow_cursor_move: bool,
+) -> LineMousePress {
+    let preview_was_active = state.has_line_preview();
+    let wants_cursor_move = !preview_was_active && state.grid.cursor_pos != target;
+    let cursor_moved = wants_cursor_move && allow_cursor_move;
+    if preview_was_active {
+        state.move_line_preview_to(target);
+    } else if cursor_moved {
+        state.move_to(coord);
+    } else if !wants_cursor_move {
+        state.start_or_advance_line_preview();
+    }
+    LineMousePress {
+        preview_was_active,
+        cursor_moved,
+    }
+}
+
+fn continue_line_mouse_state(state: &mut Editor, target: Coord) {
+    if !state.has_line_preview() {
+        state.start_or_advance_line_preview();
+    }
+    state.move_line_preview_to(target);
+}
+
+fn finish_line_mouse_state(
+    state: &mut Editor,
+    coord: Coord,
+    drag_active: bool,
+    preview_was_active: bool,
+    previous_click: Option<(Instant, Coord)>,
+    now: Instant,
+) -> LineMouseFinish {
+    let moved = state
+        .line_preview_anchor()
+        .is_some_and(|anchor| anchor != coord);
+    let double_click =
+        preview_was_active && is_line_double_click(previous_click, now, coord, moved);
+    let document_changed = if moved {
+        state.start_or_advance_line_preview()
+    } else if double_click {
+        state.finish_line_preview()
+    } else {
+        false
+    };
+    if drag_active && moved {
+        state.finish_line_preview();
+    }
+    let next_click = (state.has_line_preview() && preview_was_active).then_some((now, coord));
+    LineMouseFinish {
+        document_changed,
+        next_click,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -247,16 +319,28 @@ impl EditorWindow {
         let previous_state = self.state.clone();
         let previous_viewport = self.viewport;
         let target = self.state.cursor_target_for_coord(coord);
+        let mut line_preview_was_active = false;
         if input_override == Some(MouseDragOverride::Line) {
-            if self.state.has_line_preview() {
-                self.state.move_line_preview_to(target);
+            let moves_cursor =
+                !self.state.has_line_preview() && self.state.grid.cursor_pos != target;
+            let origin = if moves_cursor {
+                self.navigation_origin_for(target)
             } else {
-                if let Some(origin) = self.navigation_origin_for(target) {
-                    self.finish_history_transaction();
-                    self.state.move_to(coord);
-                    self.finish_navigation(origin);
-                }
-                self.state.start_or_advance_line_preview();
+                None
+            };
+            if origin.is_some() {
+                self.finish_history_transaction();
+            }
+            let press = begin_line_mouse_state(
+                &mut self.state,
+                coord,
+                target,
+                !moves_cursor || origin.is_some(),
+            );
+            line_preview_was_active = press.preview_was_active;
+            debug_assert_eq!(press.cursor_moved, moves_cursor && origin.is_some());
+            if let Some(origin) = origin {
+                self.finish_navigation(origin);
             }
             self.request_redraw();
         } else {
@@ -276,6 +360,7 @@ impl EditorWindow {
             active: false,
             document_changed: false,
             input_override,
+            line_preview_was_active,
         });
     }
 
@@ -305,7 +390,7 @@ impl EditorWindow {
             drag.active = true;
         }
         if drag.input_override == Some(MouseDragOverride::Line) {
-            self.state.move_line_preview_to(target);
+            continue_line_mouse_state(&mut self.state, target);
             drag.last_pointer = target;
             self.mouse_drag = Some(drag);
             self.request_redraw();
@@ -388,33 +473,24 @@ impl EditorWindow {
     fn finish_line_mouse_gesture(&mut self, drag: MouseDrag) {
         let now = Instant::now();
         let coord = drag.last_pointer;
-        let moved = self
-            .state
-            .line_preview_anchor()
-            .is_some_and(|anchor| anchor != coord);
-        let double_click = is_line_double_click(self.last_line_click, now, coord, moved);
-        let document_changed = if moved {
-            self.state.start_or_advance_line_preview()
-        } else if double_click {
-            self.state.finish_line_preview()
-        } else {
-            false
-        };
-        if drag.active && moved {
-            self.state.finish_line_preview();
-        }
+        let finish = finish_line_mouse_state(
+            &mut self.state,
+            coord,
+            drag.active,
+            drag.line_preview_was_active,
+            self.last_line_click,
+            now,
+        );
         let recorded = self.finish_grouped_state_change(
             drag.previous_state,
             drag.previous_viewport,
-            document_changed,
+            finish.document_changed,
             HistoryGroup::LineRoute,
         );
         if !self.state.has_line_preview() {
             self.finish_history_transaction();
-            self.last_line_click = None;
-        } else {
-            self.last_line_click = Some((now, coord));
         }
+        self.last_line_click = finish.next_click;
         if recorded {
             self.mark_document_dirty();
         }
@@ -1714,6 +1790,179 @@ mod tests {
             })
             .collect();
         state
+    }
+
+    fn line_mouse_state() -> Editor {
+        let mut state = state_with_rows(&["      "]);
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        state
+    }
+
+    #[test]
+    fn first_line_click_on_a_new_cell_only_moves_cursor_without_history_or_document_change() {
+        let mut state = line_mouse_state();
+        let target = Coord { line: 0, column: 2 };
+        let previous = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+
+        let press = begin_line_mouse_state(&mut state, target, target, true);
+        assert_eq!(
+            press,
+            LineMousePress {
+                preview_was_active: false,
+                cursor_moved: true,
+            }
+        );
+        assert_eq!(state.grid.cursor_pos, target);
+        assert!(!state.has_line_preview());
+
+        let finish = finish_line_mouse_state(
+            &mut state,
+            target,
+            false,
+            press.preview_was_active,
+            None,
+            Instant::now(),
+        );
+        assert!(!finish.document_changed);
+        assert_eq!(finish.next_click, None);
+        let current = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        assert!(previous.edit.same_document(&current.edit));
+
+        let history = EditHistory::default();
+        assert!(!history.has_pending_transaction());
+        assert_eq!(history.lengths(), (0, 0));
+    }
+
+    #[test]
+    fn line_click_at_current_cursor_activates_preview_immediately() {
+        let mut state = line_mouse_state();
+        let cursor = state.grid.cursor_pos;
+
+        let press = begin_line_mouse_state(&mut state, cursor, cursor, true);
+        assert_eq!(
+            press,
+            LineMousePress {
+                preview_was_active: false,
+                cursor_moved: false,
+            }
+        );
+        assert!(state.has_line_preview());
+        assert_eq!(state.line_preview_anchor(), Some(cursor));
+
+        let finish = finish_line_mouse_state(
+            &mut state,
+            cursor,
+            false,
+            press.preview_was_active,
+            None,
+            Instant::now(),
+        );
+        assert!(!finish.document_changed);
+        assert!(state.has_line_preview());
+        assert_eq!(finish.next_click, None);
+    }
+
+    #[test]
+    fn second_click_that_activates_line_preview_cannot_also_double_click_finish() {
+        let mut state = line_mouse_state();
+        let target = Coord { line: 0, column: 2 };
+        let first_click = Instant::now();
+
+        let first_press = begin_line_mouse_state(&mut state, target, target, true);
+        let first_finish = finish_line_mouse_state(
+            &mut state,
+            target,
+            false,
+            first_press.preview_was_active,
+            None,
+            first_click,
+        );
+        assert_eq!(first_finish.next_click, None);
+        assert!(!state.has_line_preview());
+
+        let activation = begin_line_mouse_state(&mut state, target, target, true);
+        assert!(state.has_line_preview());
+        let activation_finish = finish_line_mouse_state(
+            &mut state,
+            target,
+            false,
+            activation.preview_was_active,
+            Some((first_click, target)),
+            first_click + Duration::from_millis(10),
+        );
+        assert!(!activation_finish.document_changed);
+        assert!(state.has_line_preview());
+        assert_eq!(activation_finish.next_click, None);
+    }
+
+    #[test]
+    fn active_line_preview_click_adds_anchor_then_double_click_finishes() {
+        let mut state = line_mouse_state();
+        let origin = state.grid.cursor_pos;
+        begin_line_mouse_state(&mut state, origin, origin, true);
+        let endpoint = Coord { line: 0, column: 3 };
+        assert!(state.move_line_preview_to(endpoint));
+        let anchor_click = Instant::now();
+
+        let anchor_press = begin_line_mouse_state(&mut state, endpoint, endpoint, true);
+        assert!(anchor_press.preview_was_active);
+        let anchor_finish = finish_line_mouse_state(
+            &mut state,
+            endpoint,
+            false,
+            anchor_press.preview_was_active,
+            None,
+            anchor_click,
+        );
+        assert!(anchor_finish.document_changed);
+        assert!(state.has_line_preview());
+        assert_eq!(state.line_preview_anchor(), Some(endpoint));
+        assert_eq!(anchor_finish.next_click, Some((anchor_click, endpoint)));
+
+        let finish_press = begin_line_mouse_state(&mut state, endpoint, endpoint, true);
+        let finish = finish_line_mouse_state(
+            &mut state,
+            endpoint,
+            false,
+            finish_press.preview_was_active,
+            anchor_finish.next_click,
+            anchor_click + Duration::from_millis(10),
+        );
+        assert!(finish.document_changed);
+        assert!(!state.has_line_preview());
+        assert_eq!(finish.next_click, None);
+    }
+
+    #[test]
+    fn line_drag_from_a_new_cell_still_creates_and_finishes_one_segment() {
+        let mut state = line_mouse_state();
+        let start = Coord { line: 0, column: 1 };
+        let endpoint = Coord { line: 0, column: 4 };
+
+        let press = begin_line_mouse_state(&mut state, start, start, true);
+        assert!(press.cursor_moved);
+        assert!(!state.has_line_preview());
+        continue_line_mouse_state(&mut state, endpoint);
+        assert!(state.has_line_preview());
+        assert_eq!(state.line_preview_anchor(), Some(start));
+
+        let finish = finish_line_mouse_state(
+            &mut state,
+            endpoint,
+            true,
+            press.preview_was_active,
+            None,
+            Instant::now(),
+        );
+        assert!(finish.document_changed);
+        assert!(!state.has_line_preview());
+        assert_eq!(finish.next_click, None);
     }
 
     #[test]
