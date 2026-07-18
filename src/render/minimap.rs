@@ -62,8 +62,8 @@ struct MinimapGeometry {
 impl MinimapGeometry {
     fn new(panel: ScreenRect, world: MinimapBounds, cell_aspect: f32) -> Option<Self> {
         const INSET: f32 = 4.0;
-        let inner_width = panel.width() as f32 - INSET * 2.0;
-        let inner_height = panel.height() as f32 - INSET * 2.0;
+        let inner_width = panel.width() - INSET * 2.0;
+        let inner_height = panel.height() - INSET * 2.0;
         if inner_width <= 0.0 || inner_height <= 0.0 {
             return None;
         }
@@ -79,8 +79,8 @@ impl MinimapGeometry {
             world,
             scale_x,
             scale_y,
-            left: panel.left as f32 + INSET + (inner_width - map_width) / 2.0,
-            top: panel.top as f32 + INSET + (inner_height - map_height) / 2.0,
+            left: panel.left + INSET + (inner_width - map_width) / 2.0,
+            top: panel.top + INSET + (inner_height - map_height) / 2.0,
         })
     }
 
@@ -110,19 +110,19 @@ pub(super) fn render(
     let content = state.content_cells();
     let world = MinimapBounds::from_content_and_viewport(&content, viewport);
     let content_panel = ScreenRect {
-        left: panel.left.saturating_add(border_metrics.cell_width),
-        top: panel.top.saturating_add(border_metrics.cell_height),
-        right: panel.right.saturating_sub(border_metrics.cell_width),
-        bottom: panel.bottom.saturating_sub(border_metrics.cell_height),
+        left: panel.left + border_metrics.cell_width,
+        top: panel.top + border_metrics.cell_height,
+        right: panel.right - border_metrics.cell_width,
+        bottom: panel.bottom - border_metrics.cell_height,
     };
     let Some(geometry) = MinimapGeometry::new(content_panel, world, cell_aspect) else {
         return;
     };
     let body_rect = Rect::from_xywh(
-        panel.left as f32,
-        panel.top.saturating_add(border_metrics.cell_height) as f32,
-        panel.width() as f32,
-        panel.height().saturating_sub(border_metrics.cell_height) as f32,
+        panel.left,
+        panel.top + border_metrics.cell_height,
+        panel.width(),
+        (panel.height() - border_metrics.cell_height).max(0.0),
     );
     let mut background = Paint::default();
     background
@@ -196,20 +196,16 @@ pub(super) fn render(
     }
     canvas.restore();
 
-    let left_column = panel.left.saturating_sub(crate::layout::PADDING) / border_metrics.cell_width;
-    let right_column = panel
-        .right
-        .saturating_sub(crate::layout::PADDING)
-        .checked_div(border_metrics.cell_width)
-        .unwrap_or(0)
+    let left_column = ((panel.left - crate::layout::PADDING as f32).max(0.0)
+        / border_metrics.cell_width.max(1.0)) as usize;
+    let right_column = (((panel.right - crate::layout::PADDING as f32).max(0.0)
+        / border_metrics.cell_width.max(1.0)) as usize)
         .saturating_sub(1);
-    let rows = panel.height() / border_metrics.cell_height;
+    let rows = (panel.height() / border_metrics.cell_height.max(1.0)) as usize;
     let font = border_metrics.font.clone();
     foreground.set_anti_alias(true);
     for row in 1..rows.saturating_sub(1) {
-        let top = panel
-            .top
-            .saturating_add(row.saturating_mul(border_metrics.cell_height));
+        let top = panel.top + row as f32 * border_metrics.cell_height;
         draw_text_cluster(
             canvas,
             left_column,
@@ -230,9 +226,7 @@ pub(super) fn render(
         );
     }
     if rows >= 2 {
-        let top = panel
-            .top
-            .saturating_add(rows.saturating_sub(1) * border_metrics.cell_height);
+        let top = panel.top + rows.saturating_sub(1) as f32 * border_metrics.cell_height;
         for column in left_column..=right_column {
             let glyph = if column == left_column {
                 "└"
@@ -278,10 +272,10 @@ mod tests {
         );
 
         let panel = ScreenRect {
-            left: 0,
-            top: 0,
-            right: 108,
-            bottom: 58,
+            left: 0.0,
+            top: 0.0,
+            right: 108.0,
+            bottom: 58.0,
         };
         let nearby = MinimapGeometry::new(panel, bounds, 0.5).unwrap();
         let distant = MinimapGeometry::new(
@@ -299,9 +293,9 @@ mod tests {
 
         let viewport_rect = nearby.rect(-3, 1, 5, 5);
         assert!((viewport_rect.width() / viewport_rect.height() - 1.0).abs() < f32::EPSILON);
-        assert!(viewport_rect.left >= panel.left as f32);
-        assert!(viewport_rect.top >= panel.top as f32);
-        assert!(viewport_rect.right <= panel.right as f32);
-        assert!(viewport_rect.bottom <= panel.bottom as f32);
+        assert!(viewport_rect.left >= panel.left);
+        assert!(viewport_rect.top >= panel.top);
+        assert!(viewport_rect.right <= panel.right);
+        assert!(viewport_rect.bottom <= panel.bottom);
     }
 }

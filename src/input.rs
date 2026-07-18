@@ -541,7 +541,8 @@ pub fn pointer_position_to_coord(
 ) -> Option<Coord> {
     let metrics = renderer.metrics(scale_factor);
     let toolbar_metrics = renderer.title_metrics(scale_factor);
-    let box_width = viewport_width.saturating_sub(PADDING * 2) / toolbar_metrics.cell_width.max(1);
+    let box_width = (viewport_width.saturating_sub(PADDING * 2) as f32
+        / toolbar_metrics.cell_width.max(1.0)) as usize;
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
         + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_metrics.cell_height);
     if crate::layout::minimap_rect(
@@ -566,9 +567,9 @@ pub fn pointer_position_to_coord(
 fn pointer_position_to_coord_with_metrics(
     x: f64,
     y: f64,
-    grid_top: usize,
-    cell_width: usize,
-    cell_height: usize,
+    grid_top: f32,
+    cell_width: f32,
+    cell_height: f32,
     viewport: ViewportOffset,
 ) -> Option<Coord> {
     let grid_x = x - PADDING as f64 - viewport.x as f64;
@@ -576,8 +577,8 @@ fn pointer_position_to_coord_with_metrics(
     if grid_x < 0.0 || grid_y < 0.0 {
         return None;
     }
-    let column = (grid_x / cell_width.max(1) as f64).floor() as usize;
-    let line = (grid_y / cell_height.max(1) as f64).floor() as usize;
+    let column = (grid_x / cell_width.max(1.0) as f64).floor() as usize;
+    let line = (grid_y / cell_height.max(1.0) as f64).floor() as usize;
     Some(Coord { line, column })
 }
 
@@ -591,7 +592,8 @@ pub fn pointer_position_to_toolbar_position(
     toolbar: &ToolbarState,
 ) -> Option<(usize, usize, usize)> {
     let metrics = renderer.title_metrics(scale_factor);
-    let box_width = viewport_width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let box_width =
+        (viewport_width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
     toolbar_position(
         x,
         y,
@@ -607,9 +609,9 @@ fn toolbar_position(
     x: f64,
     y: f64,
     viewport_width: usize,
-    cell_width: usize,
-    cell_height: usize,
-    top_padding: usize,
+    cell_width: f32,
+    cell_height: f32,
+    top_padding: f32,
     toolbar_rows: usize,
 ) -> Option<(usize, usize, usize)> {
     let toolbar_x = x - PADDING as f64;
@@ -617,13 +619,15 @@ fn toolbar_position(
     if toolbar_x < 0.0 || toolbar_y < 0.0 {
         return None;
     }
-    let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
+    let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP as f32;
     let row = (toolbar_y / stride as f64).floor() as usize;
-    if row == 0 || row + 1 >= toolbar_rows || toolbar_y as usize % stride >= cell_height {
+    let within_row = toolbar_y - row as f64 * stride as f64;
+    if row == 0 || row + 1 >= toolbar_rows || within_row >= cell_height as f64 {
         return None;
     }
-    let column = (toolbar_x / cell_width.max(1) as f64).floor() as usize;
-    let box_width = viewport_width.saturating_sub(PADDING * 2) / cell_width.max(1);
+    let column = (toolbar_x / cell_width.max(1.0) as f64).floor() as usize;
+    let box_width =
+        (viewport_width.saturating_sub(PADDING * 2) as f32 / cell_width.max(1.0)) as usize;
     if column < 2 || column >= box_width.saturating_sub(2) {
         return None;
     }
@@ -648,9 +652,9 @@ mod tests {
                 (PADDING + 8 * cell_width + 1) as f64,
                 top as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 toolbar_rows,
             ),
             None,
@@ -661,9 +665,9 @@ mod tests {
                 (PADDING + 8 * cell_width + 1) as f64,
                 (top + cell_height) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 toolbar_rows,
             ),
             None,
@@ -674,9 +678,9 @@ mod tests {
                 (PADDING + 8 * cell_width + 1) as f64,
                 (top + stride + 1) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 toolbar_rows,
             ),
             Some((0, 8, 20))
@@ -693,9 +697,9 @@ mod tests {
                     (PADDING + border_column * cell_width + 1) as f64,
                     (top + stride + 1) as f64,
                     viewport_width,
-                    cell_width,
-                    cell_height,
-                    top,
+                    cell_width as f32,
+                    cell_height as f32,
+                    top as f32,
                     toolbar_rows,
                 ),
                 None,
@@ -707,9 +711,9 @@ mod tests {
                 (PADDING + 2 * cell_width) as f64,
                 (top + (toolbar_rows - 1) * stride) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 toolbar_rows,
             ),
             None,
@@ -724,9 +728,9 @@ mod tests {
                 (PADDING + 2) as f64,
                 17.0,
                 PADDING * 2 + 3,
-                1,
-                16,
-                0,
+                1.0,
+                16.0,
+                0.0,
                 ToolbarState::default().rows(),
             ),
             None
@@ -750,9 +754,9 @@ mod tests {
                 (PADDING + 4 * cell_width) as f64,
                 (top + (line_rows - 1) * stride) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 line_rows,
             ),
             None
@@ -768,9 +772,9 @@ mod tests {
                 (PADDING + 4 * cell_width) as f64,
                 (top + crate::toolbar::toolbar_content_row(last_content_row) * stride + 1) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
                 toolbar.rows(),
             ),
             Some((last_content_row, 4, 40))
@@ -798,22 +802,22 @@ mod tests {
             pointer_position_to_coord_with_metrics(
                 screen_x as f64,
                 screen_y as f64,
-                old_grid_top,
-                cell_width,
-                cell_height,
+                old_grid_top as f32,
+                cell_width as f32,
+                cell_height as f32,
                 viewport,
             ),
             Some(coord)
         );
 
-        viewport.reanchor_grid_top(old_grid_top, new_grid_top);
+        viewport.reanchor_grid_top(old_grid_top as f32, new_grid_top as f32);
         assert_eq!(
             pointer_position_to_coord_with_metrics(
                 screen_x as f64,
                 screen_y as f64,
-                new_grid_top,
-                cell_width,
-                cell_height,
+                new_grid_top as f32,
+                cell_width as f32,
+                cell_height as f32,
                 viewport,
             ),
             Some(coord)

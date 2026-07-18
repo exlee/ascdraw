@@ -13,7 +13,7 @@ pub(super) fn render_jump_overlay(
     canvas: &Canvas,
     state: &Editor,
     metrics: &CellMetrics,
-    grid_top: usize,
+    grid_top: f32,
 ) {
     let Some(overlay) = state.jump_overlay() else {
         return;
@@ -76,14 +76,14 @@ fn draw_outline(
     canvas: &Canvas,
     bounds: JumpBounds,
     metrics: &CellMetrics,
-    grid_top: usize,
+    grid_top: f32,
     inset: f32,
     paint: &Paint,
 ) {
-    let left = PADDING as f32 + bounds.column as f32 * metrics.cell_width as f32 + inset;
-    let top = grid_top as f32 + bounds.line as f32 * metrics.cell_height as f32 + inset;
-    let right = left + bounds.columns as f32 * metrics.cell_width as f32 - 1.0 - inset * 2.0;
-    let bottom = top + bounds.rows as f32 * metrics.cell_height as f32 - 1.0 - inset * 2.0;
+    let left = PADDING as f32 + bounds.column as f32 * metrics.cell_width + inset;
+    let top = grid_top + bounds.line as f32 * metrics.cell_height + inset;
+    let right = left + bounds.columns as f32 * metrics.cell_width - 1.0 - inset * 2.0;
+    let bottom = top + bounds.rows as f32 * metrics.cell_height - 1.0 - inset * 2.0;
     canvas.draw_line((left, top), (right, top), paint);
     canvas.draw_line((right, top), (right, bottom), paint);
     canvas.draw_line((right, bottom), (left, bottom), paint);

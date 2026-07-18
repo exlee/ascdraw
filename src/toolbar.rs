@@ -34,22 +34,18 @@ const GAP: &str = "    ";
 pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[cfg(test)]
-pub fn toolbar_height(toolbar: &ToolbarState, cell_height: usize) -> usize {
+pub fn toolbar_height(toolbar: &ToolbarState, cell_height: f32) -> f32 {
     let rows = toolbar.rows();
-    rows * cell_height + rows.saturating_sub(1) * TOOLBAR_ROW_GAP
+    rows as f32 * cell_height + rows.saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
 }
 
-pub fn toolbar_height_for_width(
-    toolbar: &ToolbarState,
-    box_width: usize,
-    cell_height: usize,
-) -> usize {
+pub fn toolbar_height_for_width(toolbar: &ToolbarState, box_width: usize, cell_height: f32) -> f32 {
     let rows = toolbar.rows_for_width(box_width);
-    rows * cell_height + rows.saturating_sub(1) * TOOLBAR_ROW_GAP
+    rows as f32 * cell_height + rows.saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
 }
 
-pub fn toolbar_row_offset(row: usize, _cell_height: usize) -> usize {
-    row * TOOLBAR_ROW_GAP
+pub fn toolbar_row_offset(row: usize, _cell_height: f32) -> f32 {
+    (row * TOOLBAR_ROW_GAP) as f32
 }
 
 pub fn toolbar_content_row(row: usize) -> usize {
@@ -1789,8 +1785,9 @@ mod tests {
         assert_eq!(toolbar.content_rows(), 7);
         assert_eq!(toolbar.rows(), 9);
         assert_eq!(
-            toolbar_height(&toolbar, 18),
-            toolbar.rows() * 18 + toolbar.rows().saturating_sub(1) * TOOLBAR_ROW_GAP
+            toolbar_height(&toolbar, 18.0),
+            toolbar.rows() as f32 * 18.0
+                + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
         );
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));

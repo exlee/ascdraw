@@ -58,12 +58,8 @@ pub fn render_canvas_layers_image(
     if columns == 0 || rows == 0 {
         bail!("cannot render an empty canvas region as PNG");
     }
-    let width = columns
-        .checked_mul(metrics.cell_width)
-        .context("PNG canvas width overflowed")?;
-    let height = rows
-        .checked_mul(metrics.cell_height)
-        .context("PNG canvas height overflowed")?;
+    let width = (columns as f32 * metrics.cell_width).ceil() as usize;
+    let height = (rows as f32 * metrics.cell_height).ceil() as usize;
     let dimensions = (
         i32::try_from(width).context("PNG canvas is too wide")?,
         i32::try_from(height).context("PNG canvas is too tall")?,
@@ -108,7 +104,7 @@ pub fn render_canvas_layers_image(
                 default_face,
                 0..columns,
                 &metrics,
-                DrawOrigin::Grid { top_padding: 0 },
+                DrawOrigin::Grid { top_padding: 0.0 },
             );
         }
     }
@@ -227,8 +223,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(image.width, metrics.cell_width * 2);
-        assert_eq!(image.height, metrics.cell_height * 2);
+        assert_eq!(image.width, (metrics.cell_width * 2.0).ceil() as usize);
+        assert_eq!(image.height, (metrics.cell_height * 2.0).ceil() as usize);
         assert_eq!(image.rgba.len(), image.width * image.height * 4);
     }
 

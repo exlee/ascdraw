@@ -57,8 +57,8 @@ pub struct Renderer {
 #[derive(Clone)]
 pub struct CellMetrics {
     pub font: Font,
-    pub cell_width: usize,
-    pub cell_height: usize,
+    pub cell_width: f32,
+    pub cell_height: f32,
     pub baseline_offset: f32,
     pub underline_offset: f32,
     font_mgr: FontMgr,
@@ -91,7 +91,7 @@ struct LineRenderPosition {
 
 #[derive(Clone, Copy)]
 enum DrawOrigin {
-    Grid { top_padding: usize },
+    Grid { top_padding: f32 },
 }
 
 struct RenderFrame<'a> {
@@ -221,9 +221,9 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
     canvas.clip_rect(
         Rect::from_xywh(
             0.0,
-            layout.grid_top as f32,
+            layout.grid_top,
             width as f32,
-            layout.grid_bottom.saturating_sub(layout.grid_top) as f32,
+            (layout.grid_bottom - layout.grid_top).max(0.0),
         ),
         None,
         false,
@@ -297,7 +297,7 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         state,
         visible_cells,
         minimap_panel,
-        metrics.cell_width as f32 / metrics.cell_height.max(1) as f32,
+        metrics.cell_width / metrics.cell_height.max(1.0),
         toolbar_metrics,
         &default_face,
     );
@@ -315,24 +315,17 @@ struct CanvasSelectionOutline {
 fn canvas_selection_outline(
     bounds: SelectionBounds,
     metrics: &CellMetrics,
-    grid_top: usize,
+    grid_top: f32,
 ) -> CanvasSelectionOutline {
     CanvasSelectionOutline {
-        left: (PADDING + bounds.left * metrics.cell_width) as f32,
-        top: row_top(bounds.top, metrics, grid_top) as f32,
-        right: (PADDING + bounds.left * metrics.cell_width + bounds.width() * metrics.cell_width)
-            .saturating_sub(1) as f32,
-        bottom: (row_top(bounds.top, metrics, grid_top) + bounds.height() * metrics.cell_height)
-            .saturating_sub(1) as f32,
+        left: PADDING as f32 + bounds.left as f32 * metrics.cell_width,
+        top: row_top(bounds.top, metrics, grid_top),
+        right: PADDING as f32 + (bounds.left + bounds.width()) as f32 * metrics.cell_width - 1.0,
+        bottom: row_top(bounds.top + bounds.height(), metrics, grid_top) - 1.0,
     }
 }
 
-fn render_canvas_selection(
-    canvas: &Canvas,
-    state: &Editor,
-    metrics: &CellMetrics,
-    grid_top: usize,
-) {
+fn render_canvas_selection(canvas: &Canvas, state: &Editor, metrics: &CellMetrics, grid_top: f32) {
     if !canvas_selection_is_visible(state) {
         return;
     }
@@ -399,7 +392,7 @@ fn render_marching_ants(
     alternate: Rgba,
     metrics: &CellMetrics,
 ) {
-    let segment = (metrics.cell_width.min(metrics.cell_height) / 3).max(2) as f32;
+    let segment = (metrics.cell_width.min(metrics.cell_height) / 3.0).max(2.0);
     let phase = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -483,11 +476,12 @@ fn render_toolbar(
     canvas: &Canvas,
     state: &Editor,
     metrics: &CellMetrics,
-    top_padding: usize,
+    top_padding: f32,
     width: usize,
     hotspot_hovered: bool,
 ) {
-    let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let max_columns =
+        (width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
     let mut rows = vec![(0, crate::toolbar::toolbar_border_spans(max_columns, true))];
     for row in 0..state.toolbar.content_rows_for_width(max_columns) {
         let physical_row = crate::toolbar::toolbar_content_row(row);
@@ -531,7 +525,7 @@ fn render_toolbar_hotspot(
     hovered: bool,
     box_width: usize,
     metrics: &CellMetrics,
-    top_padding: usize,
+    top_padding: f32,
 ) {
     if !hovered || box_width < 2 {
         return;
@@ -541,10 +535,10 @@ fn render_toolbar_hotspot(
     paint.set_color(Rgba::rgb(0, 0, 0).to_color());
     canvas.draw_rect(
         Rect::from_xywh(
-            (PADDING + (box_width - 1) * metrics.cell_width.max(1)) as f32,
-            top_padding as f32,
-            metrics.cell_width.max(1) as f32,
-            metrics.cell_height as f32,
+            PADDING as f32 + (box_width - 1) as f32 * metrics.cell_width.max(1.0),
+            top_padding,
+            metrics.cell_width.max(1.0),
+            metrics.cell_height,
         ),
         &paint,
     );
@@ -560,7 +554,8 @@ fn render_bottom_tooltip(
     if !layout.tooltip_visible {
         return;
     }
-    let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let max_columns =
+        (width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
     let spans = crate::toolbar::tooltip_spans(state.tooltip(), max_columns);
     render_toolbar_span_contents(
         canvas,
@@ -580,7 +575,7 @@ fn render_toolbar_span_contents(
     state: &Editor,
     max_columns: usize,
     metrics: &CellMetrics,
-    top_padding: usize,
+    top_padding: f32,
 ) {
     let atoms = toolbar_atoms(spans, state);
     render_line(
@@ -602,7 +597,7 @@ fn render_toolbar_span_outlines(
     spans: &[crate::toolbar::ToolbarSpan],
     state: &Editor,
     metrics: &CellMetrics,
-    top_padding: usize,
+    top_padding: f32,
 ) {
     for outline in toolbar_span_outlines(row, spans, state, metrics, top_padding) {
         let mut paint = Paint::default();
@@ -647,13 +642,12 @@ fn toolbar_span_outlines(
     spans: &[crate::toolbar::ToolbarSpan],
     state: &Editor,
     metrics: &CellMetrics,
-    top_padding: usize,
+    top_padding: f32,
 ) -> Vec<ToolbarSpanOutline> {
-    let top = (row_top(row, metrics, top_padding)
-        + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)) as f32
+    let top = row_top(row, metrics, top_padding)
+        + crate::toolbar::toolbar_row_offset(row, metrics.cell_height)
         - TOOLBAR_SELECTION_PADDING;
-    let bottom =
-        top + metrics.cell_height.saturating_sub(1) as f32 + TOOLBAR_SELECTION_PADDING * 2.0;
+    let bottom = top + metrics.cell_height - 1.0 + TOOLBAR_SELECTION_PADDING * 2.0;
     let mut outlines = Vec::new();
     let mut column = 0;
     for span in spans {
@@ -661,9 +655,9 @@ fn toolbar_span_outlines(
         if let Some(color) = toolbar_span_outline_color(state, span)
             && span_width > 0
         {
-            let left = (PADDING + column * metrics.cell_width) as f32 - TOOLBAR_SELECTION_PADDING;
-            let right = left
-                + (span_width * metrics.cell_width).saturating_sub(1) as f32
+            let left =
+                PADDING as f32 + column as f32 * metrics.cell_width - TOOLBAR_SELECTION_PADDING;
+            let right = left + span_width as f32 * metrics.cell_width - 1.0
                 + TOOLBAR_SELECTION_PADDING * 2.0;
             outlines.push(ToolbarSpanOutline {
                 color,
@@ -710,14 +704,11 @@ fn visible_grid_layout(
     layout
 }
 
-fn hidden_leading_cells(offset: i64, cell_size: usize) -> usize {
+fn hidden_leading_cells(offset: i64, cell_size: f32) -> usize {
     if offset >= 0 {
         return 0;
     }
-    usize::try_from(offset.saturating_abs())
-        .unwrap_or(usize::MAX)
-        .checked_div(cell_size.max(1))
-        .unwrap_or(0)
+    ((offset.saturating_abs() as f64 / cell_size.max(1.0) as f64).floor() as usize)
         .saturating_add(2)
 }
 
@@ -730,14 +721,12 @@ fn render_window_title(
     window_width: usize,
     transparent_menubar: bool,
 ) {
-    if !transparent_menubar || layout.top_padding <= PADDING || title.is_empty() {
+    if !transparent_menubar || layout.top_padding <= PADDING as f32 || title.is_empty() {
         return;
     }
 
-    let max_columns = window_width
-        .saturating_sub(PADDING * 2)
-        .checked_div(metrics.cell_width.max(1))
-        .unwrap_or(0);
+    let max_columns =
+        (window_width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
     let title = truncate_title(title, max_columns);
     if title.is_empty() {
         return;
@@ -753,8 +742,8 @@ fn render_window_title(
 
     let text_width = metrics.font.measure_str(&title, Some(&paint)).0;
     let left = ((window_width as f32 - text_width) / 2.0).max(PADDING as f32);
-    let top = layout.top_padding.saturating_sub(metrics.cell_height) / 2;
-    let baseline = top as f32 + metrics.baseline_offset;
+    let top = (layout.top_padding - metrics.cell_height).max(0.0) / 2.0;
+    let baseline = top + metrics.baseline_offset;
     canvas.draw_str(title, (left, baseline), &metrics.font, &paint);
 }
 
@@ -1004,7 +993,7 @@ fn is_drawing_mode(mode: CursorMode) -> bool {
 fn render_hollow_drawing_cursor(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     cell_resolved: &ResolvedFace,
@@ -1042,23 +1031,23 @@ fn render_hollow_drawing_cursor(
 
 fn drawing_cursor_outline(
     column: usize,
-    top: usize,
+    top: f32,
     metrics: &CellMetrics,
 ) -> CanvasSelectionOutline {
     CanvasSelectionOutline {
-        left: (PADDING + column * metrics.cell_width) as f32 + DRAWING_CURSOR_INSET,
-        top: top as f32 + DRAWING_CURSOR_INSET,
-        right: (PADDING + (column + 1) * metrics.cell_width).saturating_sub(1) as f32
+        left: PADDING as f32 + column as f32 * metrics.cell_width + DRAWING_CURSOR_INSET,
+        top: top + DRAWING_CURSOR_INSET,
+        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width
+            - 1.0
             - DRAWING_CURSOR_INSET,
-        bottom: top.saturating_add(metrics.cell_height).saturating_sub(1) as f32
-            - DRAWING_CURSOR_INSET,
+        bottom: top + metrics.cell_height - 1.0 - DRAWING_CURSOR_INSET,
     }
 }
 
 fn render_block_cursor(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     resolved: &ResolvedFace,
@@ -1083,26 +1072,26 @@ fn render_block_cursor(
 fn render_beam_cursor(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     base_resolved: &ResolvedFace,
     resolved: &ResolvedFace,
 ) {
     render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
-    let width = (metrics.cell_width as f32 * CURSOR_BEAM_WIDTH_RATIO)
+    let width = (metrics.cell_width * CURSOR_BEAM_WIDTH_RATIO)
         .round()
-        .clamp(1.0, metrics.cell_width as f32);
+        .clamp(1.0, metrics.cell_width);
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
         .set_color(cursor_indicator_color(CursorShape::Beam, resolved).to_color());
     fill_rect_pixels(
         canvas,
-        (PADDING + column * metrics.cell_width) as f32,
-        top as f32,
+        PADDING as f32 + column as f32 * metrics.cell_width,
+        top,
         width,
-        metrics.cell_height as f32,
+        metrics.cell_height,
         &paint,
     );
 }
@@ -1110,29 +1099,29 @@ fn render_beam_cursor(
 fn render_underline_cursor(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     base_resolved: &ResolvedFace,
     resolved: &ResolvedFace,
 ) {
     render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
-    let height = (metrics.cell_height as f32 * CURSOR_UNDERLINE_HEIGHT_RATIO)
+    let height = (metrics.cell_height * CURSOR_UNDERLINE_HEIGHT_RATIO)
         .round()
-        .clamp(1.0, metrics.cell_height as f32);
-    let max_top = top as f32 + metrics.cell_height as f32 - height;
+        .clamp(1.0, metrics.cell_height);
+    let max_top = top + metrics.cell_height - height;
     let y = underline_start_y(top, metrics, height)
         .min(max_top)
-        .max(top as f32);
+        .max(top);
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
         .set_color(cursor_indicator_color(CursorShape::Underline, resolved).to_color());
     fill_rect_pixels(
         canvas,
-        (PADDING + column * metrics.cell_width) as f32,
+        PADDING as f32 + column as f32 * metrics.cell_width,
         y,
-        metrics.cell_width as f32,
+        metrics.cell_width,
         height,
         &paint,
     );
@@ -1160,7 +1149,7 @@ fn cursor_indicator_color(shape: CursorShape, resolved: &ResolvedFace) -> Rgba {
 fn render_cursor_base_cell(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     resolved: &ResolvedFace,
@@ -1263,11 +1252,11 @@ fn truncate_title(title: &str, max_width: usize) -> String {
         .collect()
 }
 
-fn row_top(row: usize, metrics: &CellMetrics, top_padding: usize) -> usize {
-    top_padding + row * metrics.cell_height
+fn row_top(row: usize, metrics: &CellMetrics, top_padding: f32) -> f32 {
+    top_padding + row as f32 * metrics.cell_height
 }
 
-fn line_top(origin: DrawOrigin, row: usize, metrics: &CellMetrics) -> usize {
+fn line_top(origin: DrawOrigin, row: usize, metrics: &CellMetrics) -> f32 {
     match origin {
         DrawOrigin::Grid { top_padding } => row_top(row, metrics, top_padding),
     }
@@ -1276,17 +1265,17 @@ fn line_top(origin: DrawOrigin, row: usize, metrics: &CellMetrics) -> usize {
 fn fill_cells(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     width_in_cells: usize,
     metrics: &CellMetrics,
     paint: &Paint,
 ) {
-    let left = PADDING + column * metrics.cell_width;
+    let left = PADDING as f32 + column as f32 * metrics.cell_width;
     let rect = Rect::from_xywh(
-        left as f32,
-        top as f32,
-        (metrics.cell_width * width_in_cells) as f32,
-        metrics.cell_height as f32,
+        left,
+        top,
+        metrics.cell_width * width_in_cells as f32,
+        metrics.cell_height,
     );
     canvas.draw_rect(rect, paint);
 }
@@ -1299,7 +1288,7 @@ fn fill_rect_pixels(canvas: &Canvas, left: f32, top: f32, width: f32, height: f3
 fn draw_text_cluster(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     text: &str,
     font: &Font,
     metrics: &CellMetrics,
@@ -1308,10 +1297,10 @@ fn draw_text_cluster(
     if text.chars().all(char::is_control) {
         return;
     }
-    let left = PADDING + column * metrics.cell_width;
-    let baseline = top as f32 + metrics.baseline_offset;
+    let left = PADDING as f32 + column as f32 * metrics.cell_width;
+    let baseline = top + metrics.baseline_offset;
     let font = font_for_text(metrics, font, text);
-    canvas.draw_str(text, (left as f32, baseline), &font, paint);
+    canvas.draw_str(text, (left, baseline), &font, paint);
 }
 
 fn text_clusters(text: &str) -> impl Iterator<Item = &str> {
@@ -1408,7 +1397,7 @@ fn font_for_face(metrics: &CellMetrics, face: &ResolvedFace) -> Font {
 fn draw_text_decorations(
     canvas: &Canvas,
     column: usize,
-    top: usize,
+    top: f32,
     width_in_cells: usize,
     metrics: &CellMetrics,
     face: &ResolvedFace,
@@ -1417,9 +1406,9 @@ fn draw_text_decorations(
         return;
     }
 
-    let left = PADDING + column * metrics.cell_width;
-    let width = metrics.cell_width * width_in_cells;
-    let stroke_width = (metrics.cell_height as f32 / 14.0).max(1.0);
+    let left = PADDING as f32 + column as f32 * metrics.cell_width;
+    let width = metrics.cell_width * width_in_cells as f32;
+    let stroke_width = (metrics.cell_height / 14.0).max(1.0);
     let decoration_color = face.underline.unwrap_or(face.fg).to_color();
 
     if let Some(style) = face.underline_style {
@@ -1432,24 +1421,20 @@ fn draw_text_decorations(
         match style {
             UnderlineStyle::Straight => {
                 let y = underline_start_y(top, metrics, stroke_width);
-                canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
+                canvas.draw_line((left, y), (left + width, y), &paint);
             }
             UnderlineStyle::Double => {
                 let y = underline_start_y(top, metrics, stroke_width);
                 let gap = stroke_width + 1.0;
-                canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
-                canvas.draw_line(
-                    (left as f32, y + gap),
-                    ((left + width) as f32, y + gap),
-                    &paint,
-                );
+                canvas.draw_line((left, y), (left + width, y), &paint);
+                canvas.draw_line((left, y + gap), (left + width, y + gap), &paint);
             }
             UnderlineStyle::Curly => {
                 let y = underline_start_y(top, metrics, stroke_width);
-                let wave = (metrics.cell_height as f32 / 8.0).max(1.5);
-                let mut x = left as f32;
-                let end = (left + width) as f32;
-                let step = (metrics.cell_width as f32 / 2.0).max(2.0);
+                let wave = (metrics.cell_height / 8.0).max(1.5);
+                let mut x = left;
+                let end = left + width;
+                let step = (metrics.cell_width / 2.0).max(2.0);
                 let mut up = true;
                 while x < end {
                     let next = (x + step).min(end);
@@ -1468,13 +1453,13 @@ fn draw_text_decorations(
             .set_anti_alias(true)
             .set_color(face.fg.to_color())
             .set_stroke_width(stroke_width);
-        let y = top as f32 + metrics.cell_height as f32 * 0.55;
-        canvas.draw_line((left as f32, y), ((left + width) as f32, y), &paint);
+        let y = top + metrics.cell_height * 0.55;
+        canvas.draw_line((left, y), (left + width, y), &paint);
     }
 }
 
-fn underline_start_y(top: usize, metrics: &CellMetrics, stroke_width: f32) -> f32 {
-    top as f32 + metrics.baseline_offset + stroke_width + metrics.underline_offset
+fn underline_start_y(top: f32, metrics: &CellMetrics, stroke_width: f32) -> f32 {
+    top + metrics.baseline_offset + stroke_width + metrics.underline_offset
 }
 
 pub fn load_renderer(config: &AppConfig) -> Renderer {
@@ -1569,9 +1554,9 @@ impl Renderer {
             .set_linear_metrics(false);
 
         let (_, metrics) = font.metrics();
-        let cell_width = font.measure_str("M", None).0.max(1.0) as usize;
-        let cell_height = (metrics.descent - metrics.ascent + metrics.leading).max(1.0) as usize;
-        let baseline_offset = (-metrics.ascent).ceil();
+        let cell_width = font.measure_str("M", None).0.max(1.0);
+        let cell_height = (metrics.descent - metrics.ascent + metrics.leading).max(1.0);
+        let baseline_offset = -metrics.ascent;
 
         let metrics = CellMetrics {
             font,
@@ -1769,8 +1754,8 @@ mod tests {
     fn underline_offset_shifts_decoration_y_without_changing_other_metrics() {
         let base_metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -1780,10 +1765,10 @@ mod tests {
             underline_offset: 1.5,
             ..base_metrics.clone()
         };
-        let stroke_width = (base_metrics.cell_height as f32 / 14.0).max(1.0);
+        let stroke_width = (base_metrics.cell_height / 14.0).max(1.0);
 
-        let base_y = underline_start_y(3, &base_metrics, stroke_width);
-        let shifted_y = underline_start_y(3, &shifted_metrics, stroke_width);
+        let base_y = underline_start_y(3.0, &base_metrics, stroke_width);
+        let shifted_y = underline_start_y(3.0, &shifted_metrics, stroke_width);
 
         assert_eq!(shifted_y - base_y, 1.5);
         assert_eq!(shifted_metrics.cell_height, base_metrics.cell_height);
@@ -1891,8 +1876,8 @@ mod tests {
     fn canvas_selection_geometry_uses_inclusive_cell_bounds() {
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -1906,7 +1891,7 @@ mod tests {
                 bottom: 5,
             },
             &metrics,
-            100,
+            100.0,
         );
         assert_eq!(
             outline,
@@ -1920,27 +1905,33 @@ mod tests {
     }
 
     #[test]
-    fn canvas_rows_remain_contiguous_with_toolbar_row_spacing() {
+    fn canvas_rows_preserve_fractional_pitch_with_toolbar_row_spacing() {
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.375,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
 
-        assert_eq!(row_top(1, &metrics, 100) - row_top(0, &metrics, 100), 16);
-        assert_eq!(row_top(2, &metrics, 100) - row_top(1, &metrics, 100), 16);
+        assert_eq!(
+            row_top(1, &metrics, 100.0) - row_top(0, &metrics, 100.0),
+            16.375
+        );
+        assert_eq!(
+            row_top(2, &metrics, 100.0) - row_top(1, &metrics, 100.0),
+            16.375
+        );
     }
 
     #[test]
-    fn active_corner_cursor_is_inset_from_the_selection_border() {
+    fn active_corner_cursor_uses_the_same_fractional_grid_as_selection() {
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.25,
+            cell_height: 16.375,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -1954,13 +1945,13 @@ mod tests {
                 bottom: 2,
             },
             &metrics,
-            50,
+            50.0,
         );
-        let cursor_top = row_top(2, &metrics, 50);
+        let cursor_top = row_top(2, &metrics, 50.0);
         let cursor = drawing_cursor_outline(2, cursor_top, &metrics);
 
-        let cell_left = (PADDING + 2 * metrics.cell_width) as f32;
-        let cell_top = row_top(2, &metrics, 50) as f32;
+        let cell_left = PADDING as f32 + 2.0 * metrics.cell_width;
+        let cell_top = row_top(2, &metrics, 50.0);
         assert_eq!(cursor.left - cell_left, DRAWING_CURSOR_INSET);
         assert_eq!(cursor.top - cell_top, DRAWING_CURSOR_INSET);
         assert_eq!(selection.right - cursor.right, DRAWING_CURSOR_INSET);
@@ -2121,18 +2112,18 @@ mod tests {
     fn toolbar_hover_fill_appears_only_in_the_top_right_corner_cell() {
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
         let columns = 20;
-        let top = 7;
-        let width = PADDING * 2 + columns * metrics.cell_width;
-        let height = top + metrics.cell_height + 2;
-        let hotspot_x = PADDING + (columns - 1) * metrics.cell_width;
+        let top = 7.0;
+        let width = (PADDING as f32 * 2.0 + columns as f32 * metrics.cell_width) as usize;
+        let height = (top + metrics.cell_height + 2.0) as usize;
+        let hotspot_x = PADDING as f32 + (columns - 1) as f32 * metrics.cell_width;
 
         let render_pixels = |hovered| {
             let mut pixels = vec![0xff; width * height * 4];
@@ -2152,9 +2143,11 @@ mod tests {
 
         let hidden = render_pixels(false);
         let shown = render_pixels(true);
-        let center =
-            ((top + metrics.cell_height / 2) * width + hotspot_x + metrics.cell_width / 2) * 4;
-        let immediately_left = ((top + metrics.cell_height / 2) * width + hotspot_x - 1) * 4;
+        let center = (((top + metrics.cell_height / 2.0) as usize * width)
+            + (hotspot_x + metrics.cell_width / 2.0) as usize)
+            * 4;
+        let immediately_left =
+            ((top + metrics.cell_height / 2.0) as usize * width + (hotspot_x - 1.0) as usize) * 4;
         assert_eq!(&hidden[center..center + 4], &[0xff; 4]);
         assert_eq!(&shown[center..center + 4], &[0, 0, 0, 0xff]);
         assert_eq!(&shown[immediately_left..immediately_left + 4], &[0xff; 4]);
@@ -2194,8 +2187,8 @@ mod tests {
 
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -2235,8 +2228,8 @@ mod tests {
 
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -2254,19 +2247,20 @@ mod tests {
             .find(|span| span.highlighted)
             .and_then(|span| toolbar_span_outline_color(&state, span))
             .expect("page prefix highlight color");
-        let highlighted: Vec<_> = toolbar_span_outlines(physical_row, &spans, &state, &metrics, 0)
-            .into_iter()
-            .filter(|outline| outline.color == expected_color)
-            .collect();
+        let highlighted: Vec<_> =
+            toolbar_span_outlines(physical_row, &spans, &state, &metrics, 0.0)
+                .into_iter()
+                .filter(|outline| outline.color == expected_color)
+                .collect();
         assert_eq!(highlighted.len(), 1);
         let outline = highlighted[0];
         assert_eq!(
             outline.right - outline.left,
-            (4 * metrics.cell_width - 1) as f32 + TOOLBAR_SELECTION_PADDING * 2.0
+            4.0 * metrics.cell_width - 1.0 + TOOLBAR_SELECTION_PADDING * 2.0
         );
 
-        let width = PADDING * 2 + max_columns * metrics.cell_width;
-        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height);
+        let width = (PADDING as f32 * 2.0 + max_columns as f32 * metrics.cell_width) as usize;
+        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height) as usize;
         let mut pixels = vec![0xff; width * height * 4];
         let image_info = ImageInfo::new(
             (width as i32, height as i32),
@@ -2277,10 +2271,16 @@ mod tests {
         let mut surface =
             surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
                 .expect("test surface");
-        render_toolbar_span_outlines(surface.canvas(), physical_row, &spans, &state, &metrics, 0);
+        render_toolbar_span_outlines(
+            surface.canvas(),
+            physical_row,
+            &spans,
+            &state,
+            &metrics,
+            0.0,
+        );
 
-        let seam_x =
-            (outline.left + TOOLBAR_SELECTION_PADDING + 2.0 * metrics.cell_width as f32) as usize;
+        let seam_x = (outline.left + TOOLBAR_SELECTION_PADDING + 2.0 * metrics.cell_width) as usize;
         let middle_y = ((outline.top + outline.bottom) / 2.0) as usize;
         let seam_offset = (middle_y * width + seam_x) * 4;
         assert_eq!(&pixels[seam_offset..seam_offset + 4], &[0xff; 4]);
@@ -2305,14 +2305,14 @@ mod tests {
         let state = Editor::new(&config.theme, "test");
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
-        let width = PADDING * 2 + 120 * metrics.cell_width;
+        let width = (PADDING as f32 * 2.0 + 120.0 * metrics.cell_width) as usize;
         let height = 320;
         let layout = layout_metrics(
             width,
@@ -2327,7 +2327,7 @@ mod tests {
         assert!(layout.tooltip_visible);
         assert_eq!(
             layout.tooltip_top,
-            height - metrics.cell_height - TOOLTIP_BOTTOM_PAD
+            height as f32 - metrics.cell_height - TOOLTIP_BOTTOM_PAD as f32
         );
         let spans = crate::toolbar::tooltip_spans(state.tooltip(), 12);
         assert_eq!(UnicodeWidthStr::width(spans[0].contents.as_str()), 12);
@@ -2372,8 +2372,8 @@ mod tests {
     fn assert_toolbar_bottom_edge_visible(state: &Editor, logical_row: usize, _: Rgba) {
         let metrics = CellMetrics {
             font: Font::default(),
-            cell_width: 8,
-            cell_height: 16,
+            cell_width: 8.0,
+            cell_height: 16.0,
             baseline_offset: 10.0,
             underline_offset: 0.0,
             font_mgr: FontMgr::new(),
@@ -2386,15 +2386,15 @@ mod tests {
             &state.toolbar.toolbar_spans(logical_row),
             max_columns,
         );
-        let outline = toolbar_span_outlines(physical_row, &spans, state, &metrics, 0)
+        let outline = toolbar_span_outlines(physical_row, &spans, state, &metrics, 0.0)
             .into_iter()
             .next()
             .expect("expected toolbar outline");
 
-        let next_row_top = row_top(physical_row + 1, &metrics, 0)
+        let next_row_top = row_top(physical_row + 1, &metrics, 0.0)
             + crate::toolbar::toolbar_row_offset(physical_row + 1, metrics.cell_height);
-        assert!(outline.bottom < next_row_top as f32);
-        assert!(outline.bottom < height as f32);
+        assert!(outline.bottom < next_row_top);
+        assert!(outline.bottom < height);
     }
 
     #[test]

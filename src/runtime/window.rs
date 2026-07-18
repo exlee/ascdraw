@@ -89,10 +89,10 @@ impl DocumentSession {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ViewCursorAnchor {
-    x: i64,
-    y: i64,
+    x: f64,
+    y: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,45 +105,26 @@ impl ViewCursorAnchor {
     fn capture(
         cursor: Coord,
         viewport: ViewportOffset,
-        cell_size: (usize, usize),
-        grid_top: usize,
+        cell_size: (f32, f32),
+        grid_top: f32,
     ) -> Self {
         Self {
-            x: (PADDING as i64)
-                .saturating_add(
-                    i64::try_from(cursor.column)
-                        .unwrap_or(i64::MAX)
-                        .saturating_mul(i64::try_from(cell_size.0).unwrap_or(i64::MAX)),
-                )
-                .saturating_add(viewport.x),
-            y: i64::try_from(grid_top)
-                .unwrap_or(i64::MAX)
-                .saturating_add(
-                    i64::try_from(cursor.line)
-                        .unwrap_or(i64::MAX)
-                        .saturating_mul(i64::try_from(cell_size.1).unwrap_or(i64::MAX)),
-                )
-                .saturating_add(viewport.y),
+            x: PADDING as f64 + cursor.column as f64 * cell_size.0 as f64 + viewport.x as f64,
+            y: grid_top as f64 + cursor.line as f64 * cell_size.1 as f64 + viewport.y as f64,
         }
     }
 
     fn cursor_for_viewport(
         self,
         viewport: ViewportOffset,
-        cell_size: (usize, usize),
-        grid_top: usize,
+        cell_size: (f32, f32),
+        grid_top: f32,
     ) -> (i64, i64) {
-        let width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
-        let height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
         (
-            self.y
-                .saturating_sub(i64::try_from(grid_top).unwrap_or(i64::MAX))
-                .saturating_sub(viewport.y)
-                .div_euclid(height),
-            self.x
-                .saturating_sub(PADDING as i64)
-                .saturating_sub(viewport.x)
-                .div_euclid(width),
+            ((self.y - grid_top as f64 - viewport.y as f64) / cell_size.1.max(1.0) as f64).floor()
+                as i64,
+            ((self.x - PADDING as f64 - viewport.x as f64) / cell_size.0.max(1.0) as f64).floor()
+                as i64,
         )
     }
 
@@ -151,22 +132,13 @@ impl ViewCursorAnchor {
         self,
         viewport: &mut ViewportOffset,
         cursor: Coord,
-        cell_size: (usize, usize),
-        grid_top: usize,
+        cell_size: (f32, f32),
+        grid_top: f32,
     ) {
-        viewport.x = self.x.saturating_sub(PADDING as i64).saturating_sub(
-            i64::try_from(cursor.column)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(i64::try_from(cell_size.0).unwrap_or(i64::MAX)),
-        );
-        viewport.y = self
-            .y
-            .saturating_sub(i64::try_from(grid_top).unwrap_or(i64::MAX))
-            .saturating_sub(
-                i64::try_from(cursor.line)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(i64::try_from(cell_size.1).unwrap_or(i64::MAX)),
-            );
+        viewport.x =
+            (self.x - PADDING as f64 - cursor.column as f64 * cell_size.0 as f64).round() as i64;
+        viewport.y =
+            (self.y - grid_top as f64 - cursor.line as f64 * cell_size.1 as f64).round() as i64;
     }
 }
 
@@ -313,7 +285,7 @@ impl ScrollPan {
         self.y += delta.1;
     }
 
-    fn next_step(&self, _cell_size: (usize, usize)) -> (i64, i64) {
+    fn next_step(&self, _cell_size: (f32, f32)) -> (i64, i64) {
         (self.x.trunc() as i64, self.y.trunc() as i64)
     }
 
@@ -1225,8 +1197,8 @@ fn reconcile_view_cursor(
     viewport: &mut ViewportOffset,
     previous: &Editor,
     current: &mut Editor,
-    cell_size: (usize, usize),
-    grid_top: usize,
+    cell_size: (f32, f32),
+    grid_top: f32,
 ) -> bool {
     let was_viewing = previous.view_active();
     let is_viewing = current.view_active();
@@ -1257,10 +1229,10 @@ fn reconcile_view_cursor(
 fn pan_viewport(
     viewport: &mut ViewportOffset,
     direction: Direction,
-    cell_size: (usize, usize),
+    cell_size: (f32, f32),
 ) -> bool {
-    let cell_width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
-    let cell_height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
+    let cell_width = cell_size.0.max(1.0).round() as i64;
+    let cell_height = cell_size.1.max(1.0).round() as i64;
     let delta = match direction {
         Direction::Left => (cell_width, 0),
         Direction::Right => (-cell_width, 0),
@@ -1270,11 +1242,11 @@ fn pan_viewport(
     pan_viewport_by_pixels(viewport, delta)
 }
 
-fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (usize, usize)) -> (f64, f64) {
+fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (f32, f32)) -> (f64, f64) {
     match delta {
         MouseScrollDelta::LineDelta(x, y) => (
-            f64::from(x) * cell_size.0.max(1) as f64,
-            f64::from(y) * cell_size.1.max(1) as f64,
+            f64::from(x) * cell_size.0.max(1.0) as f64,
+            f64::from(y) * cell_size.1.max(1.0) as f64,
         ),
         MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
     }
@@ -1294,10 +1266,10 @@ fn pinch_zoom_units(delta: f64) -> f64 {
     }
 }
 
-fn wheel_zoom_units(delta: MouseScrollDelta, cell_size: (usize, usize)) -> f64 {
+fn wheel_zoom_units(delta: MouseScrollDelta, cell_size: (f32, f32)) -> f64 {
     let units = match delta {
         MouseScrollDelta::LineDelta(_, y) => f64::from(y),
-        MouseScrollDelta::PixelDelta(position) => position.y / cell_size.1.max(1) as f64,
+        MouseScrollDelta::PixelDelta(position) => position.y / cell_size.1.max(1.0) as f64,
     };
     units.clamp(-4.0, 4.0)
 }
@@ -1311,8 +1283,8 @@ fn take_zoom_steps(remainder: &mut f64, units: f64) -> i64 {
 
 fn canvas_cell_center(
     coord: Coord,
-    grid_top: usize,
-    cell_size: (usize, usize),
+    grid_top: f32,
+    cell_size: (f32, f32),
     viewport: ViewportOffset,
 ) -> (f64, f64) {
     (
@@ -1330,17 +1302,18 @@ fn canvas_cell_center(
 fn zoom_anchored_viewport(
     viewport: ViewportOffset,
     anchor: (f64, f64),
-    old_cell_size: (usize, usize),
-    new_cell_size: (usize, usize),
-    old_grid_top: usize,
-    new_grid_top: usize,
+    old_cell_size: (f32, f32),
+    new_cell_size: (f32, f32),
+    old_grid_top: f32,
+    new_grid_top: f32,
 ) -> ViewportOffset {
-    let canvas_x = (anchor.0 - PADDING as f64 - viewport.x as f64) / old_cell_size.0.max(1) as f64;
+    let canvas_x =
+        (anchor.0 - PADDING as f64 - viewport.x as f64) / old_cell_size.0.max(1.0) as f64;
     let canvas_y =
-        (anchor.1 - old_grid_top as f64 - viewport.y as f64) / old_cell_size.1.max(1) as f64;
+        (anchor.1 - old_grid_top as f64 - viewport.y as f64) / old_cell_size.1.max(1.0) as f64;
     ViewportOffset {
-        x: (anchor.0 - PADDING as f64 - canvas_x * new_cell_size.0.max(1) as f64).round() as i64,
-        y: (anchor.1 - new_grid_top as f64 - canvas_y * new_cell_size.1.max(1) as f64).round()
+        x: (anchor.0 - PADDING as f64 - canvas_x * new_cell_size.0.max(1.0) as f64).round() as i64,
+        y: (anchor.1 - new_grid_top as f64 - canvas_y * new_cell_size.1.max(1.0) as f64).round()
             as i64,
     }
 }
@@ -1369,23 +1342,21 @@ fn pan_viewport_by_pixels(viewport: &mut ViewportOffset, delta: (i64, i64)) -> b
 fn pan_viewport_by_cells(
     viewport: &mut ViewportOffset,
     pan: JumpViewportPan,
-    cell_size: (usize, usize),
+    cell_size: (f32, f32),
 ) -> bool {
     let old = *viewport;
-    viewport.x = viewport.x.saturating_sub(
-        pan.columns
-            .saturating_mul(i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX)),
-    );
-    viewport.y = viewport.y.saturating_sub(
-        pan.rows
-            .saturating_mul(i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX)),
-    );
+    viewport.x = viewport
+        .x
+        .saturating_sub((pan.columns as f64 * cell_size.0.max(1.0) as f64).round() as i64);
+    viewport.y = viewport
+        .y
+        .saturating_sub((pan.rows as f64 * cell_size.1.max(1.0) as f64).round() as i64);
     *viewport != old
 }
 
 fn center_viewport(
     viewport: &mut ViewportOffset,
-    cell_size: (usize, usize),
+    cell_size: (f32, f32),
     viewport_cells: (usize, usize),
     content: &[Coord],
 ) -> bool {
@@ -1711,23 +1682,26 @@ fn adjust_font_size(
 fn grid_top(
     scale_factor: f64,
     transparent_menubar: bool,
-    toolbar_cell_height: usize,
+    toolbar_cell_height: f32,
     toolbar: &crate::toolbar::ToolbarState,
-) -> usize {
-    content_top_padding(scale_factor, transparent_menubar)
-        + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height)
+) -> f32 {
+    (content_top_padding(scale_factor, transparent_menubar)
+        + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height))
+    .round()
 }
 
 fn grid_top_for_width(
     scale_factor: f64,
     transparent_menubar: bool,
     viewport_width: usize,
-    toolbar_cell_size: (usize, usize),
+    toolbar_cell_size: (f32, f32),
     toolbar: &crate::toolbar::ToolbarState,
-) -> usize {
-    let box_width = viewport_width.saturating_sub(PADDING * 2) / toolbar_cell_size.0.max(1);
-    content_top_padding(scale_factor, transparent_menubar)
-        + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_cell_size.1)
+) -> f32 {
+    let box_width =
+        (viewport_width.saturating_sub(PADDING * 2) as f32 / toolbar_cell_size.0.max(1.0)) as usize;
+    (content_top_padding(scale_factor, transparent_menubar)
+        + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_cell_size.1))
+    .round()
 }
 
 fn reanchor_toolbar_transition(
@@ -1735,7 +1709,7 @@ fn reanchor_toolbar_transition(
     scale_factor: f64,
     transparent_menubar: bool,
     viewport_width: usize,
-    toolbar_cell_size: (usize, usize),
+    toolbar_cell_size: (f32, f32),
     old_toolbar: &crate::toolbar::ToolbarState,
     new_toolbar: &crate::toolbar::ToolbarState,
 ) {
@@ -1817,7 +1791,7 @@ mod tests {
         }
     }
 
-    fn toolbar_test_metrics(config: &AppConfig) -> (usize, (usize, usize)) {
+    fn toolbar_test_metrics(config: &AppConfig) -> (f32, (f32, f32)) {
         let renderer = load_renderer(config);
         let toolbar = renderer.title_metrics(1.0);
         let canvas = renderer.metrics(1.0);
@@ -1826,13 +1800,13 @@ mod tests {
 
     fn canvas_screen_position(
         coord: Coord,
-        grid_top: usize,
-        cell_size: (usize, usize),
+        grid_top: f32,
+        cell_size: (f32, f32),
         viewport: ViewportOffset,
-    ) -> (i64, i64) {
+    ) -> (f32, f32) {
         (
-            PADDING as i64 + coord.column as i64 * cell_size.0 as i64 + viewport.x,
-            grid_top as i64 + coord.line as i64 * cell_size.1 as i64 + viewport.y,
+            PADDING as f32 + coord.column as f32 * cell_size.0 + viewport.x as f32,
+            grid_top + coord.line as f32 * cell_size.1 + viewport.y as f32,
         )
     }
 
@@ -2045,7 +2019,7 @@ mod tests {
 
     #[test]
     fn view_pan_uses_camera_directions_exact_cells_and_preserves_pixel_residuals() {
-        let cell_size = (9, 13);
+        let cell_size = (9.0, 13.0);
         let original = ViewportOffset { x: 7, y: -3 };
         for (direction, expected) in [
             (Direction::Left, ViewportOffset { x: 16, y: -3 }),
@@ -2069,13 +2043,13 @@ mod tests {
     #[test]
     fn scroll_lines_map_to_canvas_cells_and_pixels_remain_precise() {
         assert_eq!(
-            scroll_delta_in_pixels(MouseScrollDelta::LineDelta(2.0, -3.0), (9, 13)),
+            scroll_delta_in_pixels(MouseScrollDelta::LineDelta(2.0, -3.0), (9.0, 13.0)),
             (18.0, -39.0),
         );
         assert_eq!(
             scroll_delta_in_pixels(
                 MouseScrollDelta::PixelDelta(PhysicalPosition::new(1.25, -2.75)),
-                (9, 13),
+                (9.0, 13.0),
             ),
             (1.25, -2.75),
         );
@@ -2083,12 +2057,12 @@ mod tests {
         let mut pan = ScrollPan::default();
         pan.queue((0.4, -0.4));
         pan.queue((0.4, -0.4));
-        assert_eq!(pan.next_step((9, 13)), (0, 0));
+        assert_eq!(pan.next_step((9.0, 13.0)), (0, 0));
         pan.queue((0.4, -0.4));
-        assert_eq!(pan.next_step((9, 13)), (1, -1));
+        assert_eq!(pan.next_step((9.0, 13.0)), (1, -1));
         pan.consume((1, -1), (1, -1));
         pan.queue((-0.4, 0.4));
-        assert_eq!(pan.next_step((9, 13)), (0, 0));
+        assert_eq!(pan.next_step((9.0, 13.0)), (0, 0));
     }
 
     #[test]
@@ -2096,7 +2070,7 @@ mod tests {
         let mut pan = ScrollPan::default();
         pan.queue((16.0, -32.0));
 
-        let step = pan.next_step((8, 16));
+        let step = pan.next_step((8.0, 16.0));
         assert_eq!(step, (16, -32));
         pan.consume(step, step);
         assert!(!pan.is_active());
@@ -2111,13 +2085,13 @@ mod tests {
         assert_eq!(take_zoom_steps(&mut pinch_remainder, 0.4), 0);
         assert_eq!(take_zoom_steps(&mut pinch_remainder, 0.6), 1);
         assert_eq!(
-            wheel_zoom_units(MouseScrollDelta::LineDelta(0.0, 1.0), (8, 16)),
+            wheel_zoom_units(MouseScrollDelta::LineDelta(0.0, 1.0), (8.0, 16.0)),
             1.0,
         );
         assert_eq!(
             wheel_zoom_units(
                 MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -8.0)),
-                (8, 16),
+                (8.0, 16.0),
             ),
             -0.5,
         );
@@ -2134,17 +2108,18 @@ mod tests {
     fn pointer_anchored_zoom_preserves_the_canvas_point_under_it() {
         let viewport = ViewportOffset { x: -4, y: 8 };
         let anchor = (40.0, 80.0);
-        let zoomed = zoom_anchored_viewport(viewport, anchor, (8, 16), (10, 20), 40, 40);
+        let zoomed =
+            zoom_anchored_viewport(viewport, anchor, (8.0, 16.0), (10.0, 20.0), 40.0, 40.0);
 
         assert_eq!(zoomed, ViewportOffset { x: -10, y: 0 });
         let coord = Coord { line: 2, column: 3 };
         assert_eq!(
-            canvas_screen_position(coord, 40, (8, 16), viewport),
-            (40, 80)
+            canvas_screen_position(coord, 40.0, (8.0, 16.0), viewport),
+            (40.0, 80.0)
         );
         assert_eq!(
-            canvas_screen_position(coord, 40, (10, 20), zoomed),
-            (40, 80)
+            canvas_screen_position(coord, 40.0, (10.0, 20.0), zoomed),
+            (40.0, 80.0)
         );
     }
 
@@ -2167,7 +2142,7 @@ mod tests {
                 columns: 21,
                 rows: -15,
             },
-            (9, 13),
+            (9.0, 13.0),
         ));
         assert_eq!(
             viewport,
@@ -2184,7 +2159,7 @@ mod tests {
         assert!(pan_viewport(
             &mut cursor_boundary,
             Direction::Right,
-            (8, 12)
+            (8.0, 12.0)
         ));
         assert_eq!(cursor_boundary, ViewportOffset { x: -8, y: 0 });
 
@@ -2192,12 +2167,12 @@ mod tests {
         assert!(pan_viewport(
             &mut content_boundary,
             Direction::Right,
-            (8, 12)
+            (8.0, 12.0)
         ));
         assert_eq!(content_boundary, ViewportOffset { x: -8, y: 0 });
 
         let mut empty = ViewportOffset::default();
-        assert!(pan_viewport(&mut empty, Direction::Left, (8, 12)));
+        assert!(pan_viewport(&mut empty, Direction::Left, (8.0, 12.0)));
     }
 
     #[test]
@@ -2218,8 +2193,8 @@ mod tests {
             &mut viewport,
             &previous,
             &mut state,
-            (8, 12),
-            40,
+            (8.0, 12.0),
+            40.0,
         ));
         assert_eq!(viewport, original_viewport);
         assert_ne!(state.grid.cursor_pos, previous.grid.cursor_pos);
@@ -2228,8 +2203,8 @@ mod tests {
 
     #[test]
     fn view_restores_cursor_to_entry_screen_position_after_panning() {
-        let cell_size = (8, 12);
-        let grid_top = 40;
+        let cell_size = (8.0, 12.0);
+        let grid_top = 40.0;
         let initial_viewport = ViewportOffset { x: 5, y: -7 };
         let mut state = state_with_rows(&["", "", "", "drawing"]);
         state.move_to(Coord { line: 1, column: 2 });
@@ -2278,8 +2253,8 @@ mod tests {
 
     #[test]
     fn view_restore_reanchors_when_screen_position_maps_before_canvas_origin() {
-        let cell_size = (8, 12);
-        let grid_top = 40;
+        let cell_size = (8.0, 12.0);
+        let grid_top = 40.0;
         let initial_viewport = ViewportOffset::default();
         let mut state = state_with_rows(&["x"]);
         let initial_screen_position =
@@ -2346,12 +2321,22 @@ mod tests {
 
         // Bounds x=2..8 and y=1..4 use max - range/2, producing (5,3).
         // A 10x8 display uses cell midpoint (5,4), hence origin (0,-1).
-        assert!(center_viewport(&mut viewport, (7, 11), (10, 8), &content,));
-        assert_eq!(viewport.origin((7, 11)), (0, -1));
+        assert!(center_viewport(
+            &mut viewport,
+            (7.0, 11.0),
+            (10, 8),
+            &content,
+        ));
+        assert_eq!(viewport.origin((7.0, 11.0)), (0, -1));
         assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
         assert_eq!(state.selection, selection);
         assert_eq!(state.grid.lines, lines);
-        assert!(!center_viewport(&mut viewport, (7, 11), (10, 8), &content,));
+        assert!(!center_viewport(
+            &mut viewport,
+            (7.0, 11.0),
+            (10, 8),
+            &content,
+        ));
     }
 
     #[test]
@@ -2360,7 +2345,12 @@ mod tests {
         blank.grid.cursor_pos = Coord { line: 0, column: 4 };
         let blank_cursor = blank.grid.cursor_pos;
         let mut blank_viewport = ViewportOffset { x: 5, y: -9 };
-        assert!(!center_viewport(&mut blank_viewport, (8, 12), (3, 3), &[],));
+        assert!(!center_viewport(
+            &mut blank_viewport,
+            (8.0, 12.0),
+            (3, 3),
+            &[],
+        ));
         assert_eq!(blank_viewport, ViewportOffset { x: 5, y: -9 });
         assert_eq!(blank.grid.cursor_pos, blank_cursor);
 
@@ -2373,8 +2363,13 @@ mod tests {
         let cursor = wide.grid.cursor_pos;
         let content = wide.content_cells();
         let mut viewport = ViewportOffset::default();
-        assert!(center_viewport(&mut viewport, (8, 12), (3, 1), &content,));
-        assert_eq!(viewport.origin((8, 12)), (4, 0));
+        assert!(center_viewport(
+            &mut viewport,
+            (8.0, 12.0),
+            (3, 1),
+            &content,
+        ));
+        assert_eq!(viewport.origin((8.0, 12.0)), (4, 0));
         assert_eq!(wide.grid.cursor_pos, cursor);
         assert_eq!(wide.selection, selection);
         assert_eq!(wide.grid.lines, lines);
@@ -2385,8 +2380,8 @@ mod tests {
         old_toolbar: &crate::toolbar::ToolbarState,
         new_toolbar: &crate::toolbar::ToolbarState,
         viewport: &mut ViewportOffset,
-        toolbar_cell_height: usize,
-        cell_size: (usize, usize),
+        toolbar_cell_height: f32,
+        cell_size: (f32, f32),
     ) {
         let old_grid_top = grid_top(
             1.0,
@@ -2416,7 +2411,7 @@ mod tests {
             1.0,
             config.transparent_menubar,
             usize::MAX,
-            (1, toolbar_cell_height),
+            (1.0, toolbar_cell_height),
             old_toolbar,
             new_toolbar,
         );
@@ -2441,8 +2436,8 @@ mod tests {
         action: ToolbarAction,
         viewport: &mut ViewportOffset,
         config: &AppConfig,
-        toolbar_cell_height: usize,
-        cell_size: (usize, usize),
+        toolbar_cell_height: f32,
+        cell_size: (f32, f32),
     ) {
         let old_toolbar = state.toolbar.clone();
         assert!(state.apply_toolbar_action(action));
@@ -2461,8 +2456,8 @@ mod tests {
         key: Key,
         viewport: &mut ViewportOffset,
         config: &AppConfig,
-        toolbar_cell_height: usize,
-        cell_size: (usize, usize),
+        toolbar_cell_height: f32,
+        cell_size: (f32, f32),
     ) {
         let old_toolbar = state.toolbar.clone();
         assert!(state.handle_toolbar_shortcut(&key, ModifiersState::empty()));
@@ -2480,8 +2475,8 @@ mod tests {
         state: &mut Editor,
         viewport: ViewportOffset,
         config: &AppConfig,
-        toolbar_cell_height: usize,
-        cell_size: (usize, usize),
+        toolbar_cell_height: f32,
+        cell_size: (f32, f32),
     ) -> ViewportOffset {
         let cursor = state.grid.cursor_pos;
         let current_grid_top = grid_top(

@@ -14,30 +14,30 @@ const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutMetrics {
-    pub top_padding: usize,
-    pub grid_top: usize,
+    pub top_padding: f32,
+    pub grid_top: f32,
     pub cols: usize,
     pub rows: usize,
-    pub grid_bottom: usize,
-    pub tooltip_top: usize,
+    pub grid_bottom: f32,
+    pub tooltip_top: f32,
     pub tooltip_visible: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenRect {
-    pub left: usize,
-    pub top: usize,
-    pub right: usize,
-    pub bottom: usize,
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
 }
 
 impl ScreenRect {
-    pub fn width(self) -> usize {
-        self.right.saturating_sub(self.left)
+    pub fn width(self) -> f32 {
+        (self.right - self.left).max(0.0)
     }
 
-    pub fn height(self) -> usize {
-        self.bottom.saturating_sub(self.top)
+    pub fn height(self) -> f32 {
+        (self.bottom - self.top).max(0.0)
     }
 
     pub fn contains(self, x: f64, y: f64) -> bool {
@@ -50,27 +50,26 @@ impl ScreenRect {
 
 pub fn minimap_rect(
     viewport_width: usize,
-    grid_top: usize,
-    toolbar_cell_size: (usize, usize),
+    grid_top: f32,
+    toolbar_cell_size: (f32, f32),
 ) -> ScreenRect {
-    let cell_width = toolbar_cell_size.0.max(1);
-    let cell_height = toolbar_cell_size.1.max(1);
-    let toolbar_columns = viewport_width.saturating_sub(PADDING * 2) / cell_width;
+    let cell_width = toolbar_cell_size.0.max(1.0);
+    let cell_height = toolbar_cell_size.1.max(1.0);
+    let toolbar_columns =
+        ((viewport_width.saturating_sub(PADDING * 2) as f32) / cell_width) as usize;
     let width_in_cells = minimap_width_in_cells(toolbar_columns);
     let right_column = toolbar_columns.saturating_sub(2);
     let left_column = right_column.saturating_sub(width_in_cells.saturating_sub(1));
-    let right = PADDING.saturating_add(right_column.saturating_add(1).saturating_mul(cell_width));
+    let right = PADDING as f32 + right_column.saturating_add(1) as f32 * cell_width;
     ScreenRect {
         left: if width_in_cells == 0 {
             right
         } else {
-            PADDING.saturating_add(left_column.saturating_mul(cell_width))
+            PADDING as f32 + left_column as f32 * cell_width
         },
-        top: grid_top.saturating_sub(cell_height),
+        top: (grid_top - cell_height).max(0.0),
         right,
-        bottom: grid_top
-            .saturating_sub(cell_height)
-            .saturating_add(MINIMAP_ROWS.saturating_mul(cell_height)),
+        bottom: (grid_top - cell_height).max(0.0) + MINIMAP_ROWS as f32 * cell_height,
     }
 }
 
@@ -90,7 +89,7 @@ impl VisibleCanvasCells {
     pub fn from_layout(
         layout: LayoutMetrics,
         viewport: ViewportOffset,
-        cell_size: (usize, usize),
+        cell_size: (f32, f32),
     ) -> Self {
         let (left, columns) = visible_axis(viewport.x, cell_size.0, layout.cols);
         let (top, rows) = visible_axis(viewport.y, cell_size.1, layout.rows);
@@ -102,10 +101,10 @@ impl VisibleCanvasCells {
     }
 }
 
-fn visible_axis(offset: i64, cell_size: usize, full_cells: usize) -> (i64, usize) {
-    let cell_size = i64::try_from(cell_size.max(1)).unwrap_or(i64::MAX);
-    let origin = offset.saturating_neg().div_euclid(cell_size);
-    let has_partial_cell = offset.rem_euclid(cell_size) != 0;
+fn visible_axis(offset: i64, cell_size: f32, full_cells: usize) -> (i64, usize) {
+    let position = -(offset as f64) / cell_size.max(1.0) as f64;
+    let origin = position.floor() as i64;
+    let has_partial_cell = position.fract().abs() > f64::EPSILON;
     (
         origin,
         full_cells.saturating_add(usize::from(has_partial_cell)),
@@ -123,51 +122,36 @@ pub struct ViewportOffset {
 impl ViewportOffset {
     /// Keeps the canvas-to-screen transform stable when only the top edge of
     /// the grid moves (for example, because the toolbar changes height).
-    pub fn reanchor_grid_top(&mut self, old_grid_top: usize, new_grid_top: usize) {
+    pub fn reanchor_grid_top(&mut self, old_grid_top: f32, new_grid_top: f32) {
         self.y = self
             .y
-            .saturating_add(old_grid_top as i64 - new_grid_top as i64);
+            .saturating_add((old_grid_top - new_grid_top).round() as i64);
     }
 
-    pub fn compensate_for_prepend(
-        &mut self,
-        columns: usize,
-        lines: usize,
-        cell_size: (usize, usize),
-    ) {
+    pub fn compensate_for_prepend(&mut self, columns: usize, lines: usize, cell_size: (f32, f32)) {
         self.x = self.x.saturating_sub(cell_shift(columns, cell_size.0));
         self.y = self.y.saturating_sub(cell_shift(lines, cell_size.1));
     }
 
-    pub fn origin(self, cell_size: (usize, usize)) -> (i64, i64) {
+    pub fn origin(self, cell_size: (f32, f32)) -> (i64, i64) {
         (
-            self.x
-                .saturating_neg()
-                .div_euclid(cell_size.0.max(1) as i64),
-            self.y
-                .saturating_neg()
-                .div_euclid(cell_size.1.max(1) as i64),
+            (-(self.x as f64) / cell_size.0.max(1.0) as f64).floor() as i64,
+            (-(self.y as f64) / cell_size.1.max(1.0) as f64).floor() as i64,
         )
     }
 
-    pub fn set_origin(&mut self, origin: (i64, i64), cell_size: (usize, usize)) {
-        self.x = origin
-            .0
-            .saturating_mul(cell_size.0.max(1) as i64)
-            .saturating_neg();
-        self.y = origin
-            .1
-            .saturating_mul(cell_size.1.max(1) as i64)
-            .saturating_neg();
+    pub fn set_origin(&mut self, origin: (i64, i64), cell_size: (f32, f32)) {
+        self.x = (-(origin.0 as f64) * cell_size.0.max(1.0) as f64).round() as i64;
+        self.y = (-(origin.1 as f64) * cell_size.1.max(1.0) as f64).round() as i64;
     }
 
     pub fn reanchor_cursor(
         &mut self,
         cursor: Coord,
-        old_cell_size: (usize, usize),
-        new_cell_size: (usize, usize),
-        old_grid_top: usize,
-        new_grid_top: usize,
+        old_cell_size: (f32, f32),
+        new_cell_size: (f32, f32),
+        old_grid_top: f32,
+        new_grid_top: f32,
     ) {
         self.x = self
             .x
@@ -179,10 +163,8 @@ impl ViewportOffset {
     }
 }
 
-fn cell_shift(count: usize, size: usize) -> i64 {
-    i64::try_from(count)
-        .unwrap_or(i64::MAX)
-        .saturating_mul(i64::try_from(size).unwrap_or(i64::MAX))
+fn cell_shift(count: usize, size: f32) -> i64 {
+    (count as f64 * size as f64).round() as i64
 }
 
 #[cfg(test)]
@@ -365,24 +347,19 @@ pub fn normalized_cursor_and_origin(
         .map_or((cursor, desired), |(_, _, cursor, origin)| (cursor, origin))
 }
 
-fn cell_delta(index: usize, old_size: usize, new_size: usize) -> i64 {
-    let index = i64::try_from(index).unwrap_or(i64::MAX);
-    let old_size = i64::try_from(old_size).unwrap_or(i64::MAX);
-    let new_size = i64::try_from(new_size).unwrap_or(i64::MAX);
-    index
-        .saturating_mul(old_size)
-        .saturating_sub(index.saturating_mul(new_size))
+fn cell_delta(index: usize, old_size: f32, new_size: f32) -> i64 {
+    (index as f64 * (old_size - new_size) as f64).round() as i64
 }
 
-pub fn content_top_padding(scale_factor: f64, transparent_menubar: bool) -> usize {
+pub fn content_top_padding(scale_factor: f64, transparent_menubar: bool) -> f32 {
     content_top_padding_for_scale_factor(scale_factor, transparent_menubar)
 }
 
-pub fn content_top_padding_for_scale_factor(scale_factor: f64, transparent_menubar: bool) -> usize {
+pub fn content_top_padding_for_scale_factor(scale_factor: f64, transparent_menubar: bool) -> f32 {
     if transparent_menubar {
-        PADDING + (TRANSPARENT_MENUBAR_TOP_INSET_PT * scale_factor).round() as usize
+        PADDING as f32 + (TRANSPARENT_MENUBAR_TOP_INSET_PT * scale_factor) as f32
     } else {
-        PADDING
+        PADDING as f32
     }
 }
 
@@ -390,16 +367,22 @@ pub fn layout_metrics(
     width: usize,
     height: usize,
     metrics: &CellMetrics,
-    toolbar_cell_size: (usize, usize),
+    toolbar_cell_size: (f32, f32),
     toolbar: &ToolbarState,
     transparent_menubar: bool,
     scale_factor: f64,
 ) -> LayoutMetrics {
     let top_padding = content_top_padding(scale_factor, transparent_menubar);
-    let toolbar_box_width = width.saturating_sub(PADDING * 2) / toolbar_cell_size.0.max(1);
-    let grid_top = top_padding
-        + crate::toolbar::toolbar_height_for_width(toolbar, toolbar_box_width, toolbar_cell_size.1);
-    let cols = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
+    let toolbar_box_width =
+        (width.saturating_sub(PADDING * 2) as f32 / toolbar_cell_size.0.max(1.0)) as usize;
+    let grid_top = (top_padding
+        + crate::toolbar::toolbar_height_for_width(
+            toolbar,
+            toolbar_box_width,
+            toolbar_cell_size.1,
+        ))
+    .round();
+    let cols = (width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
     let (rows, grid_bottom, tooltip_top, tooltip_visible) =
         vertical_geometry(height, grid_top, metrics.cell_height, toolbar_cell_size.1);
     LayoutMetrics {
@@ -415,20 +398,20 @@ pub fn layout_metrics(
 
 fn vertical_geometry(
     height: usize,
-    grid_top: usize,
-    grid_cell_height: usize,
-    tooltip_cell_height: usize,
-) -> (usize, usize, usize, bool) {
-    let tooltip_top = height.saturating_sub(tooltip_cell_height) - TOOLTIP_BOTTOM_PAD;
-    let tooltip_visible = tooltip_cell_height > 0
-        && height >= tooltip_cell_height
-        && tooltip_top >= grid_top.saturating_add(TOOLTIP_GRID_GAP);
+    grid_top: f32,
+    grid_cell_height: f32,
+    tooltip_cell_height: f32,
+) -> (usize, f32, f32, bool) {
+    let tooltip_top = (height as f32 - tooltip_cell_height - TOOLTIP_BOTTOM_PAD as f32).max(0.0);
+    let tooltip_visible = tooltip_cell_height > 0.0
+        && height as f32 >= tooltip_cell_height
+        && tooltip_top >= grid_top + TOOLTIP_GRID_GAP as f32;
     let grid_bottom = if tooltip_visible {
-        tooltip_top.saturating_sub(TOOLTIP_GRID_GAP)
+        (tooltip_top - TOOLTIP_GRID_GAP as f32).max(0.0)
     } else {
-        height.saturating_sub(PADDING)
+        height.saturating_sub(PADDING) as f32
     };
-    let rows = grid_bottom.saturating_sub(grid_top) / grid_cell_height.max(1);
+    let rows = ((grid_bottom - grid_top).max(0.0) / grid_cell_height.max(1.0)) as usize;
     (rows.max(1), grid_bottom, tooltip_top, tooltip_visible)
 }
 
@@ -440,7 +423,7 @@ fn layout_rows(
     scale_factor: f64,
 ) -> usize {
     let top_padding = content_top_padding_for_scale_factor(scale_factor, transparent_menubar);
-    height.saturating_sub(top_padding + PADDING) / cell_height.max(1)
+    ((height as f32 - top_padding - PADDING as f32).max(0.0) / cell_height.max(1) as f32) as usize
 }
 
 #[cfg(test)]
@@ -451,17 +434,17 @@ mod tests {
     #[test]
     fn visible_canvas_cells_include_residual_pixels_and_signed_origins() {
         let layout = LayoutMetrics {
-            top_padding: 20,
-            grid_top: 100,
+            top_padding: 20.0,
+            grid_top: 100.0,
             cols: 12,
             rows: 7,
-            grid_bottom: 212,
-            tooltip_top: 240,
+            grid_bottom: 212.0,
+            tooltip_top: 240.0,
             tooltip_visible: true,
         };
 
         assert_eq!(
-            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: -16, y: 32 }, (8, 16),),
+            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: -16, y: 32 }, (8.0, 16.0),),
             VisibleCanvasCells {
                 origin: (2, -2),
                 columns: 12,
@@ -469,7 +452,7 @@ mod tests {
             }
         );
         assert_eq!(
-            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: 3, y: -17 }, (8, 16),),
+            VisibleCanvasCells::from_layout(layout, ViewportOffset { x: 3, y: -17 }, (8.0, 16.0),),
             VisibleCanvasCells {
                 origin: (-1, 1),
                 columns: 13,
@@ -497,31 +480,31 @@ mod tests {
 
         let available_rows = 20usize;
         let compact_layout = LayoutMetrics {
-            top_padding: 0,
-            grid_top: compact_rows,
+            top_padding: 0.0,
+            grid_top: compact_rows as f32,
             cols: 10,
             rows: available_rows.saturating_sub(compact_rows),
-            grid_bottom: available_rows,
-            tooltip_top: available_rows,
+            grid_bottom: available_rows as f32,
+            tooltip_top: available_rows as f32,
             tooltip_visible: false,
         };
         let expanded_layout = LayoutMetrics {
-            top_padding: 0,
-            grid_top: expanded_rows,
+            top_padding: 0.0,
+            grid_top: expanded_rows as f32,
             cols: 10,
             rows: available_rows.saturating_sub(expanded_rows),
-            grid_bottom: available_rows,
-            tooltip_top: available_rows,
+            grid_bottom: available_rows as f32,
+            tooltip_top: available_rows as f32,
             tooltip_visible: false,
         };
 
         assert!(
-            VisibleCanvasCells::from_layout(compact_layout, ViewportOffset::default(), (1, 1),)
+            VisibleCanvasCells::from_layout(compact_layout, ViewportOffset::default(), (1.0, 1.0),)
                 .rows
                 > VisibleCanvasCells::from_layout(
                     expanded_layout,
                     ViewportOffset::default(),
-                    (1, 1),
+                    (1.0, 1.0),
                 )
                 .rows
         );
@@ -529,14 +512,17 @@ mod tests {
 
     #[test]
     fn transparent_menubar_uses_fixed_point_top_inset() {
-        assert_eq!(content_top_padding_for_scale_factor(1.0, false), PADDING);
+        assert_eq!(
+            content_top_padding_for_scale_factor(1.0, false),
+            PADDING as f32
+        );
         assert_eq!(
             content_top_padding_for_scale_factor(1.0, true),
-            PADDING + 24
+            (PADDING + 24) as f32
         );
         assert_eq!(
             content_top_padding_for_scale_factor(2.0, true),
-            PADDING + 48
+            (PADDING + 48) as f32
         );
     }
 
@@ -554,51 +540,54 @@ mod tests {
             column: 11,
         };
         let mut viewport = ViewportOffset { x: 3, y: -5 };
-        let before = cursor_top_left(cursor, (8, 16), 44, viewport);
+        let before = cursor_top_left(cursor, (8.0, 16.0), 44.0, viewport);
 
-        viewport.reanchor_cursor(cursor, (8, 16), (11, 20), 44, 44);
+        viewport.reanchor_cursor(cursor, (8.0, 16.0), (11.0, 20.0), 44.0, 44.0);
 
-        assert_eq!(cursor_top_left(cursor, (11, 20), 44, viewport), before);
+        assert_eq!(
+            cursor_top_left(cursor, (11.0, 20.0), 44.0, viewport),
+            before
+        );
     }
 
     #[test]
     fn reanchoring_includes_changes_to_the_fixed_toolbar_height() {
         let cursor = Coord { line: 2, column: 0 };
         let mut viewport = ViewportOffset::default();
-        let before = cursor_top_left(cursor, (8, 16), 44, viewport);
+        let before = cursor_top_left(cursor, (8.0, 16.0), 44.0, viewport);
 
-        viewport.reanchor_cursor(cursor, (8, 16), (8, 16), 44, 48);
+        viewport.reanchor_cursor(cursor, (8.0, 16.0), (8.0, 16.0), 44.0, 48.0);
 
-        assert_eq!(cursor_top_left(cursor, (8, 16), 48, viewport), before);
+        assert_eq!(cursor_top_left(cursor, (8.0, 16.0), 48.0, viewport), before);
     }
 
     #[test]
     fn boxed_toolbar_height_anchors_grid_below_both_borders() {
         let top_padding = content_top_padding_for_scale_factor(1.0, false);
-        let cell_height = 18;
+        let cell_height = 18.0;
         let toolbar = ToolbarState::default();
         let grid_top = top_padding + crate::toolbar::toolbar_height(&toolbar, cell_height);
 
         assert_eq!(
             grid_top,
-            PADDING
-                + toolbar.rows() * cell_height
-                + toolbar.rows().saturating_sub(1) * crate::toolbar::TOOLBAR_ROW_GAP
+            PADDING as f32
+                + toolbar.rows() as f32 * cell_height
+                + toolbar.rows().saturating_sub(1) as f32 * crate::toolbar::TOOLBAR_ROW_GAP as f32
         );
-        assert_eq!(grid_top, 198);
+        assert_eq!(grid_top, 198.0);
     }
 
     #[test]
     fn minimap_attaches_below_the_toolbar_and_has_an_inert_screen_region() {
-        let rect = minimap_rect(1000, 200, (8, 16));
+        let rect = minimap_rect(1000, 200.0, (8.0, 16.0));
 
         assert_eq!(
             rect,
             ScreenRect {
-                left: 820,
-                top: 184,
-                right: 972,
-                bottom: 296,
+                left: 820.0,
+                top: 184.0,
+                right: 972.0,
+                bottom: 296.0,
             }
         );
         assert!(rect.contains(900.0, 250.0));
@@ -616,30 +605,30 @@ mod tests {
 
     #[test]
     fn bottom_tooltip_reserves_its_row_and_gap_from_the_grid() {
-        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(400, 128, 18, 18);
+        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(400, 128.0, 18.0, 18.0);
         assert!(visible);
-        assert_eq!(tooltip_top, 382 - TOOLTIP_BOTTOM_PAD);
-        assert_eq!(grid_bottom, tooltip_top - TOOLTIP_GRID_GAP);
+        assert_eq!(tooltip_top, (382 - TOOLTIP_BOTTOM_PAD) as f32);
+        assert_eq!(grid_bottom, tooltip_top - TOOLTIP_GRID_GAP as f32);
         assert_eq!(rows, 12);
-        assert!(grid_top_and_rows_fit_before(128, rows, 18, grid_bottom));
+        assert!(grid_top_and_rows_fit_before(128.0, rows, 18.0, grid_bottom));
     }
 
     #[test]
     fn short_viewport_geometry_saturates_and_hides_overlapping_tooltip() {
-        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(40, 128, 18, 18);
+        let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(40, 128.0, 18.0, 18.0);
         assert!(!visible);
-        assert_eq!(tooltip_top, 7);
-        assert_eq!(grid_bottom, 20);
+        assert_eq!(tooltip_top, 7.0);
+        assert_eq!(grid_bottom, 20.0);
         assert_eq!(rows, 1);
     }
 
     fn grid_top_and_rows_fit_before(
-        grid_top: usize,
+        grid_top: f32,
         rows: usize,
-        cell_height: usize,
-        grid_bottom: usize,
+        cell_height: f32,
+        grid_bottom: f32,
     ) -> bool {
-        grid_top.saturating_add(rows.saturating_mul(cell_height)) <= grid_bottom
+        grid_top + rows as f32 * cell_height <= grid_bottom
     }
 
     #[test]
@@ -914,28 +903,28 @@ mod tests {
 
     #[test]
     fn prepend_compensation_keeps_existing_cell_at_same_pixel() {
-        let cell_size = (8, 16);
+        let cell_size = (8.0, 16.0);
         let before = cursor_top_left(
             Coord { line: 2, column: 4 },
             cell_size,
-            44,
+            44.0,
             ViewportOffset::default(),
         );
         let mut viewport = ViewportOffset::default();
         viewport.compensate_for_prepend(1, 1, cell_size);
-        let after = cursor_top_left(Coord { line: 3, column: 5 }, cell_size, 44, viewport);
+        let after = cursor_top_left(Coord { line: 3, column: 5 }, cell_size, 44.0, viewport);
         assert_eq!(after, before);
     }
 
     fn cursor_top_left(
         cursor: Coord,
-        cell_size: (usize, usize),
-        grid_top: usize,
+        cell_size: (f32, f32),
+        grid_top: f32,
         viewport: ViewportOffset,
-    ) -> (i64, i64) {
+    ) -> (f32, f32) {
         (
-            PADDING as i64 + cursor.column as i64 * cell_size.0 as i64 + viewport.x,
-            grid_top as i64 + cursor.line as i64 * cell_size.1 as i64 + viewport.y,
+            PADDING as f32 + cursor.column as f32 * cell_size.0 + viewport.x as f32,
+            grid_top + cursor.line as f32 * cell_size.1 + viewport.y as f32,
         )
     }
 

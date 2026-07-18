@@ -17,25 +17,25 @@ pub(crate) enum HotspotClick {
     Paste { box_width: usize },
 }
 
-pub(crate) fn toolbar_box_width(viewport_width: usize, cell_width: usize) -> usize {
-    viewport_width.saturating_sub(PADDING * 2) / cell_width.max(1)
+pub(crate) fn toolbar_box_width(viewport_width: usize, cell_width: f32) -> usize {
+    (viewport_width.saturating_sub(PADDING * 2) as f32 / cell_width.max(1.0)) as usize
 }
 
 pub(crate) fn toolbar_hotspot_at(
     x: f64,
     y: f64,
     viewport_width: usize,
-    cell_width: usize,
-    cell_height: usize,
-    top_padding: usize,
+    cell_width: f32,
+    cell_height: f32,
+    top_padding: f32,
 ) -> Option<usize> {
     let box_width = toolbar_box_width(viewport_width, cell_width);
     if box_width < 2 {
         return None;
     }
-    let left = PADDING.saturating_add((box_width - 1).saturating_mul(cell_width.max(1)));
-    let right = left.saturating_add(cell_width.max(1));
-    let bottom = top_padding.saturating_add(cell_height);
+    let left = PADDING as f32 + (box_width - 1) as f32 * cell_width.max(1.0);
+    let right = left + cell_width.max(1.0);
+    let bottom = top_padding + cell_height;
     (x >= left as f64 && x < right as f64 && y >= top_padding as f64 && y < bottom as f64)
         .then_some(box_width)
 }
@@ -221,9 +221,9 @@ mod tests {
                 left as f64,
                 top as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
             ),
             Some(20)
         );
@@ -232,9 +232,9 @@ mod tests {
                 (left + cell_width - 1) as f64,
                 (top + cell_height - 1) as f64,
                 viewport_width,
-                cell_width,
-                cell_height,
-                top,
+                cell_width as f32,
+                cell_height as f32,
+                top as f32,
             ),
             Some(20)
         );
@@ -249,9 +249,9 @@ mod tests {
                     x as f64,
                     y as f64,
                     viewport_width,
-                    cell_width,
-                    cell_height,
-                    top,
+                    cell_width as f32,
+                    cell_height as f32,
+                    top as f32,
                 ),
                 None
             );
