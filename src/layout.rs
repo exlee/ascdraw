@@ -76,7 +76,7 @@ pub fn minimap_rect(
 
 pub fn minimap_width_in_cells(toolbar_columns: usize) -> usize {
     let available = MINIMAP_COLUMNS.min(toolbar_columns.saturating_sub(1));
-    available - available % 2
+    available.saturating_sub(1 - available % 2)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(
             rect,
             ScreenRect {
-                left: 812,
+                left: 820,
                 top: 184,
                 right: 972,
                 bottom: 296,
@@ -605,11 +605,12 @@ mod tests {
         assert!(!rect.contains(811.0, 250.0));
         assert!(!rect.contains(900.0, 296.0));
 
-        assert_eq!(minimap_width_in_cells(120), 20);
-        assert_eq!(minimap_width_in_cells(18), 16);
-        assert_eq!(minimap_width_in_cells(4), 2);
+        assert_eq!(minimap_width_in_cells(120), 19);
+        assert_eq!(minimap_width_in_cells(18), 17);
+        assert_eq!(minimap_width_in_cells(4), 3);
         for columns in 0..40 {
-            assert_eq!(minimap_width_in_cells(columns) % 2, 0);
+            let width = minimap_width_in_cells(columns);
+            assert!(width == 0 || width % 2 == 1);
         }
     }
 
