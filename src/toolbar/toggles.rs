@@ -101,6 +101,10 @@ impl ToolbarState {
     }
 
     pub(super) fn select_toggle_digit(&mut self, digit: usize) {
+        if digit == super::FILES_TOGGLE_DIGIT {
+            self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
+            return;
+        }
         if let Some(toggle) = digit
             .checked_sub(1)
             .and_then(|index| ToggleKind::ALL.get(index))
@@ -244,6 +248,23 @@ mod tests {
         assert!(restored.dark_mode());
         assert!(restored.multi_color_mode());
         assert!(restored.multi_layer_mode());
+    }
+
+    #[test]
+    fn repeated_files_toggle_category_digit_keeps_toggle_options_active() {
+        let mut toolbar = ToolbarState::default();
+        for key in ["0", "5", "1", "5"] {
+            press(&mut toolbar, key);
+        }
+
+        assert!(toggle_category_open(&toolbar));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::ToggleOptions)
+        );
+
+        press(&mut toolbar, "1");
+        assert!(!toolbar.dark_mode());
     }
 
     #[test]
