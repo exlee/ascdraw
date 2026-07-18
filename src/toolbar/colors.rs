@@ -180,12 +180,12 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
-        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         press(&mut toolbar, "0");
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
-        assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+        assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
         press(&mut toolbar, "1");
         press(&mut toolbar, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Colors 9"));
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
         press(&mut toolbar, "0");
         press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);

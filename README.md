@@ -84,7 +84,8 @@ ascdraw opens in **Stamp** mode. A direction means an arrow key or its Vim equiv
 | Copy / cut / paste | Cmd + `C` / Ctrl/Cmd + `X` / Ctrl/Cmd + `V` |
 | Undo / redo | `u` / `U` or Ctrl/Cmd + `Z` / `R` |
 | Open Files/Togls | `0` |
-| Open Colors when enabled | `9` |
+| Open Lyrs when enabled | `8` |
+| Open Clrs when enabled | `9` |
 
 Jump shows non-overlapping 21×15 sectors covering the visible canvas, with the initial selected
 sector centered exactly on the cursor. A cursor-colored inner rectangle marks the selected sector;
@@ -116,8 +117,8 @@ The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and do
 
 Press `0 5` to select Togls in the Files/Togls menu. Dark Mode (`0 5 1`) reverses the default
 foreground and background while preserving explicit selection, highlight, cursor, and tooltip
-accent colors. Multi Color Mode (`0 5 2`) adds the dedicated Colors surface at `9`, and Multi
-Layer Mode (`0 5 3`) adds the dedicated Layers surface at `8`.
+accent colors. Multi Color Mode (`0 5 2`) adds the dedicated Clrs surface at `9`, and Multi
+Layer Mode (`0 5 3`) adds the dedicated Lyrs surface at `8`.
 
 Colors provides base and bright eight-color ANSI-style palettes. Press `9 1`, then `1` through `8`,
 for the primary/base row; use `9 2`, then `1` through `8`, for the secondary/bright row. The

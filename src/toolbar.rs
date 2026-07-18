@@ -1320,14 +1320,13 @@ mod tests {
     fn only_structural_labels_and_numeric_paths_are_bold() {
         let mut toolbar = ToolbarState::default();
         let main_labels = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        assert_eq!(bold_contents(&main_labels), ["Mode:", "Files/Togls"]);
+        assert_eq!(bold_contents(&main_labels), ["Mode:"]);
         assert!(main_labels.iter().any(|span| {
-            span.contents.contains("Files/Togls")
-                && span.bold_prefix == UnicodeWidthStr::width("Files/Togls")
+            span.action == Some(ToolbarAction::ToggleExportMenu) && span.contents.starts_with('0')
         }));
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MAIN_SHORTCUT_ROW)),
-            ["1."]
+            ["1.", "Files/Togls"]
         );
 
         for (mode, expected_labels) in [
@@ -2326,14 +2325,24 @@ mod tests {
     }
 
     #[test]
-    fn export_entry_is_right_aligned_and_narrow_box_stays_valid_unicode_width() {
+    fn stacked_export_entry_is_right_aligned_and_narrow_box_stays_valid_unicode_width() {
         let toolbar = ToolbarState::default();
-        let wide = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 60));
-        assert!(wide.ends_with("Files/Togls 0 │"));
-        assert!(wide.starts_with("│ Mode: 1"));
+        let wide_shortcut = spans_text(&boxed_toolbar_spans(
+            &toolbar.toolbar_spans(MAIN_LABEL_ROW),
+            60,
+        ));
+        let wide_label = spans_text(&boxed_toolbar_spans(
+            &toolbar.toolbar_spans(MAIN_SHORTCUT_ROW),
+            60,
+        ));
+        assert!(wide_shortcut.ends_with("0           │"));
+        assert!(wide_label.ends_with("Files/Togls │"));
+        assert!(wide_shortcut.starts_with("│ Mode: 1"));
         for width in 0..32 {
-            let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), width));
-            assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+            for row in [MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW] {
+                let text = spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(row), width));
+                assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+            }
         }
     }
 
@@ -2656,7 +2665,7 @@ mod tests {
     fn mouse_export_entry_and_action_match_keyboard_paths() {
         let mut toolbar = ToolbarState::default();
         let width = 60;
-        let entry_column = width - 2 - UnicodeWidthStr::width("Files/Togls 0");
+        let entry_column = width - 2 - UnicodeWidthStr::width("Files/Togls");
         let toggle = toolbar
             .action_at(0, entry_column, width)
             .expect("export entry clickable");
@@ -2750,6 +2759,14 @@ mod tests {
         assert_eq!(
             toolbar.tooltip().text(),
             "Files/Togls: copy/export, save/load files, clear, or toggle display modes"
+        );
+        assert_eq!(
+            Tooltip::Layers.text(),
+            "Lyrs: select, show, reorder, add, or delete a layer"
+        );
+        assert_eq!(
+            Tooltip::Colors.text(),
+            "Clrs: select the foreground color for future writes"
         );
     }
 

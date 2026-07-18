@@ -301,12 +301,12 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, &layers, "8");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
-        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Layers 8"));
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
         press(&mut toolbar, &layers, "0");
         assert!(!toolbar.available_modes().contains(&MainMode::Layers));
-        assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Layers 8"));
+        assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
         press(&mut toolbar, &layers, "1");
         press(&mut toolbar, &layers, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
-        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains("Layers 8"));
+        assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
         press(&mut toolbar, &layers, "0");
         press(&mut toolbar, &layers, "8");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);

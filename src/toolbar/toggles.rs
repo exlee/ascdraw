@@ -66,41 +66,49 @@ impl ToolbarState {
                 foreground: None,
             });
         }
-        if row == MAIN_LABEL_ROW && self.multi_layer_mode() {
-            spans.push(plain_span("    ".to_string()));
-            spans.push(ToolbarSpan {
-                contents: "Layers 8".to_string(),
-                bold_prefix: UnicodeWidthStr::width("Layers"),
-                selected: self.main_mode == MainMode::Layers && !self.export_open,
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::ToggleLayers),
-                right_aligned: false,
-                foreground: None,
-            });
+        let mut feature_entries = Vec::with_capacity(3);
+        if self.multi_layer_mode() {
+            feature_entries.push((
+                "Lyrs",
+                8,
+                ToolbarAction::ToggleLayers,
+                self.main_mode == MainMode::Layers && !self.export_open,
+            ));
         }
-        if row == MAIN_LABEL_ROW && self.multi_color_mode() {
-            spans.push(plain_span("    ".to_string()));
-            spans.push(ToolbarSpan {
-                contents: "Colors 9".to_string(),
-                bold_prefix: UnicodeWidthStr::width("Colors"),
-                selected: self.main_mode == MainMode::Colors && !self.export_open,
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::ToggleColors),
-                right_aligned: false,
-                foreground: None,
-            });
+        if self.multi_color_mode() {
+            feature_entries.push((
+                "Clrs",
+                9,
+                ToolbarAction::ToggleColors,
+                self.main_mode == MainMode::Colors && !self.export_open,
+            ));
         }
-        if row == MAIN_LABEL_ROW {
+        feature_entries.push((
+            "Files/Togls",
+            0,
+            ToolbarAction::ToggleExportMenu,
+            self.export_open,
+        ));
+        for (index, (label, digit, action, selected)) in feature_entries.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(plain_span(" ".to_string()));
+            }
             spans.push(ToolbarSpan {
-                contents: "Files/Togls 0".to_string(),
-                bold_prefix: UnicodeWidthStr::width("Files/Togls"),
-                selected: self.export_open,
+                contents: if row == MAIN_LABEL_ROW {
+                    aligned_shortcut(digit, label)
+                } else {
+                    label.to_string()
+                },
+                bold_prefix: if row == MAIN_SHORTCUT_ROW {
+                    UnicodeWidthStr::width(label)
+                } else {
+                    0
+                },
+                selected: row == MAIN_SHORTCUT_ROW && selected,
                 highlighted: false,
                 tooltip: false,
-                action: Some(ToolbarAction::ToggleExportMenu),
-                right_aligned: true,
+                action: Some(action),
+                right_aligned: index == 0,
                 foreground: None,
             });
         }
@@ -147,6 +155,8 @@ impl ToolbarState {
 mod tests {
     use super::*;
     use crate::toolbar::{MENU_FIRST_ROW, ToolbarAction, boxed_toolbar_spans};
+    use std::ops::Range;
+    use unicode_width::UnicodeWidthChar;
     use winit::keyboard::{Key, ModifiersState};
 
     fn press(toolbar: &mut ToolbarState, key: &str) {
@@ -172,6 +182,32 @@ mod tests {
             column += span_width;
         }
         panic!("action {expected:?} is not visible on toolbar row {row}");
+    }
+
+    fn action_range(
+        toolbar: &ToolbarState,
+        row: usize,
+        width: usize,
+        expected: ToolbarAction,
+    ) -> Range<usize> {
+        let mut column = 0;
+        for span in boxed_toolbar_spans(&toolbar.toolbar_spans(row), width) {
+            let start = column;
+            column += UnicodeWidthStr::width(span.contents.as_str());
+            if span.action == Some(expected) {
+                return start..column;
+            }
+        }
+        panic!("action {expected:?} is not visible on toolbar row {row}");
+    }
+
+    fn right_group_text(toolbar: &ToolbarState, row: usize) -> String {
+        toolbar
+            .toolbar_spans(row)
+            .into_iter()
+            .skip_while(|span| !span.right_aligned)
+            .map(|span| span.contents)
+            .collect()
     }
 
     #[test]
@@ -258,20 +294,123 @@ mod tests {
     }
 
     #[test]
-    fn top_level_has_only_the_exact_combined_files_entry() {
-        let toolbar = ToolbarState::default();
-        let spans = toolbar.toolbar_spans(MAIN_LABEL_ROW);
-        assert!(spans.iter().any(|span| span.contents == "Files/Togls 0"));
-        assert!(
-            !spans
-                .iter()
-                .any(|span| span.contents.contains("9. Toggles"))
-        );
-        assert!(
-            !spans
-                .iter()
-                .any(|span| span.contents.contains("Save/Load/Export"))
-        );
+    fn top_level_feature_cells_stack_and_right_align_in_every_enabled_combination() {
+        let width = 80;
+        for (layers, colors, top, bottom, actions) in [
+            (
+                false,
+                false,
+                "0          ",
+                "Files/Togls",
+                vec![ToolbarAction::ToggleExportMenu],
+            ),
+            (
+                true,
+                false,
+                "8    0          ",
+                "Lyrs Files/Togls",
+                vec![ToolbarAction::ToggleLayers, ToolbarAction::ToggleExportMenu],
+            ),
+            (
+                false,
+                true,
+                "9    0          ",
+                "Clrs Files/Togls",
+                vec![ToolbarAction::ToggleColors, ToolbarAction::ToggleExportMenu],
+            ),
+            (
+                true,
+                true,
+                "8    9    0          ",
+                "Lyrs Clrs Files/Togls",
+                vec![
+                    ToolbarAction::ToggleLayers,
+                    ToolbarAction::ToggleColors,
+                    ToolbarAction::ToggleExportMenu,
+                ],
+            ),
+        ] {
+            let mut toolbar = ToolbarState::default();
+            toolbar.toggles[ToggleKind::MultiLayerMode.index()] = layers;
+            toolbar.toggles[ToggleKind::MultiColorMode.index()] = colors;
+
+            assert_eq!(right_group_text(&toolbar, MAIN_LABEL_ROW), top);
+            assert_eq!(right_group_text(&toolbar, MAIN_SHORTCUT_ROW), bottom);
+            let expected_group_start = width - 2 - UnicodeWidthStr::width(bottom);
+            for action in &actions {
+                let top_range = action_range(&toolbar, MAIN_LABEL_ROW, width, *action);
+                let bottom_range = action_range(&toolbar, MAIN_SHORTCUT_ROW, width, *action);
+                assert_eq!(top_range, bottom_range);
+                assert!(top_range.clone().all(|column| {
+                    toolbar.action_at(MAIN_LABEL_ROW, column, width) == Some(*action)
+                }));
+                assert!(bottom_range.clone().all(|column| {
+                    toolbar.action_at(MAIN_SHORTCUT_ROW, column, width) == Some(*action)
+                }));
+            }
+            assert_eq!(
+                action_range(&toolbar, MAIN_LABEL_ROW, width, actions[0]).start,
+                expected_group_start
+            );
+            for narrow_width in 0..32 {
+                for row in [MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW] {
+                    let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(row), narrow_width);
+                    let text: String = boxed.iter().map(|span| span.contents.as_str()).collect();
+                    assert_eq!(UnicodeWidthStr::width(text.as_str()), narrow_width);
+                    assert!(
+                        text.chars()
+                            .all(|character| UnicodeWidthChar::width(character).is_some())
+                    );
+                }
+            }
+            for absent in [ToolbarAction::ToggleLayers, ToolbarAction::ToggleColors]
+                .into_iter()
+                .filter(|action| !actions.contains(action))
+            {
+                assert!(
+                    toolbar
+                        .toolbar_spans(MAIN_LABEL_ROW)
+                        .iter()
+                        .all(|span| span.action != Some(absent))
+                );
+                assert!(
+                    toolbar
+                        .toolbar_spans(MAIN_SHORTCUT_ROW)
+                        .iter()
+                        .all(|span| span.action != Some(absent))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_feature_cell_is_highlighted_on_its_label_row_only() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.toggles[ToggleKind::MultiLayerMode.index()] = true;
+        toolbar.toggles[ToggleKind::MultiColorMode.index()] = true;
+
+        for (action, expected) in [
+            (ToolbarAction::ToggleLayers, "Lyrs"),
+            (ToolbarAction::ToggleColors, "Clrs"),
+            (ToolbarAction::ToggleExportMenu, "Files/Togls"),
+        ] {
+            assert!(toolbar.apply_action(action));
+            assert!(
+                toolbar
+                    .toolbar_spans(MAIN_LABEL_ROW)
+                    .iter()
+                    .all(|span| !span.selected)
+            );
+            assert_eq!(
+                toolbar
+                    .toolbar_spans(MAIN_SHORTCUT_ROW)
+                    .into_iter()
+                    .filter(|span| span.selected)
+                    .map(|span| span.contents)
+                    .collect::<Vec<_>>(),
+                [expected]
+            );
+        }
     }
 
     #[test]
