@@ -18,7 +18,9 @@ use crate::editor::Editor;
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
 };
-use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, layout_metrics};
+use crate::layout::{
+    LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, layout_metrics, minimap_rect,
+};
 use crate::model::{Atom, Face};
 use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
@@ -285,13 +287,17 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         );
     }
     canvas.restore();
+    let minimap_panel = minimap_rect(
+        width,
+        layout.grid_top,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+    );
     minimap::render(
         canvas,
         state,
         visible_cells,
-        toolbar_metrics,
-        layout.grid_top,
-        width,
+        minimap_panel,
+        metrics.cell_width as f32 / metrics.cell_height.max(1) as f32,
         &default_face,
     );
     render_bottom_tooltip(canvas, state, toolbar_metrics, layout, width);

@@ -2,10 +2,10 @@ use skia_safe::{Canvas, Paint, Rect};
 
 use crate::editor::Editor;
 use crate::face_resolution::ResolvedFace;
-use crate::layout::{ScreenRect, VisibleCanvasCells, minimap_rect};
+use crate::layout::{ScreenRect, VisibleCanvasCells};
 use crate::model::Coord;
 
-use super::{CellMetrics, render_marching_edge};
+use super::render_marching_edge;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MinimapBounds {
@@ -53,28 +53,32 @@ impl MinimapBounds {
 struct MinimapGeometry {
     panel: ScreenRect,
     world: MinimapBounds,
-    scale: f32,
+    scale_x: f32,
+    scale_y: f32,
     left: f32,
     top: f32,
 }
 
 impl MinimapGeometry {
-    fn new(panel: ScreenRect, world: MinimapBounds) -> Option<Self> {
+    fn new(panel: ScreenRect, world: MinimapBounds, cell_aspect: f32) -> Option<Self> {
         const INSET: f32 = 4.0;
         let inner_width = panel.width() as f32 - INSET * 2.0;
         let inner_height = panel.height() as f32 - INSET * 2.0;
         if inner_width <= 0.0 || inner_height <= 0.0 {
             return None;
         }
-        let scale = (inner_width / world.width() as f32)
+        let cell_aspect = cell_aspect.max(f32::EPSILON);
+        let scale_y = (inner_width / (world.width() as f32 * cell_aspect))
             .min(inner_height / world.height() as f32)
             .max(f32::EPSILON);
-        let map_width = world.width() as f32 * scale;
-        let map_height = world.height() as f32 * scale;
+        let scale_x = scale_y * cell_aspect;
+        let map_width = world.width() as f32 * scale_x;
+        let map_height = world.height() as f32 * scale_y;
         Some(Self {
             panel,
             world,
-            scale,
+            scale_x,
+            scale_y,
             left: panel.left as f32 + INSET + (inner_width - map_width) / 2.0,
             top: panel.top as f32 + INSET + (inner_height - map_height) / 2.0,
         })
@@ -82,8 +86,8 @@ impl MinimapGeometry {
 
     fn point(self, column: i64, line: i64) -> (f32, f32) {
         (
-            self.left + column.saturating_sub(self.world.left) as f32 * self.scale,
-            self.top + line.saturating_sub(self.world.top) as f32 * self.scale,
+            self.left + column.saturating_sub(self.world.left) as f32 * self.scale_x,
+            self.top + line.saturating_sub(self.world.top) as f32 * self.scale_y,
         )
     }
 
@@ -98,19 +102,13 @@ pub(super) fn render(
     canvas: &Canvas,
     state: &Editor,
     viewport: VisibleCanvasCells,
-    toolbar_metrics: &CellMetrics,
-    grid_top: usize,
-    window_width: usize,
+    panel: ScreenRect,
+    cell_aspect: f32,
     default_face: &ResolvedFace,
 ) {
-    let panel = minimap_rect(
-        window_width,
-        grid_top,
-        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
-    );
     let content = state.content_cells();
     let world = MinimapBounds::from_content_and_viewport(&content, viewport);
-    let Some(geometry) = MinimapGeometry::new(panel, world) else {
+    let Some(geometry) = MinimapGeometry::new(panel, world, cell_aspect) else {
         return;
     };
     let panel_rect = Rect::from_xywh(
@@ -243,7 +241,7 @@ mod tests {
             right: 108,
             bottom: 58,
         };
-        let nearby = MinimapGeometry::new(panel, bounds).unwrap();
+        let nearby = MinimapGeometry::new(panel, bounds, 0.5).unwrap();
         let distant = MinimapGeometry::new(
             panel,
             MinimapBounds {
@@ -252,11 +250,13 @@ mod tests {
                 right: 100,
                 bottom: 50,
             },
+            0.5,
         )
         .unwrap();
-        assert!(distant.scale < nearby.scale);
+        assert!(distant.scale_y < nearby.scale_y);
 
         let viewport_rect = nearby.rect(-3, 1, 5, 5);
+        assert!((viewport_rect.width() / viewport_rect.height() - 1.0).abs() < f32::EPSILON);
         assert!(viewport_rect.left >= panel.left as f32);
         assert!(viewport_rect.top >= panel.top as f32);
         assert!(viewport_rect.right <= panel.right as f32);
