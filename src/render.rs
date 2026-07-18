@@ -41,8 +41,8 @@ pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
-const CANVAS_SELECTION_STROKE_WIDTH: f32 = 1.0;
-const DRAWING_CURSOR_INSET: f32 = 2.0;
+const CANVAS_SELECTION_STROKE_WIDTH: f32 = 2.0;
+const DRAWING_CURSOR_INSET_RATIO: f32 = 0.12;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -1000,6 +1000,7 @@ fn render_hollow_drawing_cursor(
     cell_resolved: &ResolvedFace,
     cursor_resolved: &ResolvedFace,
 ) {
+    let stroke_width = (metrics.cell_height * 0.1).round().max(1.0);
     render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
     let outline = drawing_cursor_outline(column, top, metrics);
@@ -1007,7 +1008,7 @@ fn render_hollow_drawing_cursor(
     paint
         .set_anti_alias(false)
         .set_color(cursor_resolved.fg.to_color())
-        .set_stroke_width(DRAWING_CURSOR_STROKE_WIDTH);
+        .set_stroke_width(stroke_width);
     canvas.draw_line(
         (outline.left, outline.top),
         (outline.right, outline.top),
@@ -1035,13 +1036,13 @@ fn drawing_cursor_outline(
     top: f32,
     metrics: &CellMetrics,
 ) -> CanvasSelectionOutline {
+    let inset =
+        (metrics.cell_width.min(metrics.cell_height) * DRAWING_CURSOR_INSET_RATIO).clamp(1.0, 4.0);
     CanvasSelectionOutline {
-        left: PADDING as f32 + column as f32 * metrics.cell_width + DRAWING_CURSOR_INSET,
-        top: top + DRAWING_CURSOR_INSET,
-        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width
-            - 1.0
-            - DRAWING_CURSOR_INSET,
-        bottom: top + metrics.cell_height - 1.0 - DRAWING_CURSOR_INSET,
+        left: PADDING as f32 + column as f32 * metrics.cell_width + inset,
+        top: top + inset,
+        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width - 1.0 - inset,
+        bottom: top + metrics.cell_height - 1.0 - inset,
     }
 }
 
@@ -1298,7 +1299,7 @@ fn draw_text_cluster(
     if text.chars().all(char::is_control) {
         return;
     }
-    if cell_graphics::draw(canvas, column, top, text, font, metrics, paint) {
+    if cell_graphics::draw(canvas, column, top, text, metrics, paint) {
         return;
     }
     let left = PADDING as f32 + column as f32 * metrics.cell_width;
@@ -1956,10 +1957,12 @@ mod tests {
 
         let cell_left = PADDING as f32 + 2.0 * metrics.cell_width;
         let cell_top = row_top(2, &metrics, 50.0);
-        assert_eq!(cursor.left - cell_left, DRAWING_CURSOR_INSET);
-        assert_eq!(cursor.top - cell_top, DRAWING_CURSOR_INSET);
-        assert_eq!(selection.right - cursor.right, DRAWING_CURSOR_INSET);
-        assert_eq!(selection.bottom - cursor.bottom, DRAWING_CURSOR_INSET);
+        let inset = (metrics.cell_width.min(metrics.cell_height) * DRAWING_CURSOR_INSET_RATIO)
+            .clamp(1.0, 4.0);
+        assert_eq!(cursor.left - cell_left, inset);
+        assert_eq!(cursor.top - cell_top, inset);
+        assert_eq!(selection.right - cursor.right, inset);
+        assert_eq!(selection.bottom - cursor.bottom, inset);
     }
 
     #[test]

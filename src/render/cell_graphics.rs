@@ -1,4 +1,4 @@
-use skia_safe::{Canvas, Font, Paint, Rect};
+use skia_safe::{Canvas, Paint, Rect};
 
 use super::{CellMetrics, PADDING};
 
@@ -22,6 +22,19 @@ fn block_element_rects(character: char) -> Option<BlockElementRects> {
             Some(one_block_rect((0.0, 0.0, width, 1.0)))
         }
         0x2590 => Some(one_block_rect((0.5, 0.0, 0.5, 1.0))),
+        0x2591 => Some(one_block_rect((0.0, 0.0, 0.5, 0.5))),
+        0x2592 => Some([
+            Some((0.0, 0.0, 0.5, 0.5)),
+            Some((0.5, 0.5, 0.5, 0.5)),
+            None,
+            None,
+        ]),
+        0x2593 => Some([
+            Some((0.0, 0.0, 0.5, 0.5)),
+            Some((0.5, 0.0, 0.5, 0.5)),
+            Some((0.0, 0.5, 0.5, 0.5)),
+            None,
+        ]),
         0x2594 => Some(one_block_rect((0.0, 0.0, 1.0, 0.125))),
         0x2595 => Some(one_block_rect((0.875, 0.0, 0.125, 1.0))),
         0x2596..=0x259f => {
@@ -63,7 +76,6 @@ pub(super) fn draw(
     column: usize,
     top: f32,
     text: &str,
-    font: &Font,
     metrics: &CellMetrics,
     paint: &Paint,
 ) -> bool {
@@ -75,18 +87,20 @@ pub(super) fn draw(
         return false;
     }
 
-    let left = PADDING as f32 + column as f32 * metrics.cell_width;
+    let left = (PADDING as f32 + column as f32 * metrics.cell_width).round();
+    let right = (PADDING as f32 + (column + 1) as f32 * metrics.cell_width).round();
+    let bottom = (top + metrics.cell_height).round();
+    let top = top.round();
     if let Some(rects) = block_element_rects(character) {
         let mut paint = paint.clone();
         paint.set_anti_alias(false);
         for (x, y, width, height) in rects.into_iter().flatten() {
+            let rect_left = (left + x * (right - left)).round();
+            let rect_top = (top + y * (bottom - top)).round();
+            let rect_right = (left + (x + width) * (right - left)).round();
+            let rect_bottom = (top + (y + height) * (bottom - top)).round();
             canvas.draw_rect(
-                Rect::from_xywh(
-                    left + x * metrics.cell_width,
-                    top + y * metrics.cell_height,
-                    width * metrics.cell_width,
-                    height * metrics.cell_height,
-                ),
+                Rect::new(rect_left, rect_top, rect_right, rect_bottom),
                 &paint,
             );
         }
@@ -97,27 +111,15 @@ pub(super) fn draw(
         return false;
     };
     let mut paint = paint.clone();
-    let stroke_width = font.measure_str("─", Some(&paint)).1.height().max(1.0);
+    let stroke_width = ((right - left).min(bottom - top) / 14.0).max(1.0);
     paint.set_anti_alias(true).set_stroke_width(stroke_width);
     canvas.save();
-    canvas.clip_rect(
-        Rect::from_xywh(left, top, metrics.cell_width, metrics.cell_height),
-        None,
-        false,
-    );
+    canvas.clip_rect(Rect::new(left, top, right, bottom), None, false);
     if diagonals.0 {
-        canvas.draw_line(
-            (left, top + metrics.cell_height),
-            (left + metrics.cell_width, top),
-            &paint,
-        );
+        canvas.draw_line((left, bottom), (right, top), &paint);
     }
     if diagonals.1 {
-        canvas.draw_line(
-            (left, top),
-            (left + metrics.cell_width, top + metrics.cell_height),
-            &paint,
-        );
+        canvas.draw_line((left, top), (right, bottom), &paint);
     }
     canvas.restore();
     true
@@ -129,7 +131,7 @@ mod tests {
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    use skia_safe::{AlphaType, ColorType, FontMgr, ImageInfo, surfaces};
+    use skia_safe::{AlphaType, ColorType, Font, FontMgr, ImageInfo, surfaces};
 
     use super::*;
     use crate::face_resolution::Rgba;
@@ -140,6 +142,13 @@ mod tests {
             block_element_rects('█'),
             Some([Some((0.0, 0.0, 1.0, 1.0)), None, None, None])
         );
+        for codepoint in 0x2580..=0x259f {
+            let character = char::from_u32(codepoint).unwrap();
+            assert!(
+                block_element_rects(character).is_some(),
+                "missing Block Element U+{codepoint:04X}"
+            );
+        }
         assert_eq!(cell_diagonals('╳'), Some((true, true)));
 
         let metrics = CellMetrics {
@@ -152,7 +161,8 @@ mod tests {
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
         let width = PADDING + metrics.cell_width.ceil() as usize;
-        let height = (metrics.cell_height * 2.0).ceil() as usize;
+        let rows = 4;
+        let height = (metrics.cell_height * rows as f32).ceil() as usize;
         let mut pixels = vec![0xff; width * height * 4];
         let image_info = ImageInfo::new(
             (width as i32, height as i32),
@@ -165,24 +175,16 @@ mod tests {
                 .expect("test surface");
         let mut paint = Paint::default();
         paint.set_color(Rgba::rgb(0, 0, 0).to_color());
-        assert!(draw(
-            surface.canvas(),
-            0,
-            0.0,
-            "█",
-            &metrics.font,
-            &metrics,
-            &paint,
-        ));
-        assert!(draw(
-            surface.canvas(),
-            0,
-            metrics.cell_height,
-            "█",
-            &metrics.font,
-            &metrics,
-            &paint,
-        ));
+        for row in 0..rows {
+            assert!(draw(
+                surface.canvas(),
+                0,
+                row as f32 * metrics.cell_height,
+                "█",
+                &metrics,
+                &paint,
+            ));
+        }
         drop(surface);
 
         let x = PADDING + 1;
