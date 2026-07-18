@@ -941,6 +941,15 @@ fn visible_drawing_cursor_color(
         return configured;
     }
 
+    let complement = Rgba::rgb(
+        0xff - configured.r,
+        0xff - configured.g,
+        0xff - configured.b,
+    );
+    if contrast_ratio(complement, backdrop) >= MIN_CURSOR_CONTRAST_RATIO {
+        return complement;
+    }
+
     let black = Rgba::rgb(0, 0, 0);
     let white = Rgba::rgb(0xff, 0xff, 0xff);
     if contrast_ratio(black, backdrop) >= contrast_ratio(white, backdrop) {
@@ -1817,6 +1826,14 @@ mod tests {
             cursor_resolved.fg
         );
         let adapted = visible_drawing_cursor_color(&full_block, &cell_resolved, cursor_resolved.fg);
+        assert_eq!(
+            adapted,
+            Rgba::rgb(
+                0xff - cursor_resolved.fg.r,
+                0xff - cursor_resolved.fg.g,
+                0xff - cursor_resolved.fg.b,
+            )
+        );
         assert!(contrast_ratio(adapted, cell_resolved.fg) >= MIN_CURSOR_CONTRAST_RATIO);
         assert!(
             contrast_ratio(adapted, cell_resolved.fg)
