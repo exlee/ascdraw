@@ -26,6 +26,7 @@ use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
 use crate::toolbar_stamp::toolbar_atoms;
 
+mod cell_graphics;
 mod export_png;
 mod jump;
 #[cfg(target_os = "macos")]
@@ -1295,6 +1296,9 @@ fn draw_text_cluster(
     paint: &Paint,
 ) {
     if text.chars().all(char::is_control) {
+        return;
+    }
+    if cell_graphics::draw(canvas, column, top, text, font, metrics, paint) {
         return;
     }
     let left = PADDING as f32 + column as f32 * metrics.cell_width;
