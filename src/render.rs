@@ -40,9 +40,9 @@ pub(crate) const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
-const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
 const CANVAS_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_INSET_RATIO: f32 = 0.12;
+const DRAWING_CURSOR_WIDTH_RATIO: f32 = 0.06;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -1000,33 +1000,22 @@ fn render_hollow_drawing_cursor(
     cell_resolved: &ResolvedFace,
     cursor_resolved: &ResolvedFace,
 ) {
-    let stroke_width = (metrics.cell_height * 0.1).round().max(1.0);
+    let stroke_width = (metrics.cell_height * DRAWING_CURSOR_WIDTH_RATIO)
+        .round()
+        .max(1.0);
     render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
     let outline = drawing_cursor_outline(column, top, metrics);
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
         .set_color(cursor_resolved.fg.to_color())
         .set_stroke_width(stroke_width);
-    canvas.draw_line(
-        (outline.left, outline.top),
-        (outline.right, outline.top),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.left, outline.bottom),
-        (outline.right, outline.bottom),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.left, outline.top),
-        (outline.left, outline.bottom),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.right, outline.top),
-        (outline.right, outline.bottom),
+
+    canvas.draw_rect(
+        Rect::new(outline.left, outline.top, outline.right, outline.bottom),
         &paint,
     );
 }

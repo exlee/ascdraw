@@ -22,19 +22,6 @@ fn block_element_rects(character: char) -> Option<BlockElementRects> {
             Some(one_block_rect((0.0, 0.0, width, 1.0)))
         }
         0x2590 => Some(one_block_rect((0.5, 0.0, 0.5, 1.0))),
-        0x2591 => Some(one_block_rect((0.0, 0.0, 0.5, 0.5))),
-        0x2592 => Some([
-            Some((0.0, 0.0, 0.5, 0.5)),
-            Some((0.5, 0.5, 0.5, 0.5)),
-            None,
-            None,
-        ]),
-        0x2593 => Some([
-            Some((0.0, 0.0, 0.5, 0.5)),
-            Some((0.5, 0.0, 0.5, 0.5)),
-            Some((0.0, 0.5, 0.5, 0.5)),
-            None,
-        ]),
         0x2594 => Some(one_block_rect((0.0, 0.0, 1.0, 0.125))),
         0x2595 => Some(one_block_rect((0.875, 0.0, 0.125, 1.0))),
         0x2596..=0x259f => {
@@ -142,7 +129,9 @@ mod tests {
             block_element_rects('█'),
             Some([Some((0.0, 0.0, 1.0, 1.0)), None, None, None])
         );
-        for codepoint in 0x2580..=0x259f {
+        for codepoint in
+            (0x2580..=0x259f).filter(|codepoint| !(0x2591..=0x2593).contains(codepoint))
+        {
             let character = char::from_u32(codepoint).unwrap();
             assert!(
                 block_element_rects(character).is_some(),
