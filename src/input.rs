@@ -607,6 +607,9 @@ fn pointer_position_to_coord_with_metrics(
     cell_height: f32,
     viewport: ViewportOffset,
 ) -> Option<Coord> {
+    if y < grid_top as f64 {
+        return None;
+    }
     let grid_x = x - PADDING as f64 - viewport.x as f64;
     let grid_y = y - grid_top as f64 - viewport.y as f64;
     if grid_x < 0.0 || grid_y < 0.0 {
@@ -820,7 +823,10 @@ mod tests {
     fn pointer_mapping_keeps_an_anchored_cell_across_grid_top_changes() {
         let cell_width = 8;
         let cell_height = 16;
-        let coord = Coord { line: 6, column: 9 };
+        let coord = Coord {
+            line: 20,
+            column: 9,
+        };
         let old_grid_top = 44;
         let new_grid_top = 172;
         let mut viewport = ViewportOffset { x: -5, y: 11 };
@@ -856,6 +862,37 @@ mod tests {
                 viewport,
             ),
             Some(coord)
+        );
+    }
+
+    #[test]
+    fn pointer_mapping_does_not_expose_canvas_behind_toolbar() {
+        let grid_top = 100.0;
+        let viewport = ViewportOffset { x: -80, y: -160 };
+
+        assert_eq!(
+            pointer_position_to_coord_with_metrics(
+                (PADDING + 10) as f64,
+                grid_top as f64 - 1.0,
+                grid_top,
+                8.0,
+                16.0,
+                viewport,
+            ),
+            None,
+            "toolbar remains inert when the canvas is panned upward"
+        );
+        assert!(
+            pointer_position_to_coord_with_metrics(
+                PADDING as f64,
+                grid_top as f64,
+                grid_top,
+                8.0,
+                16.0,
+                viewport,
+            )
+            .is_some(),
+            "the visible canvas origin remains interactive"
         );
     }
 

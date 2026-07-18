@@ -578,31 +578,30 @@ fn try_main() -> Result<ExitCode> {
                             };
                             if !hotspot_handled {
                                 editor.cancel_scroll_pan();
-                                let toolbar_action = editor.mouse_toolbar_position.and_then(
-                                    |(row, column, width)| {
+                                if let Some((row, column, width)) = editor.mouse_toolbar_position {
+                                    if let Some(action) =
                                         editor.state.toolbar_action_at(row, column, width)
-                                    },
-                                );
-                                if let Some(action) = toolbar_action {
-                                    editor.note_keypress(Instant::now());
-                                    let previous_state = editor.state.clone();
-                                    let previous_viewport = editor.viewport;
-                                    editor.state.apply_toolbar_action(action);
-                                    let document_changed =
-                                        editor.state.take_toolbar_document_change();
-                                    editor.finish_state_change(
-                                        previous_state,
-                                        previous_viewport,
-                                        document_changed,
-                                    );
-                                    perform_pending_export(editor, &config);
-                                    perform_pending_document_switch(
-                                        editor,
-                                        &mut recent_documents,
-                                        &recent_path,
-                                        &scratchpad_path,
-                                    );
-                                    editor.request_redraw();
+                                    {
+                                        editor.note_keypress(Instant::now());
+                                        let previous_state = editor.state.clone();
+                                        let previous_viewport = editor.viewport;
+                                        editor.state.apply_toolbar_action(action);
+                                        let document_changed =
+                                            editor.state.take_toolbar_document_change();
+                                        editor.finish_state_change(
+                                            previous_state,
+                                            previous_viewport,
+                                            document_changed,
+                                        );
+                                        perform_pending_export(editor, &config);
+                                        perform_pending_document_switch(
+                                            editor,
+                                            &mut recent_documents,
+                                            &recent_path,
+                                            &scratchpad_path,
+                                        );
+                                        editor.request_redraw();
+                                    }
                                 } else if let Some(coord) = editor.mouse_cell {
                                     editor.begin_mouse_drag(coord);
                                 }
