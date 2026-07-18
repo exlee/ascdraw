@@ -30,7 +30,7 @@ struct PanelPlacement {
 impl ToolbarState {
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
-        if self.multi_layer_mode() {
+        if self.multi_layer_mode() && !self.export_menu_open() {
             entries.push((
                 "Lyrs",
                 8,
@@ -42,7 +42,7 @@ impl ToolbarState {
                 ),
             ));
         }
-        if self.multi_color_mode() {
+        if self.multi_color_mode() && !self.export_menu_open() {
             entries.push((
                 "Clrs",
                 9,
@@ -157,7 +157,7 @@ impl ToolbarState {
     }
 
     pub(crate) fn auxiliary_panels_visible(&self) -> bool {
-        self.multi_layer_mode() || self.multi_color_mode()
+        !self.export_menu_open() && (self.multi_layer_mode() || self.multi_color_mode())
     }
 
     pub(super) fn auxiliary_panel_row_count_for_width(&self, box_width: usize) -> usize {
@@ -187,13 +187,13 @@ impl ToolbarState {
         let header_rows = usize::from(wrap_headers) * 2;
         let layer_rows = 1 + self.layer_count;
         let candidates = [
-            self.multi_layer_mode().then_some(PanelPlacement {
+            (self.multi_layer_mode() && !self.export_menu_open()).then_some(PanelPlacement {
                 kind: PanelKind::Layers,
                 row: 0,
                 height: header_rows + layer_rows,
                 width: LAYER_PANEL_WIDTH,
             }),
-            self.multi_color_mode().then_some(PanelPlacement {
+            (self.multi_color_mode() && !self.export_menu_open()).then_some(PanelPlacement {
                 kind: PanelKind::Colors,
                 row: 0,
                 height: header_rows + 3,
@@ -438,6 +438,38 @@ mod tests {
                 Some(action)
             );
         }
+    }
+
+    #[test]
+    fn open_files_menu_hides_enabled_layer_and_color_surfaces() {
+        let layers = sample_layers();
+        let mut toolbar = ToolbarState::default();
+        toolbar.sync_layer_count(layers.len());
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+
+        for row in 0..toolbar.content_rows() {
+            assert!(
+                toolbar
+                    .toolbar_spans_with_layers(row, &layers)
+                    .iter()
+                    .all(|span| !matches!(
+                        span.action,
+                        Some(
+                            ToolbarAction::BeginLayersPath
+                                | ToolbarAction::BeginLayerPath(_)
+                                | ToolbarAction::Layer { .. }
+                                | ToolbarAction::BeginColorsPath
+                                | ToolbarAction::BeginColorPath(_)
+                                | ToolbarAction::SelectColor(_)
+                        )
+                    ))
+            );
+        }
+        assert!(!toolbar.auxiliary_panels_visible());
+        assert!(toolbar.multi_layer_mode());
+        assert!(toolbar.multi_color_mode());
     }
 
     #[test]

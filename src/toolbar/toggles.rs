@@ -3,7 +3,7 @@ use super::{
     ToolbarSpan, ToolbarState, aligned_shortcut, bold_prefix_span, bold_span, plain_span,
 };
 
-pub(super) const TOGGLE_LABELS: [&str; 3] = ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"];
+pub(super) const TOGGLE_LABELS: [&str; 3] = ["Drk", "Clrs", "Layrs"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -196,7 +196,7 @@ mod tests {
             Some(PendingShortcut::ToggleOptions)
         );
         let actions: Vec<_> = toolbar
-            .toolbar_spans(MENU_FIRST_ROW)
+            .toolbar_spans(MENU_FIRST_ROW + 2)
             .into_iter()
             .filter_map(|span| match span.action {
                 Some(action @ ToolbarAction::Toggle(_)) => Some(action),
@@ -212,17 +212,14 @@ mod tests {
             ]
         );
         let option_labels: Vec<_> = toolbar
-            .toolbar_spans(MENU_FIRST_ROW + 1)
+            .toolbar_spans(MENU_FIRST_ROW + 3)
             .into_iter()
             .filter_map(|span| match span.action {
                 Some(ToolbarAction::Toggle(_)) => Some(span.contents),
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            option_labels,
-            ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"]
-        );
+        assert_eq!(option_labels, ["Drk", "Clrs", "Layrs"]);
 
         for key in ["1", "2", "3"] {
             press(&mut toolbar, key);
@@ -436,18 +433,20 @@ mod tests {
         assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
         let width = 180;
         let category = ToolbarAction::SelectExportCategory(FILES_TOGGLE_CATEGORY);
-        let category_column = action_column(&toolbar, MENU_FIRST_ROW, width, category);
+        let category_row = MENU_FIRST_ROW + 2;
+        let category_column = action_column(&toolbar, category_row, width, category);
         assert_eq!(
-            toolbar.action_at(MENU_FIRST_ROW, category_column, width),
+            toolbar.action_at(category_row, category_column, width),
             Some(category)
         );
         assert!(toolbar.apply_action(category));
         assert!(toggle_category_open(&toolbar));
 
         let toggle = ToolbarAction::Toggle(ToggleKind::DarkMode);
-        let toggle_column = action_column(&toolbar, MENU_FIRST_ROW + 1, width, toggle);
+        let toggle_row = MENU_FIRST_ROW + 3;
+        let toggle_column = action_column(&toolbar, toggle_row, width, toggle);
         assert_eq!(
-            toolbar.action_at(MENU_FIRST_ROW + 1, toggle_column, width),
+            toolbar.action_at(toggle_row, toggle_column, width),
             Some(toggle)
         );
         assert!(toolbar.apply_action(toggle));

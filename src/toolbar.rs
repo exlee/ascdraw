@@ -686,7 +686,7 @@ impl ToolbarState {
 
     fn left_menu_row_count_for_width(&self, box_width: usize) -> usize {
         if self.export_open {
-            2
+            4
         } else if self.main_mode == MainMode::Utilities {
             1
         } else {
@@ -778,114 +778,121 @@ impl ToolbarState {
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let header_row = row == MENU_FIRST_ROW;
+        let toggles_row = row >= MENU_FIRST_ROW + 2;
+        let header_row = row == MENU_FIRST_ROW || row == MENU_FIRST_ROW + 2;
         let mut spans = Vec::new();
-        for (category, label) in EXPORT_LABELS.iter().take(3).enumerate() {
-            if category > 0 {
-                spans.push(plain_span(GAP.to_string()));
+        if !toggles_row {
+            for (category, label) in EXPORT_LABELS.iter().take(3).enumerate() {
+                if category > 0 {
+                    spans.push(plain_span(GAP.to_string()));
+                }
+                let cell_start = spans_width(&spans);
+                let mode_number = category + EXPORT_MODE_OFFSET;
+                let path = format!("{mode_number}.");
+                let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
+                let options_width = EXPORT_OPTIONS[category]
+                    .iter()
+                    .map(|(option, _)| UnicodeWidthStr::width(*option))
+                    .sum::<usize>()
+                    + EXPORT_OPTIONS[category].len().saturating_sub(1);
+                let cell_width = prefix_width + options_width;
+                if header_row {
+                    let label_contents = format!("{label}:");
+                    spans.push(ToolbarSpan {
+                        bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
+                        contents: pad_right_to_width(label_contents, prefix_width),
+                        selected: self.active_export_category == Some(category),
+                        highlighted: false,
+                        tooltip: false,
+                        action: Some(ToolbarAction::SelectExportCategory(category)),
+                        right_aligned: false,
+                        foreground: None,
+                    });
+                } else {
+                    let highlighted_prefix = match self.pending_shortcut() {
+                        Some(PendingShortcut::ExportOption(pending)) if pending == category => {
+                            Some(path.clone())
+                        }
+                        _ => None,
+                    };
+                    push_shortcut_path(
+                        &mut spans,
+                        &path,
+                        prefix_width,
+                        highlighted_prefix.as_deref(),
+                    );
+                }
+                for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
+                    if position > 0 {
+                        spans.push(plain_span(" ".to_string()));
+                    }
+                    spans.push(ToolbarSpan {
+                        contents: if header_row {
+                            aligned_shortcut(position + 1, option)
+                        } else {
+                            (*option).to_string()
+                        },
+                        bold_prefix: 0,
+                        selected: !header_row && self.successful_export_action == Some(*action),
+                        highlighted: false,
+                        tooltip: false,
+                        action: Some(ToolbarAction::RunExport(*action)),
+                        right_aligned: false,
+                        foreground: None,
+                    });
+                }
+                pad_spans_to_width(&mut spans, cell_start + cell_width);
             }
-            let cell_start = spans_width(&spans);
-            let mode_number = category + EXPORT_MODE_OFFSET;
-            let path = format!("{mode_number}.");
-            let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
-            let options_width = EXPORT_OPTIONS[category]
-                .iter()
-                .map(|(option, _)| UnicodeWidthStr::width(*option))
-                .sum::<usize>()
-                + EXPORT_OPTIONS[category].len().saturating_sub(1);
-            let cell_width = prefix_width + options_width;
+        }
+        if !spans.is_empty() {
+            spans.push(plain_span(GAP.to_string()));
+        }
+        if toggles_row {
+            let toggle_path = format!("{FILES_TOGGLE_DIGIT}.");
+            let toggle_label = "Togls";
+            let toggle_prefix_width = menu_prefix_width(toggle_label, [toggle_path.as_str()]);
             if header_row {
-                let label_contents = format!("{label}:");
+                let label_contents = format!("{toggle_label}:");
                 spans.push(ToolbarSpan {
                     bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
-                    contents: pad_right_to_width(label_contents, prefix_width),
-                    selected: self.active_export_category == Some(category),
+                    contents: pad_right_to_width(label_contents, toggle_prefix_width),
+                    selected: self.active_export_category == Some(FILES_TOGGLE_CATEGORY),
                     highlighted: false,
                     tooltip: false,
-                    action: Some(ToolbarAction::SelectExportCategory(category)),
+                    action: Some(ToolbarAction::SelectExportCategory(FILES_TOGGLE_CATEGORY)),
                     right_aligned: false,
                     foreground: None,
                 });
             } else {
-                let highlighted_prefix = match self.pending_shortcut() {
-                    Some(PendingShortcut::ExportOption(pending)) if pending == category => {
-                        Some(path.clone())
-                    }
-                    _ => None,
-                };
-                push_shortcut_path(
-                    &mut spans,
-                    &path,
-                    prefix_width,
-                    highlighted_prefix.as_deref(),
-                );
+                let highlighted = (self.pending_shortcut() == Some(PendingShortcut::ToggleOptions))
+                    .then_some(toggle_path.as_str());
+                push_shortcut_path(&mut spans, &toggle_path, toggle_prefix_width, highlighted);
             }
-            for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
+            for (position, (toggle, label)) in ToggleKind::ALL
+                .iter()
+                .zip(toggles::TOGGLE_LABELS)
+                .enumerate()
+            {
                 if position > 0 {
                     spans.push(plain_span(" ".to_string()));
                 }
                 spans.push(ToolbarSpan {
                     contents: if header_row {
-                        aligned_shortcut(position + 1, option)
+                        aligned_shortcut(position + 1, label)
                     } else {
-                        (*option).to_string()
+                        label.to_string()
                     },
                     bold_prefix: 0,
-                    selected: !header_row && self.successful_export_action == Some(*action),
+                    selected: !header_row && self.toggles[toggle.index()],
                     highlighted: false,
                     tooltip: false,
-                    action: Some(ToolbarAction::RunExport(*action)),
+                    action: Some(ToolbarAction::Toggle(*toggle)),
                     right_aligned: false,
                     foreground: None,
                 });
             }
-            pad_spans_to_width(&mut spans, cell_start + cell_width);
         }
-        spans.push(plain_span(GAP.to_string()));
-        let toggle_path = format!("{FILES_TOGGLE_DIGIT}.");
-        let toggle_label = "Togls";
-        let toggle_prefix_width = menu_prefix_width(toggle_label, [toggle_path.as_str()]);
-        if header_row {
-            let label_contents = format!("{toggle_label}:");
-            spans.push(ToolbarSpan {
-                bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
-                contents: pad_right_to_width(label_contents, toggle_prefix_width),
-                selected: self.active_export_category == Some(FILES_TOGGLE_CATEGORY),
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::SelectExportCategory(FILES_TOGGLE_CATEGORY)),
-                right_aligned: false,
-                foreground: None,
-            });
-        } else {
-            let highlighted = (self.pending_shortcut() == Some(PendingShortcut::ToggleOptions))
-                .then_some(toggle_path.as_str());
-            push_shortcut_path(&mut spans, &toggle_path, toggle_prefix_width, highlighted);
-        }
-        for (position, (toggle, label)) in ToggleKind::ALL
-            .iter()
-            .zip(toggles::TOGGLE_LABELS)
-            .enumerate()
-        {
-            if position > 0 {
-                spans.push(plain_span(" ".to_string()));
-            }
-            spans.push(ToolbarSpan {
-                contents: if header_row {
-                    aligned_shortcut(position + 1, label)
-                } else {
-                    label.to_string()
-                },
-                bold_prefix: 0,
-                selected: !header_row && self.toggles[toggle.index()],
-                highlighted: false,
-                tooltip: false,
-                action: Some(ToolbarAction::Toggle(*toggle)),
-                right_aligned: false,
-                foreground: None,
-            });
-        }
-        if !header_row {
+        if !header_row && !toggles_row {
             spans.push(ToolbarSpan {
                 contents: format!("{EXPORT_CLEAR_DIGIT}. Clear"),
                 bold_prefix: UnicodeWidthStr::width("9."),
@@ -1464,10 +1471,10 @@ mod tests {
 
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW)),
-            ["Clipboard:", "Save:", "Load:", "Togls:"]
+            ["Clipboard:", "Save:", "Load:"]
         );
         let shortcuts = toolbar.toolbar_spans(MENU_FIRST_ROW + 1);
-        assert_eq!(bold_contents(&shortcuts), ["2.", "3.", "4.", "5.", "9."]);
+        assert_eq!(bold_contents(&shortcuts), ["2.", "3.", "4.", "9."]);
         assert!(
             shortcuts
                 .iter()
@@ -1476,6 +1483,14 @@ mod tests {
                         && span.action != Some(ToolbarAction::RunExport(ExportAction::Clear))
                 })
                 .all(|span| span.bold_prefix == 0)
+        );
+        assert_eq!(
+            bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 2)),
+            ["Togls:"]
+        );
+        assert_eq!(
+            bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 3)),
+            ["5."]
         );
     }
 
