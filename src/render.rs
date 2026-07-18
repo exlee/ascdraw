@@ -6,7 +6,7 @@ use std::rc::Rc;
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
     AlphaType, Canvas, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo, Paint,
-    PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
+    PathEffect, PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
 };
 use softbuffer::Surface;
 use unicode_segmentation::UnicodeSegmentation;
@@ -39,10 +39,9 @@ pub use window_surface::WindowSurface;
 pub(crate) const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
-const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
-const CANVAS_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_INSET_RATIO: f32 = 0.12;
-const DRAWING_CURSOR_WIDTH_RATIO: f32 = 0.06;
+const OUTLINE_STROKE_WIDTH_RATIO: f32 = 0.06;
+const MARCHING_ANTS_MILLIS_PER_PIXEL: f32 = 40.0;
 
 #[derive(Clone)]
 pub struct Renderer {
@@ -345,39 +344,18 @@ fn render_canvas_selection(canvas: &Canvas, state: &Editor, metrics: &CellMetric
     )
     .fg;
     if state.move_lift_active() {
-        let alternate = resolve_derived_face(
-            &state.grid.default_face,
-            &state.theme.selection_highlight,
-            FALLBACK_FG,
-            FALLBACK_BG,
-        )
-        .fg;
-        render_marching_ants(canvas, outline, color, alternate, metrics);
+        render_marching_ants(canvas, outline, color, metrics);
         return;
     }
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
         .set_color(color.to_color())
-        .set_stroke_width(CANVAS_SELECTION_STROKE_WIDTH);
-    canvas.draw_line(
-        (outline.left, outline.top),
-        (outline.right, outline.top),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.left, outline.bottom),
-        (outline.right, outline.bottom),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.left, outline.top),
-        (outline.left, outline.bottom),
-        &paint,
-    );
-    canvas.draw_line(
-        (outline.right, outline.top),
-        (outline.right, outline.bottom),
+        .set_stroke_width(outline_stroke_width(metrics));
+    canvas.draw_rect(
+        Rect::new(outline.left, outline.top, outline.right, outline.bottom),
         &paint,
     );
 }
@@ -389,88 +367,32 @@ fn canvas_selection_is_visible(state: &Editor) -> bool {
 fn render_marching_ants(
     canvas: &Canvas,
     outline: CanvasSelectionOutline,
-    primary: Rgba,
-    alternate: Rgba,
+    color: Rgba,
     metrics: &CellMetrics,
 ) {
     let segment = (metrics.cell_width.min(metrics.cell_height) / 3.0).max(2.0);
     let phase = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as usize
-        / 125;
-    let mut paints = [Paint::default(), Paint::default()];
-    for (paint, color) in paints.iter_mut().zip([primary, alternate]) {
-        paint
-            .set_anti_alias(false)
-            .set_color(color.to_color())
-            .set_stroke_width(CANVAS_SELECTION_STROKE_WIDTH);
-    }
-    render_marching_edge(
-        canvas,
-        (outline.left, outline.top),
-        (outline.right, outline.top),
-        segment,
-        phase,
-        &paints,
-    );
-    render_marching_edge(
-        canvas,
-        (outline.right, outline.top),
-        (outline.right, outline.bottom),
-        segment,
-        phase,
-        &paints,
-    );
-    render_marching_edge(
-        canvas,
-        (outline.right, outline.bottom),
-        (outline.left, outline.bottom),
-        segment,
-        phase,
-        &paints,
-    );
-    render_marching_edge(
-        canvas,
-        (outline.left, outline.bottom),
-        (outline.left, outline.top),
-        segment,
-        phase,
-        &paints,
+        .map_or(0.0, |elapsed| marching_ants_phase(elapsed, segment));
+    let mut paint = Paint::default();
+    paint
+        .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
+        .set_color(color.to_color())
+        .set_stroke_width(outline_stroke_width(metrics))
+        .set_path_effect(PathEffect::dash(&[segment, segment], phase));
+    canvas.draw_rect(
+        Rect::new(outline.left, outline.top, outline.right, outline.bottom),
+        &paint,
     );
 }
 
-fn render_marching_edge(
-    canvas: &Canvas,
-    start: (f32, f32),
-    end: (f32, f32),
-    segment: f32,
-    phase: usize,
-    paints: &[Paint; 2],
-) {
-    let dx = end.0 - start.0;
-    let dy = end.1 - start.1;
-    let length = dx.abs() + dy.abs();
-    if length == 0.0 {
-        return;
-    }
-    let unit = (dx / length, dy / length);
-    let offset = (phase as f32 % segment) - segment;
-    let mut position = offset;
-    let mut index = phase / segment as usize;
-    while position < length {
-        let from = position.max(0.0);
-        let to = (position + segment).min(length);
-        if to > from {
-            canvas.draw_line(
-                (start.0 + unit.0 * from, start.1 + unit.1 * from),
-                (start.0 + unit.0 * to, start.1 + unit.1 * to),
-                &paints[index % paints.len()],
-            );
-        }
-        position += segment;
-        index += 1;
-    }
+fn marching_ants_phase(elapsed: std::time::Duration, segment: f32) -> f32 {
+    let cycle_millis = (segment * 2.0 * MARCHING_ANTS_MILLIS_PER_PIXEL)
+        .round()
+        .max(1.0) as u128;
+    (elapsed.as_millis() % cycle_millis) as f32 / MARCHING_ANTS_MILLIS_PER_PIXEL
 }
 
 fn render_toolbar(
@@ -604,26 +526,12 @@ fn render_toolbar_span_outlines(
         let mut paint = Paint::default();
         paint
             .set_anti_alias(false)
+            .set_style(skia_safe::paint::Style::Stroke)
+            .set_stroke_join(skia_safe::paint::Join::Miter)
             .set_color(outline.color.to_color())
-            .set_stroke_width(TOOLBAR_SELECTION_STROKE_WIDTH);
-        canvas.draw_line(
-            (outline.left, outline.top),
-            (outline.right, outline.top),
-            &paint,
-        );
-        canvas.draw_line(
-            (outline.left, outline.bottom),
-            (outline.right, outline.bottom),
-            &paint,
-        );
-        canvas.draw_line(
-            (outline.left, outline.top),
-            (outline.left, outline.bottom),
-            &paint,
-        );
-        canvas.draw_line(
-            (outline.right, outline.top),
-            (outline.right, outline.bottom),
+            .set_stroke_width(outline_stroke_width(metrics));
+        canvas.draw_rect(
+            Rect::new(outline.left, outline.top, outline.right, outline.bottom),
             &paint,
         );
     }
@@ -1000,9 +908,6 @@ fn render_hollow_drawing_cursor(
     cell_resolved: &ResolvedFace,
     cursor_resolved: &ResolvedFace,
 ) {
-    let stroke_width = (metrics.cell_height * DRAWING_CURSOR_WIDTH_RATIO)
-        .round()
-        .max(1.0);
     render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
     let outline = drawing_cursor_outline(column, top, metrics);
@@ -1012,12 +917,18 @@ fn render_hollow_drawing_cursor(
         .set_style(skia_safe::paint::Style::Stroke)
         .set_stroke_join(skia_safe::paint::Join::Miter)
         .set_color(cursor_resolved.fg.to_color())
-        .set_stroke_width(stroke_width);
+        .set_stroke_width(outline_stroke_width(metrics));
 
     canvas.draw_rect(
         Rect::new(outline.left, outline.top, outline.right, outline.bottom),
         &paint,
     );
+}
+
+pub(super) fn outline_stroke_width(metrics: &CellMetrics) -> f32 {
+    (metrics.cell_height * OUTLINE_STROKE_WIDTH_RATIO)
+        .round()
+        .max(1.0)
 }
 
 fn drawing_cursor_outline(
@@ -1908,6 +1819,34 @@ mod tests {
                 bottom: 195.0,
             }
         );
+    }
+
+    #[test]
+    fn outline_stroke_width_scales_with_cell_height() {
+        let mut metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8.0,
+            cell_height: 16.0,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let initial = outline_stroke_width(&metrics);
+        metrics.cell_height *= 4.0;
+
+        assert_eq!(initial, 1.0);
+        assert!(outline_stroke_width(&metrics) > initial);
+    }
+
+    #[test]
+    fn marching_ants_phase_advances_and_wraps_without_epoch_precision_loss() {
+        let segment = 4.0;
+        let one_pixel = std::time::Duration::from_millis(40);
+        let one_cycle = std::time::Duration::from_millis(320);
+
+        assert_eq!(marching_ants_phase(one_pixel, segment), 1.0);
+        assert_eq!(marching_ants_phase(one_cycle + one_pixel, segment), 1.0);
     }
 
     #[test]

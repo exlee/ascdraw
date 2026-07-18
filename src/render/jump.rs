@@ -1,13 +1,12 @@
-use skia_safe::{Canvas, Paint};
+use skia_safe::{Canvas, Paint, Rect};
 
-use super::{CellMetrics, FALLBACK_BG, FALLBACK_FG, PADDING};
+use super::{CellMetrics, FALLBACK_BG, FALLBACK_FG, PADDING, outline_stroke_width};
 use crate::app::CursorMode;
 use crate::editor::Editor;
 use crate::face_resolution::resolve_derived_face;
 use crate::jump::JumpBounds;
 
 const SELECTED_INSET: f32 = 2.0;
-const SELECTED_STROKE_WIDTH: f32 = 2.0;
 
 pub(super) fn render_jump_overlay(
     canvas: &Canvas,
@@ -50,8 +49,10 @@ pub(super) fn render_jump_overlay(
     let mut grid_paint = Paint::default();
     grid_paint
         .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
         .set_color(grid_color.to_color())
-        .set_stroke_width(1.0);
+        .set_stroke_width(outline_stroke_width(metrics));
     for sector in overlay.sectors {
         draw_outline(canvas, sector, metrics, grid_top, 0.0, &grid_paint);
     }
@@ -59,8 +60,10 @@ pub(super) fn render_jump_overlay(
         let mut selected_paint = Paint::default();
         selected_paint
             .set_anti_alias(false)
+            .set_style(skia_safe::paint::Style::Stroke)
+            .set_stroke_join(skia_safe::paint::Join::Miter)
             .set_color(cursor_color.to_color())
-            .set_stroke_width(SELECTED_STROKE_WIDTH);
+            .set_stroke_width(outline_stroke_width(metrics));
         draw_outline(
             canvas,
             selected,
@@ -84,8 +87,5 @@ fn draw_outline(
     let top = grid_top + bounds.line as f32 * metrics.cell_height + inset;
     let right = left + bounds.columns as f32 * metrics.cell_width - 1.0 - inset * 2.0;
     let bottom = top + bounds.rows as f32 * metrics.cell_height - 1.0 - inset * 2.0;
-    canvas.draw_line((left, top), (right, top), paint);
-    canvas.draw_line((right, top), (right, bottom), paint);
-    canvas.draw_line((right, bottom), (left, bottom), paint);
-    canvas.draw_line((left, bottom), (left, top), paint);
+    canvas.draw_rect(Rect::new(left, top, right, bottom), paint);
 }

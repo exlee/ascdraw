@@ -1,11 +1,11 @@
-use skia_safe::{Canvas, Paint, Rect};
+use skia_safe::{Canvas, Paint, PathEffect, Rect};
 
 use crate::editor::Editor;
 use crate::face_resolution::ResolvedFace;
 use crate::layout::{ScreenRect, VisibleCanvasCells};
 use crate::model::Coord;
 
-use super::{CellMetrics, draw_text_cluster, render_marching_edge};
+use super::{CellMetrics, draw_text_cluster};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MinimapBounds {
@@ -164,36 +164,24 @@ pub(super) fn render(
         viewport_right,
         viewport_bottom,
     );
-    let mut viewport_paints = [Paint::default(), Paint::default()];
-    for (paint, color) in viewport_paints
-        .iter_mut()
-        .zip([default_face.fg, default_face.bg])
-    {
-        paint
-            .set_anti_alias(false)
-            .set_color(color.to_color())
-            .set_stroke_width(1.0);
-    }
-    for (start, end) in [
-        (
-            (viewport_rect.left, viewport_rect.top),
-            (viewport_rect.right, viewport_rect.top),
-        ),
-        (
-            (viewport_rect.right, viewport_rect.top),
-            (viewport_rect.right, viewport_rect.bottom),
-        ),
-        (
-            (viewport_rect.right, viewport_rect.bottom),
-            (viewport_rect.left, viewport_rect.bottom),
-        ),
-        (
-            (viewport_rect.left, viewport_rect.bottom),
-            (viewport_rect.left, viewport_rect.top),
-        ),
-    ] {
-        render_marching_edge(canvas, start, end, 4.0, 0, &viewport_paints);
-    }
+    let mut viewport_background = Paint::default();
+    viewport_background
+        .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
+        .set_color(default_face.bg.to_color())
+        .set_stroke_width(1.0);
+    canvas.draw_rect(viewport_rect, &viewport_background);
+
+    let mut viewport_foreground = Paint::default();
+    viewport_foreground
+        .set_anti_alias(false)
+        .set_style(skia_safe::paint::Style::Stroke)
+        .set_stroke_join(skia_safe::paint::Join::Miter)
+        .set_color(default_face.fg.to_color())
+        .set_stroke_width(1.0)
+        .set_path_effect(PathEffect::dash(&[4.0, 4.0], 0.0));
+    canvas.draw_rect(viewport_rect, &viewport_foreground);
     canvas.restore();
 
     let left_column = ((panel.left - crate::layout::PADDING as f32).max(0.0)
