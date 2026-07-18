@@ -1858,6 +1858,22 @@ mod tests {
     }
 
     #[test]
+    fn canvas_rows_remain_contiguous_with_toolbar_row_spacing() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+
+        assert_eq!(row_top(1, &metrics, 100) - row_top(0, &metrics, 100), 16);
+        assert_eq!(row_top(2, &metrics, 100) - row_top(1, &metrics, 100), 16);
+    }
+
+    #[test]
     fn active_corner_cursor_is_inset_from_the_selection_border() {
         let metrics = CellMetrics {
             font: Font::default(),
