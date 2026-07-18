@@ -308,6 +308,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.note_keypress(keypress_at);
                             let key_type = classify_key(
                                 editor.state.state(),
+                                editor.state.cursor_mode.accepts_text(),
                                 KeyInput {
                                     key: &event.logical_key,
                                     text: event.text.as_deref(),
@@ -1056,6 +1057,7 @@ fn handle_editor_key(
     ordered.update(modifiers);
     let key_type = classify_key(
         state.state(),
+        state.cursor_mode.accepts_text(),
         KeyInput {
             key,
             text,
@@ -2272,6 +2274,7 @@ mod tests {
         ] {
             let key_type = classify_key(
                 state.state(),
+                state.cursor_mode.accepts_text(),
                 KeyInput {
                     key: &key,
                     text: None,
@@ -2333,6 +2336,7 @@ mod tests {
         let ordered = ordered_modifiers(states);
         let key_type = classify_key(
             state.state(),
+            state.cursor_mode.accepts_text(),
             KeyInput {
                 key: &key,
                 text: None,

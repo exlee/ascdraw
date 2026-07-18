@@ -132,7 +132,11 @@ pub fn selection_action(state: EditorState, key_type: KeyType<'_>) -> Option<Sel
     }
 }
 
-pub fn classify_key(state: EditorState, input: KeyInput<'_>) -> KeyType<'_> {
+pub fn classify_key(
+    state: EditorState,
+    cursor_accepts_text: bool,
+    input: KeyInput<'_>,
+) -> KeyType<'_> {
     if is_cancel_key(input.key, input.modifiers) {
         return KeyType::CancelKey(input);
     }
@@ -143,7 +147,7 @@ pub fn classify_key(state: EditorState, input: KeyInput<'_>) -> KeyType<'_> {
             ClipboardCommand::Paste => KeyType::PasteKey(input),
         };
     }
-    if let Some(command) = history_key(state, input.key, input.modifiers) {
+    if let Some(command) = history_key(state, cursor_accepts_text, input.key, input.modifiers) {
         return match command {
             HistoryCommand::Undo => KeyType::UndoKey(input),
             HistoryCommand::Redo => KeyType::RedoKey(input),
@@ -189,7 +193,12 @@ fn clipboard_key(key: &Key, modifiers: ModifiersState) -> Option<ClipboardComman
     }
 }
 
-fn history_key(state: EditorState, key: &Key, modifiers: ModifiersState) -> Option<HistoryCommand> {
+fn history_key(
+    state: EditorState,
+    cursor_accepts_text: bool,
+    key: &Key,
+    modifiers: ModifiersState,
+) -> Option<HistoryCommand> {
     if !modifiers.alt_key() && (modifiers.control_key() || modifiers.super_key()) {
         return match key {
             Key::Character(text) if text.eq_ignore_ascii_case("z") => Some(HistoryCommand::Undo),
@@ -198,6 +207,7 @@ fn history_key(state: EditorState, key: &Key, modifiers: ModifiersState) -> Opti
         };
     }
     if state.accepts_text()
+        || cursor_accepts_text
         || (modifiers != ModifiersState::empty() && modifiers != ModifiersState::SHIFT)
     {
         return None;
@@ -230,7 +240,7 @@ mod tests {
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             assert!(matches!(
-                classify_key(EditorState::LineMode, input(&key, modifiers)),
+                classify_key(EditorState::LineMode, false, input(&key, modifiers)),
                 KeyType::CancelKey(_)
             ));
         }
@@ -255,7 +265,7 @@ mod tests {
                 ClipboardCommand::Paste,
             ),
         ] {
-            let classified = classify_key(EditorState::LineMode, input(&key, modifiers));
+            let classified = classify_key(EditorState::LineMode, false, input(&key, modifiers));
             assert_eq!(classified.clipboard_command(), Some(expected));
             assert_eq!(classified.input().key, &key);
         }
@@ -266,6 +276,24 @@ mod tests {
         let key = Key::Character("u".into());
         let classified = classify_key(
             EditorState::TextMode,
+            true,
+            KeyInput {
+                key: &key,
+                text: Some("u"),
+                repeat: false,
+                modifiers: ModifiersState::empty(),
+            },
+        );
+
+        assert!(matches!(classified, KeyType::TextKey(_)));
+    }
+
+    #[test]
+    fn plain_history_keys_remain_text_under_non_text_overlays() {
+        let key = Key::Character("u".into());
+        let classified = classify_key(
+            EditorState::ExportMode,
+            true,
             KeyInput {
                 key: &key,
                 text: Some("u"),
@@ -294,7 +322,11 @@ mod tests {
             assert_eq!(
                 selection_action(
                     state,
-                    classify_key(state, input(&backspace, ModifiersState::empty()))
+                    classify_key(
+                        state,
+                        mode.accepts_text(),
+                        input(&backspace, ModifiersState::empty())
+                    )
                 ),
                 Some(SelectionAction::Clear)
             );
@@ -303,7 +335,11 @@ mod tests {
             assert_eq!(
                 selection_action(
                     state,
-                    classify_key(state, input(&replace, ModifiersState::empty()))
+                    classify_key(
+                        state,
+                        mode.accepts_text(),
+                        input(&replace, ModifiersState::empty())
+                    )
                 ),
                 Some(SelectionAction::ReplaceOne)
             );
@@ -312,7 +348,11 @@ mod tests {
             assert_eq!(
                 selection_action(
                     state,
-                    classify_key(state, input(&right, ModifiersState::ALT))
+                    classify_key(
+                        state,
+                        mode.accepts_text(),
+                        input(&right, ModifiersState::ALT)
+                    )
                 ),
                 Some(SelectionAction::Move(Direction::Right))
             );
