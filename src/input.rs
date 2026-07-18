@@ -42,7 +42,9 @@ pub enum ViewCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveSelectionCommand {
     BeginAndStep(Direction),
+    BeginCloneAndStep(Direction, u64),
     Step(Direction),
+    CloneAndStep(Direction, u64),
     ConfirmAndMove(Direction),
     Confirm,
     Cancel,
@@ -94,6 +96,7 @@ pub fn move_selection_command(
     modifiers: ModifiersState,
     active: bool,
     selection_expanded: bool,
+    clone_press: Option<u64>,
 ) -> Option<MoveSelectionCommand> {
     if active {
         if matches!(key, Key::Named(NamedKey::Escape))
@@ -106,10 +109,22 @@ pub fn move_selection_command(
             return (modifiers == ModifiersState::empty()).then_some(MoveSelectionCommand::Confirm);
         }
         let direction = direction_for_key(key)?;
-        return move_selection_direction_command(direction, modifiers, active, selection_expanded);
+        return move_selection_direction_command(
+            direction,
+            modifiers,
+            active,
+            selection_expanded,
+            clone_press,
+        );
     }
     let direction = direction_for_key(key)?;
-    move_selection_direction_command(direction, modifiers, active, selection_expanded)
+    move_selection_direction_command(
+        direction,
+        modifiers,
+        active,
+        selection_expanded,
+        clone_press,
+    )
 }
 
 pub fn move_selection_direction_command(
@@ -117,9 +132,13 @@ pub fn move_selection_direction_command(
     modifiers: ModifiersState,
     active: bool,
     selection_expanded: bool,
+    clone_press: Option<u64>,
 ) -> Option<MoveSelectionCommand> {
     if active {
         return match modifiers {
+            _ if modifiers == (ModifiersState::ALT | ModifiersState::SHIFT) => {
+                clone_press.map(|press| MoveSelectionCommand::CloneAndStep(direction, press))
+            }
             _ if modifiers == ModifiersState::ALT => Some(MoveSelectionCommand::Step(direction)),
             _ if modifiers == ModifiersState::empty() => {
                 Some(MoveSelectionCommand::ConfirmAndMove(direction))
@@ -127,8 +146,13 @@ pub fn move_selection_direction_command(
             _ => None,
         };
     }
-    (selection_expanded && modifiers == ModifiersState::ALT)
-        .then_some(MoveSelectionCommand::BeginAndStep(direction))
+    if !selection_expanded {
+        return None;
+    }
+    if modifiers == (ModifiersState::ALT | ModifiersState::SHIFT) {
+        return clone_press.map(|press| MoveSelectionCommand::BeginCloneAndStep(direction, press));
+    }
+    (modifiers == ModifiersState::ALT).then_some(MoveSelectionCommand::BeginAndStep(direction))
 }
 
 /// Resolves viewport-only commands for the Utilities View tool. These are
@@ -175,6 +199,7 @@ pub enum DirectionModifier {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OrderedModifierTracker {
     held: Vec<DirectionModifier>,
+    shift_press: u64,
 }
 
 impl OrderedModifierTracker {
@@ -190,8 +215,18 @@ impl OrderedModifierTracker {
         ] {
             if modifier.is_held(state) && !self.held.contains(&modifier) {
                 self.held.push(modifier);
+                if modifier == DirectionModifier::Shift {
+                    self.shift_press = self.shift_press.wrapping_add(1);
+                }
             }
         }
+    }
+
+    pub fn clone_move_press(&self, modifiers: ModifiersState) -> Option<u64> {
+        (modifiers == (ModifiersState::ALT | ModifiersState::SHIFT)
+            && self.primary_and_secondary()
+                == Some((DirectionModifier::Alt, Some(DirectionModifier::Shift))))
+        .then_some(self.shift_press)
     }
 
     fn primary_and_secondary(&self) -> Option<(DirectionModifier, Option<DirectionModifier>)> {
@@ -1117,6 +1152,26 @@ mod tests {
     }
 
     #[test]
+    fn clone_move_press_changes_only_after_shift_is_repressed_after_alt() {
+        let mut ordered = OrderedModifierTracker::default();
+        ordered.update(ModifiersState::ALT);
+        assert_eq!(ordered.clone_move_press(ModifiersState::ALT), None);
+
+        let combined = ModifiersState::ALT | ModifiersState::SHIFT;
+        ordered.update(combined);
+        let first = ordered.clone_move_press(combined).unwrap();
+        ordered.update(combined);
+        assert_eq!(ordered.clone_move_press(combined), Some(first));
+
+        ordered.update(ModifiersState::ALT);
+        ordered.update(combined);
+        assert_ne!(ordered.clone_move_press(combined), Some(first));
+
+        let shift_first = tracker(&[ModifiersState::SHIFT, combined]);
+        assert_eq!(shift_first.clone_move_press(combined), None);
+    }
+
+    #[test]
     fn simultaneous_additions_have_a_stable_fallback_and_three_use_earliest_secondary() {
         let ordered = tracker(&[ModifiersState::SHIFT | ModifiersState::ALT]);
         assert_eq!(
@@ -1198,6 +1253,7 @@ mod tests {
         for (primary, secondary, command, steps) in cases {
             let ordered = OrderedModifierTracker {
                 held: vec![primary, secondary],
+                shift_press: 0,
             };
             let modifiers = match (primary, secondary) {
                 (DirectionModifier::Shift, DirectionModifier::Control)
@@ -1420,12 +1476,13 @@ mod tests {
                 ModifiersState::empty(),
                 true,
                 false,
+                None,
             ),
             Some(MoveSelectionCommand::ConfirmAndMove(Direction::Right))
         );
         for key in [Key::Named(NamedKey::Space), Key::Named(NamedKey::Enter)] {
             assert_eq!(
-                move_selection_command(&key, ModifiersState::empty(), true, false),
+                move_selection_command(&key, ModifiersState::empty(), true, false, None),
                 Some(MoveSelectionCommand::Confirm)
             );
         }
@@ -1434,7 +1491,7 @@ mod tests {
             (Key::Character("g".into()), ModifiersState::CONTROL),
         ] {
             assert_eq!(
-                move_selection_command(&key, modifiers, true, false),
+                move_selection_command(&key, modifiers, true, false, None),
                 Some(MoveSelectionCommand::Cancel)
             );
         }
@@ -1444,6 +1501,7 @@ mod tests {
                 ModifiersState::CONTROL,
                 true,
                 false,
+                None,
             ),
             None,
             "Ctrl-C is handled by the cancel-key classifier"
@@ -1454,6 +1512,7 @@ mod tests {
                 ModifiersState::empty(),
                 false,
                 false,
+                None,
             ),
             None,
             "Enter keeps its existing meaning until a lift is active"
@@ -1464,6 +1523,7 @@ mod tests {
                 ModifiersState::empty(),
                 false,
                 false,
+                None,
             ),
             None
         );
@@ -1485,6 +1545,7 @@ mod tests {
                     ModifiersState::ALT,
                     false,
                     true,
+                    None,
                 ),
                 Some(MoveSelectionCommand::BeginAndStep(Direction::Down)),
                 "mode={mode:?}"
@@ -1495,6 +1556,7 @@ mod tests {
                     ModifiersState::ALT,
                     true,
                     true,
+                    None,
                 ),
                 Some(MoveSelectionCommand::Step(Direction::Down)),
                 "mode={mode:?}"
@@ -1507,6 +1569,7 @@ mod tests {
                 ModifiersState::ALT,
                 false,
                 false,
+                None,
             ),
             None
         );
@@ -1517,8 +1580,27 @@ mod tests {
                 ModifiersState::empty(),
                 true,
                 true,
+                None,
             ),
             Some(MoveSelectionCommand::ConfirmAndMove(Direction::Right))
+        );
+    }
+
+    #[test]
+    fn alt_first_shift_press_starts_or_clones_an_active_selection_move() {
+        let modifiers = ModifiersState::ALT | ModifiersState::SHIFT;
+        assert_eq!(
+            move_selection_direction_command(Direction::Right, modifiers, false, true, Some(7),),
+            Some(MoveSelectionCommand::BeginCloneAndStep(Direction::Right, 7))
+        );
+        assert_eq!(
+            move_selection_direction_command(Direction::Right, modifiers, true, true, Some(7),),
+            Some(MoveSelectionCommand::CloneAndStep(Direction::Right, 7))
+        );
+        assert_eq!(
+            move_selection_direction_command(Direction::Right, modifiers, true, true, None),
+            None,
+            "Shift-first Alt remains available to ordered long movement"
         );
     }
 

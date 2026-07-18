@@ -226,7 +226,9 @@ tool.
 
 Shift + direction expands the selection from its anchor. With an expanded selection, Alt + direction
 lifts and moves the edited cells in the rectangle; blank cells remain transparent. A plain direction,
-Space, or Return confirms it, while Escape, Ctrl + `C`, or Ctrl + `G` cancels.
+Space, or Return confirms it, while Escape, Ctrl + `C`, or Ctrl + `G` cancels. Press Shift while
+holding Alt to leave a copy behind and move the duplicate; release and press Shift again to leave
+another copy.
 Mouse drag crosses cells through these same direction commands: Shift-drag expands the selection and
 Alt-drag moves an expanded selection (or erases when it is collapsed).
 Scrolling a mouse wheel or dragging with two fingers on a touchpad pans the canvas horizontally and

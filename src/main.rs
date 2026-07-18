@@ -926,6 +926,7 @@ fn dispatch_editor_event(
         modifiers,
         current_state == EditorState::MoveMode,
         !state.selection.is_collapsed(),
+        ordered_modifiers.clone_move_press(modifiers),
     ) {
         state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
@@ -978,8 +979,17 @@ fn apply_move_selection_command(state: &mut Editor, command: input::MoveSelectio
             state.move_lift(direction);
             false
         }
+        input::MoveSelectionCommand::BeginCloneAndStep(direction, shift_press) => {
+            state.begin_selected_move_lift();
+            state.clone_move_lift(direction, shift_press);
+            false
+        }
         input::MoveSelectionCommand::Step(direction) => {
             state.move_lift(direction);
+            false
+        }
+        input::MoveSelectionCommand::CloneAndStep(direction, shift_press) => {
+            state.clone_move_lift(direction, shift_press);
             false
         }
         input::MoveSelectionCommand::ConfirmAndMove(direction) => {
@@ -1006,6 +1016,7 @@ pub(crate) fn handle_cursor_direction(
         modifiers,
         state.move_lift_active(),
         !state.selection.is_collapsed(),
+        ordered_modifiers.and_then(|ordered| ordered.clone_move_press(modifiers)),
     ) {
         state.cancel_line_preview();
         state.toolbar.cancel_shortcut();
@@ -2056,6 +2067,90 @@ mod tests {
         assert_eq!(state.selection_bounds().left, 1);
         assert_eq!(state.selection_bounds().right, 3);
         assert_eq!(state.grid.lines, unchanged);
+    }
+
+    #[test]
+    fn clone_move_takes_precedence_over_alt_shift_long_erase() {
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
+        state.insert("A");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        let mut ordered = input::OrderedModifierTracker::default();
+
+        ordered.update(ModifiersState::ALT);
+        assert_eq!(
+            handle_cursor_direction(
+                &mut state,
+                Direction::Right,
+                ModifiersState::ALT,
+                Some(&ordered),
+                false,
+            ),
+            Some(false)
+        );
+
+        let clone_modifiers = ModifiersState::ALT | ModifiersState::SHIFT;
+        ordered.update(clone_modifiers);
+        assert_eq!(
+            handle_cursor_direction(
+                &mut state,
+                Direction::Right,
+                clone_modifiers,
+                Some(&ordered),
+                false,
+            ),
+            Some(false)
+        );
+        assert_eq!(state.selection_bounds().left, 2);
+        assert_eq!(
+            line_contents(&state.lines_with_shape_preview().unwrap()[0]).trim_end(),
+            " AA"
+        );
+
+        ordered.update(ModifiersState::empty());
+        assert_eq!(
+            handle_cursor_direction(
+                &mut state,
+                Direction::Right,
+                ModifiersState::empty(),
+                Some(&ordered),
+                false,
+            ),
+            Some(true)
+        );
+        assert_eq!(line_contents(&state.grid.lines[0]).trim_end(), " AA");
+    }
+
+    #[test]
+    fn releasing_and_repressing_shift_without_moving_deposits_another_clone() {
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
+        state.insert("A");
+        state.move_home();
+        state.extend_selection(Direction::Right);
+        let mut ordered = input::OrderedModifierTracker::default();
+        let clone_modifiers = ModifiersState::ALT | ModifiersState::SHIFT;
+
+        ordered.update(ModifiersState::ALT);
+        ordered.update(clone_modifiers);
+        for _ in 0..2 {
+            assert_eq!(
+                handle_cursor_direction(
+                    &mut state,
+                    Direction::Right,
+                    clone_modifiers,
+                    Some(&ordered),
+                    false,
+                ),
+                Some(false)
+            );
+            ordered.update(ModifiersState::ALT);
+            ordered.update(clone_modifiers);
+        }
+
+        assert_eq!(
+            line_contents(&state.lines_with_shape_preview().unwrap()[0]),
+            "AAA"
+        );
     }
 
     #[test]

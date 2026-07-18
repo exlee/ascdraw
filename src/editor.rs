@@ -3857,6 +3857,112 @@ mod tests {
     }
 
     #[test]
+    fn clone_move_lift_clones_once_per_shift_press_and_can_clone_after_moving() {
+        let mut initial = utility_state(&["A"], UtilityKind::Push, Coord::default());
+        initial
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        let before = initial.edit_snapshot();
+
+        assert!(initial.begin_selected_move_lift());
+        assert!(initial.clone_move_lift(Direction::Right, 1));
+        assert_eq!(initial.edit_snapshot(), before);
+        assert_eq!(
+            contents(&initial.lines_with_shape_preview().unwrap()[0]),
+            "AA"
+        );
+
+        assert!(initial.clone_move_lift(Direction::Right, 1));
+        assert_eq!(
+            contents(&initial.lines_with_shape_preview().unwrap()[0]),
+            "A A"
+        );
+
+        assert!(initial.clone_move_lift(Direction::Left, 2));
+        assert_eq!(
+            contents(&initial.lines_with_shape_preview().unwrap()[0]),
+            "AAA"
+        );
+        assert!(initial.confirm_move_lift());
+        assert_eq!(line_contents(&initial), vec!["AAA"]);
+
+        let mut delayed = utility_state(&["A"], UtilityKind::Push, Coord::default());
+        delayed
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        assert!(delayed.begin_selected_move_lift());
+        assert!(delayed.move_lift(Direction::Right));
+        assert!(delayed.clone_move_lift(Direction::Right, 1));
+        assert!(delayed.confirm_move_lift());
+        assert_eq!(line_contents(&delayed), vec![" AA"]);
+    }
+
+    #[test]
+    fn clone_move_lift_preserves_faces_and_line_markers_for_every_copy() {
+        let mut state = utility_state(&["A"], UtilityKind::Push, Coord::default());
+        let configured_face = state.theme.tooltip.clone();
+        state.grid.lines[0][0].face = configured_face.clone();
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord::default(),
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "A".into(),
+        });
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+
+        assert!(state.begin_selected_move_lift());
+        assert!(state.clone_move_lift(Direction::Right, 1));
+        assert!(state.clone_move_lift(Direction::Right, 2));
+        assert!(state.confirm_move_lift());
+
+        assert_eq!(line_contents(&state), vec!["AAA"]);
+        assert!(
+            state.grid.lines[0]
+                .iter()
+                .all(|atom| atom.face == configured_face)
+        );
+        assert_eq!(
+            state
+                .line_markers
+                .iter()
+                .map(|marker| marker.coord.column)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+
+        let mut overlap = utility_state(&["AB"], UtilityKind::Push, Coord::default());
+        overlap.line_markers.extend([
+            PlacedLineMarker {
+                coord: Coord::default(),
+                ending: LineEnding::Fixed('◆'),
+                base_glyph: "A".into(),
+            },
+            PlacedLineMarker {
+                coord: Coord { line: 0, column: 1 },
+                ending: LineEnding::Fixed('◆'),
+                base_glyph: "B".into(),
+            },
+        ]);
+        overlap
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        assert!(overlap.begin_selected_move_lift());
+        assert!(overlap.clone_move_lift(Direction::Right, 1));
+        assert!(overlap.confirm_move_lift());
+        assert_eq!(line_contents(&overlap), vec!["AAB"]);
+        assert_eq!(overlap.line_markers.len(), 3);
+        assert_eq!(
+            overlap
+                .line_markers
+                .iter()
+                .map(|marker| marker.coord.column)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
     fn move_lift_treats_unedited_cells_as_transparent() {
         let mut state = utility_state(&["A C", "x─z"], UtilityKind::Push, Coord::default());
         state

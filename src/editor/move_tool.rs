@@ -15,6 +15,8 @@ pub(super) struct MoveLift {
     pub(super) source_cursor_index: usize,
     source_bounds: SelectionBounds,
     origin: Coord,
+    clone_origins: Vec<Coord>,
+    last_clone_press: Option<u64>,
     rectangle: TextRectangle,
     layers: Vec<LiftedLayer>,
 }
@@ -95,6 +97,8 @@ impl Editor {
                 line: source_bounds.top,
                 column: source_bounds.left,
             },
+            clone_origins: Vec::new(),
+            last_clone_press: None,
             rectangle: TextRectangle {
                 rows: vec![vec![super::blank_atom()]; source_bounds.height()],
                 width: source_bounds.width(),
@@ -149,22 +153,39 @@ impl Editor {
         true
     }
 
+    pub fn clone_move_lift(&mut self, direction: Direction, shift_press: u64) -> bool {
+        let cloned = if let Some(lift) = self.move_lift.as_mut()
+            && lift.last_clone_press != Some(shift_press)
+        {
+            lift.last_clone_press = Some(shift_press);
+            if lift.clone_origins.contains(&lift.origin) {
+                false
+            } else {
+                lift.clone_origins.push(lift.origin);
+                true
+            }
+        } else {
+            false
+        };
+        let moved = self.move_lift(direction);
+        if cloned && !moved {
+            self.refresh_move_lift_render();
+        }
+        cloned || moved
+    }
+
     pub fn confirm_move_lift(&mut self) -> bool {
         let Some(lift) = self.move_lift.take() else {
             return false;
         };
-        if lift.origin
-            == (Coord {
-                line: lift.source_bounds.top,
-                column: lift.source_bounds.left,
-            })
-        {
-            return false;
-        }
         let source_origin = Coord {
             line: lift.source_bounds.top,
             column: lift.source_bounds.left,
         };
+        let destinations = move_lift_destinations(&lift);
+        if destinations.as_slice() == [source_origin] {
+            return false;
+        }
         let mut changed = false;
         self.layers.for_each_layer_mut(
             &mut self.grid.lines,
@@ -177,14 +198,19 @@ impl Editor {
                 let before_markers = markers.clone();
                 markers.retain(|marker| {
                     !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
-                        && !lifted_atoms_cover(&layer.edited_atoms, lift.origin, marker.coord)
+                        && !destinations.iter().any(|origin| {
+                            lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
+                        })
                 });
-                compose_sparse_move(lines, source_origin, lift.origin, &layer.edited_atoms);
-                markers.extend(layer.markers.iter().cloned().map(|mut marker| {
-                    marker.coord.line = marker.coord.line.saturating_add(lift.origin.line);
-                    marker.coord.column = marker.coord.column.saturating_add(lift.origin.column);
-                    marker
-                }));
+                compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
+                for origin in &destinations {
+                    for mut marker in layer.markers.iter().cloned() {
+                        marker.coord.line = marker.coord.line.saturating_add(origin.line);
+                        marker.coord.column = marker.coord.column.saturating_add(origin.column);
+                        markers.retain(|existing| existing.coord != marker.coord);
+                        markers.push(marker);
+                    }
+                }
                 changed |= *lines != before_lines || *markers != before_markers;
             },
         );
@@ -239,7 +265,7 @@ impl Editor {
             line: lift.source_bounds.top,
             column: lift.source_bounds.left,
         };
-        let destination_origin = lift.origin;
+        let destinations = move_lift_destinations(lift);
         let contents = self
             .layers
             .layer_contents(&self.grid.lines, &self.line_markers);
@@ -255,7 +281,7 @@ impl Editor {
             compose_sparse_move(
                 &mut layer.rendered_lines,
                 source_origin,
-                destination_origin,
+                &destinations,
                 &layer.edited_atoms,
             );
         }
@@ -296,22 +322,32 @@ fn lifted_atoms_cover(atoms: &[LiftedAtom], origin: Coord, coord: Coord) -> bool
 fn compose_sparse_move(
     lines: &mut Vec<Vec<Atom>>,
     source_origin: Coord,
-    destination_origin: Coord,
+    destination_origins: &[Coord],
     atoms: &[LiftedAtom],
 ) {
     for atom in atoms {
         replace_range(lines, lifted_atom_bounds(source_origin, atom), None);
     }
-    for atom in atoms {
-        overwrite_rectangle(
-            lines,
-            offset_origin(destination_origin, atom.offset),
-            &TextRectangle {
-                rows: vec![vec![atom.atom.clone()]],
-                width: atom.width,
-            },
-        );
+    for destination_origin in destination_origins {
+        for atom in atoms {
+            overwrite_rectangle(
+                lines,
+                offset_origin(*destination_origin, atom.offset),
+                &TextRectangle {
+                    rows: vec![vec![atom.atom.clone()]],
+                    width: atom.width,
+                },
+            );
+        }
     }
+}
+
+fn move_lift_destinations(lift: &MoveLift) -> Vec<Coord> {
+    let mut destinations = lift.clone_origins.clone();
+    if !destinations.contains(&lift.origin) {
+        destinations.push(lift.origin);
+    }
+    destinations
 }
 
 fn lifted_atom_bounds(origin: Coord, atom: &LiftedAtom) -> SelectionBounds {
