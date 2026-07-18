@@ -1,4 +1,4 @@
-use skia_safe::{Canvas, Paint, Rect};
+use skia_safe::{Canvas, Font, Paint, Rect};
 
 use super::{CellMetrics, PADDING};
 
@@ -49,13 +49,45 @@ fn block_element_rects(character: char) -> Option<BlockElementRects> {
     }
 }
 
-fn cell_diagonals(character: char) -> Option<(bool, bool)> {
-    match character {
-        '╱' => Some((true, false)),
-        '╲' => Some((false, true)),
-        '╳' => Some((true, true)),
-        _ => None,
+fn stretched_glyph_target(character: char, cell: Rect) -> Option<Rect> {
+    if matches!(character, '░' | '▒' | '▓') {
+        return Some(cell);
     }
+    if !matches!(character, '╱' | '╲' | '╳') {
+        return None;
+    }
+
+    let overhang = (cell.width().min(cell.height()) / 12.0).max(1.0);
+    Some(Rect::new(
+        cell.left - overhang,
+        cell.top - overhang,
+        cell.right + overhang,
+        cell.bottom + overhang,
+    ))
+}
+
+fn draw_stretched_glyph(
+    canvas: &Canvas,
+    text: &str,
+    font: &Font,
+    paint: &Paint,
+    target: Rect,
+) -> bool {
+    let bounds = font.measure_str(text, Some(paint)).1;
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return false;
+    }
+
+    canvas.save();
+    canvas.translate((target.left, target.top));
+    canvas.scale((
+        target.width() / bounds.width(),
+        target.height() / bounds.height(),
+    ));
+    canvas.translate((-bounds.left, -bounds.top));
+    canvas.draw_str(text, (0.0, 0.0), font, paint);
+    canvas.restore();
+    true
 }
 
 pub(super) fn draw(
@@ -63,6 +95,7 @@ pub(super) fn draw(
     column: usize,
     top: f32,
     text: &str,
+    font: &Font,
     metrics: &CellMetrics,
     paint: &Paint,
 ) -> bool {
@@ -94,26 +127,11 @@ pub(super) fn draw(
         return true;
     }
 
-    let Some(diagonals) = cell_diagonals(character) else {
+    let cell = Rect::new(left, top, right, bottom);
+    let Some(target) = stretched_glyph_target(character, cell) else {
         return false;
     };
-    let mut paint = paint.clone();
-    let stroke_width = ((right - left).min(bottom - top) / 14.0).max(1.0);
-    paint.set_anti_alias(true).set_stroke_width(stroke_width);
-    canvas.save();
-    canvas.clip_rect(Rect::new(left, top, right, bottom), None, false);
-    if diagonals.0 {
-        canvas.draw_line((left, bottom), (right, top), &paint);
-        canvas.draw_circle((left, bottom), stroke_width / 2.0, &paint);
-        canvas.draw_circle((right, top), stroke_width / 2.0, &paint);
-    }
-    if diagonals.1 {
-        canvas.draw_line((left, top), (right, bottom), &paint);
-        canvas.draw_circle((left, top), stroke_width / 2.0, &paint);
-        canvas.draw_circle((right, bottom), stroke_width / 2.0, &paint);
-    }
-    canvas.restore();
-    true
+    draw_stretched_glyph(canvas, text, font, paint, target)
 }
 
 #[cfg(test)]
@@ -133,16 +151,15 @@ mod tests {
             block_element_rects('█'),
             Some([Some((0.0, 0.0, 1.0, 1.0)), None, None, None])
         );
-        for codepoint in
-            (0x2580..=0x259f).filter(|codepoint| !(0x2591..=0x2593).contains(codepoint))
-        {
+        let cell = Rect::new(10.0, 20.0, 18.0, 36.0);
+        for codepoint in 0x2580..=0x259f {
             let character = char::from_u32(codepoint).unwrap();
             assert!(
-                block_element_rects(character).is_some(),
+                block_element_rects(character).is_some()
+                    || stretched_glyph_target(character, cell).is_some(),
                 "missing Block Element U+{codepoint:04X}"
             );
         }
-        assert_eq!(cell_diagonals('╳'), Some((true, true)));
 
         let metrics = CellMetrics {
             font: Font::default(),
@@ -174,6 +191,7 @@ mod tests {
                 0,
                 row as f32 * metrics.cell_height,
                 "█",
+                &metrics.font,
                 &metrics,
                 &paint,
             ));
@@ -188,50 +206,19 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_diagonals_overlap_at_the_shared_corner() {
-        let metrics = CellMetrics {
-            font: Font::default(),
-            cell_width: 8.25,
-            cell_height: 16.375,
-            baseline_offset: 10.0,
-            underline_offset: 0.0,
-            font_mgr: FontMgr::new(),
-            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
-        };
-        let width = PADDING + (metrics.cell_width * 2.0).ceil() as usize;
-        let height = (metrics.cell_height * 2.0).ceil() as usize;
-        let mut pixels = vec![0xff; width * height * 4];
-        let image_info = ImageInfo::new(
-            (width as i32, height as i32),
-            ColorType::BGRA8888,
-            AlphaType::Premul,
-            None,
-        );
-        let mut surface =
-            surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
-                .expect("test surface");
-        let mut paint = Paint::default();
-        paint.set_color(Rgba::rgb(0, 0, 0).to_color());
-        assert!(draw(surface.canvas(), 1, 0.0, "╱", &metrics, &paint));
-        assert!(draw(
-            surface.canvas(),
-            0,
-            metrics.cell_height,
-            "╱",
-            &metrics,
-            &paint,
-        ));
-        drop(surface);
-
-        let seam_x = (PADDING as f32 + metrics.cell_width).round() as usize;
-        let seam_y = metrics.cell_height.round() as usize;
-        let foreground_near_seam = (seam_y - 2..=seam_y + 1)
-            .flat_map(|y| (seam_x - 2..=seam_x + 1).map(move |x| (x, y)))
-            .filter(|&(x, y)| pixels[(y * width + x) * 4] < 0x40)
-            .count();
-        assert!(
-            foreground_near_seam >= 3,
-            "diagonal leaves a raster gap at the shared corner"
-        );
+    fn fits_shades_to_the_cell_and_stretches_diagonals_past_it() {
+        let cell = Rect::new(10.0, 20.0, 18.0, 36.0);
+        for shade in ['░', '▒', '▓'] {
+            assert_eq!(stretched_glyph_target(shade, cell), Some(cell));
+        }
+        for diagonal in ['╱', '╲', '╳'] {
+            let target = stretched_glyph_target(diagonal, cell).unwrap();
+            assert!(target.left < cell.left);
+            assert!(target.top < cell.top);
+            assert!(target.right > cell.right);
+            assert!(target.bottom > cell.bottom);
+        }
+        assert_eq!(stretched_glyph_target('█', cell), None);
+        assert_eq!(stretched_glyph_target('a', cell), None);
     }
 }
