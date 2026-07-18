@@ -12,7 +12,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
+use crate::app::{AppCommand, AppConfig};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
@@ -39,6 +39,7 @@ const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 
 #[derive(Clone, Debug)]
 pub enum DocumentSession {
+    Scratchpad(PathBuf),
     File(PathBuf),
     Stdin(String),
 }
@@ -48,8 +49,32 @@ impl DocumentSession {
         Self::File(path)
     }
 
+    pub fn scratchpad(path: PathBuf) -> Self {
+        Self::Scratchpad(path)
+    }
+
     fn is_stdin(&self) -> bool {
         matches!(self, Self::Stdin(_))
+    }
+
+    fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Scratchpad(path) | Self::File(path) => Some(path),
+            Self::Stdin(_) => None,
+        }
+    }
+
+    pub(crate) fn window_title(&self) -> String {
+        match self {
+            Self::Scratchpad(_) => "ascdraw - scratchpad".to_owned(),
+            Self::File(path) => format!(
+                "ascdraw - {}",
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+            ),
+            Self::Stdin(_) => "ascdraw - stdin".to_owned(),
+        }
     }
 }
 
@@ -1146,9 +1171,10 @@ impl EditorWindow {
             );
         }
         let layers = self.state.persisted_layers();
-        let DocumentSession::File(path) = &self.document_session else {
-            unreachable!("stdin sessions returned before path persistence")
-        };
+        let path = self
+            .document_session
+            .path()
+            .expect("stdin sessions returned before path persistence");
         save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
@@ -1526,13 +1552,11 @@ pub fn create_editor_window(
         window.focus_window();
     }
 
-    let title = match document_session {
-        DocumentSession::File(_) => DEFAULT_WINDOW_TITLE,
-        DocumentSession::Stdin(_) => "ascdraw - stdin",
-    };
+    let title = document_session.window_title();
+    window.set_title(&title);
     let mut state = Editor::new(&config.theme, title);
     match document_session {
-        DocumentSession::File(document_path) => {
+        DocumentSession::Scratchpad(document_path) | DocumentSession::File(document_path) => {
             if let Some(document) = document::load(document_path)? {
                 let active_layer = document
                     .active_layer
@@ -1738,7 +1762,7 @@ fn reanchor_toolbar_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::AppConfig;
+    use crate::app::{AppConfig, DEFAULT_WINDOW_TITLE};
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
     use crate::model::{Atom, Direction, Face};
     use crate::toolbar::{MainMode, ToolbarAction};

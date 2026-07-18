@@ -58,6 +58,9 @@ Pass a native ascdraw document when you want a separate document instead of the 
 ./target/release/ascdraw ./drawing.toml
 ```
 
+With no path, the window is titled `ascdraw - scratchpad`. An explicit file uses
+`ascdraw - <filename>`, loads and saves that file directly, and leaves the scratchpad untouched.
+
 Use `-` to edit piped plain text interactively. Closing ascdraw writes the final text to stdout
 exactly once, so it can continue through the pipeline; this mode never reads or writes the normal
 scratchpad:

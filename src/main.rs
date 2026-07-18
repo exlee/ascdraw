@@ -636,7 +636,10 @@ fn document_session_from_arg(
         input.read_to_string(&mut text)?;
         Ok(DocumentSession::Stdin(text))
     } else {
-        Ok(DocumentSession::file(document.unwrap_or_else(default_path)))
+        Ok(match document {
+            Some(path) => DocumentSession::file(path),
+            None => DocumentSession::scratchpad(default_path()),
+        })
     }
 }
 
@@ -1108,8 +1111,29 @@ mod tests {
 
         match session {
             DocumentSession::Stdin(text) => assert_eq!(text, "one\ntwo\n"),
-            DocumentSession::File(path) => panic!("unexpected file session: {}", path.display()),
+            DocumentSession::Scratchpad(path) | DocumentSession::File(path) => {
+                panic!("unexpected file session: {}", path.display())
+            }
         }
+    }
+
+    #[test]
+    fn no_arg_and_explicit_file_sessions_have_exact_titles_and_isolated_targets() {
+        let scratch = std::path::PathBuf::from("scratch/document.toml");
+        let scratch_session =
+            document_session_from_arg(None, std::io::empty(), || scratch.clone()).unwrap();
+        assert!(
+            matches!(scratch_session, DocumentSession::Scratchpad(ref path) if path == &scratch)
+        );
+        assert_eq!(scratch_session.window_title(), "ascdraw - scratchpad");
+
+        let file = std::path::PathBuf::from("drawings/diagram.toml");
+        let file_session = document_session_from_arg(Some(file.clone()), std::io::empty(), || {
+            panic!("explicit files must not resolve the scratchpad path")
+        })
+        .unwrap();
+        assert!(matches!(file_session, DocumentSession::File(ref path) if path == &file));
+        assert_eq!(file_session.window_title(), "ascdraw - diagram.toml");
     }
 
     #[derive(Default)]
