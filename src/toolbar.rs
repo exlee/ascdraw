@@ -14,6 +14,7 @@ mod colors;
 mod layers;
 mod menu_layout;
 mod modes;
+mod panels;
 mod selections;
 mod toggles;
 use crate::model::ColorId;
@@ -275,7 +276,9 @@ pub enum PendingShortcut {
     ExportOption(usize),
     ExportFlat(usize),
     ToggleOptions,
+    Layers,
     Layer(LayerId),
+    Colors,
     ColorGroup(usize),
 }
 
@@ -324,8 +327,10 @@ pub enum ToolbarAction {
         option: usize,
     },
     ToggleExportMenu,
-    ToggleLayers,
-    ToggleColors,
+    BeginLayersPath,
+    BeginLayerPath(LayerId),
+    BeginColorsPath,
+    BeginColorPath(usize),
     Toggle(ToggleKind),
     Layer {
         layer: LayerId,
@@ -401,26 +406,20 @@ impl ToolbarState {
             self.close_export_menu();
             return true;
         }
+        if !self.export_open && digit == LAYERS_DIGIT && self.multi_layer_mode() {
+            self.begin_layers_path();
+            return true;
+        }
+        if !self.export_open && digit == COLORS_DIGIT && self.multi_color_mode() {
+            self.begin_colors_path();
+            return true;
+        }
         match self.shortcut_prefix.take() {
             None => {
                 if digit == 0 {
                     self.toggle_export_menu();
                 } else if self.export_open {
                     self.select_export_mode_digit(digit);
-                } else if digit == LAYERS_DIGIT && self.multi_layer_mode() {
-                    self.toggle_layers_mode();
-                } else if digit == COLORS_DIGIT && self.multi_color_mode() {
-                    self.toggle_colors_mode();
-                } else if self.main_mode == MainMode::Layers {
-                    self.shortcut_prefix = digit
-                        .checked_sub(1)
-                        .and_then(|index| layers.get(index))
-                        .map(|layer| PendingShortcut::Layer(layer.id));
-                } else if self.main_mode == MainMode::Colors {
-                    self.shortcut_prefix = digit
-                        .checked_sub(1)
-                        .filter(|group| *group < 2)
-                        .map(PendingShortcut::ColorGroup);
                 } else if digit == 1 {
                     self.shortcut_prefix = Some(PendingShortcut::Mode);
                 } else if self.main_mode == MainMode::Utilities
@@ -492,10 +491,22 @@ impl ToolbarState {
                 self.select_export_mode_digit(digit);
             }
             Some(PendingShortcut::ToggleOptions) => self.select_toggle_digit(digit),
+            Some(PendingShortcut::Layers) => {
+                self.shortcut_prefix = digit
+                    .checked_sub(1)
+                    .and_then(|index| layers.get(index))
+                    .map(|layer| PendingShortcut::Layer(layer.id));
+            }
             Some(PendingShortcut::Layer(layer)) => {
                 if let Some(operation) = self.layer_operation_for_digit(layers, layer, digit) {
                     self.pending_layer_action = Some((layer, operation));
                 }
+            }
+            Some(PendingShortcut::Colors) => {
+                self.shortcut_prefix = digit
+                    .checked_sub(1)
+                    .filter(|group| *group < 2)
+                    .map(PendingShortcut::ColorGroup);
             }
             Some(PendingShortcut::ColorGroup(group)) => {
                 if let Some(index) = digit.checked_sub(1).filter(|index| *index < 8) {
@@ -537,22 +548,14 @@ impl ToolbarState {
         self.layer_count = layer_count;
     }
 
-    fn toggle_layers_mode(&mut self) {
+    fn begin_layers_path(&mut self) {
         self.close_export_menu();
-        self.main_mode = if self.main_mode == MainMode::Layers {
-            MainMode::Stamp
-        } else {
-            MainMode::Layers
-        };
+        self.shortcut_prefix = Some(PendingShortcut::Layers);
     }
 
-    fn toggle_colors_mode(&mut self) {
+    fn begin_colors_path(&mut self) {
         self.close_export_menu();
-        self.main_mode = if self.main_mode == MainMode::Colors {
-            MainMode::Stamp
-        } else {
-            MainMode::Colors
-        };
+        self.shortcut_prefix = Some(PendingShortcut::Colors);
     }
 
     fn queue_export(&mut self, action: ExportAction) {
@@ -655,26 +658,25 @@ impl ToolbarState {
     }
 
     pub fn menu_row_count(&self) -> usize {
+        self.left_menu_row_count()
+            .max(self.auxiliary_panel_row_count())
+    }
+
+    fn left_menu_row_count(&self) -> usize {
         if self.export_open {
-            return 2;
+            2
+        } else if self.main_mode == MainMode::Utilities {
+            1
+        } else {
+            self.layout().map_or(2, |layout| {
+                1 + layout
+                    .options
+                    .iter()
+                    .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE))
+                    .max()
+                    .unwrap_or(0)
+            })
         }
-        if self.main_mode == MainMode::Utilities {
-            return 1;
-        }
-        if self.main_mode == MainMode::Layers {
-            return 1 + self.layer_count.max(1);
-        }
-        if self.main_mode == MainMode::Colors {
-            return 3;
-        }
-        self.layout().map_or(2, |layout| {
-            1 + layout
-                .options
-                .iter()
-                .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE))
-                .max()
-                .unwrap_or(0)
-        })
     }
 
     pub fn content_rows(&self) -> usize {
@@ -695,23 +697,26 @@ impl ToolbarState {
         row: usize,
         layers: &[LayerSummary],
     ) -> Vec<ToolbarSpan> {
-        match row {
+        let mut spans = match row {
             MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
             MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
-                if self.export_open {
+                let panel_row = row - MENU_FIRST_ROW;
+                if panel_row >= self.left_menu_row_count() {
+                    Vec::new()
+                } else if self.export_open {
                     self.export_menu_spans(row)
                 } else if self.main_mode == MainMode::Utilities {
                     self.utilities_menu_spans(row)
-                } else if self.main_mode == MainMode::Layers {
-                    self.layer_menu_spans(row, layers)
-                } else if self.main_mode == MainMode::Colors {
-                    self.color_menu_spans(row)
                 } else {
                     self.menu_spans(row)
                 }
             }
             _ => Vec::new(),
+        };
+        if row >= MENU_FIRST_ROW && row < MENU_FIRST_ROW + self.menu_row_count() {
+            self.append_auxiliary_panel_spans(&mut spans, row - MENU_FIRST_ROW, layers);
         }
+        spans
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
@@ -867,6 +872,18 @@ impl ToolbarState {
         if self.export_open {
             return Tooltip::Export;
         }
+        if matches!(
+            self.pending_shortcut(),
+            Some(PendingShortcut::Layers | PendingShortcut::Layer(_))
+        ) {
+            return Tooltip::Layers;
+        }
+        if matches!(
+            self.pending_shortcut(),
+            Some(PendingShortcut::Colors | PendingShortcut::ColorGroup(_))
+        ) {
+            return Tooltip::Colors;
+        }
         if self.main_mode == MainMode::Utilities {
             return match self.utility_kind() {
                 UtilityKind::Push => Tooltip::UtilitiesPush,
@@ -956,7 +973,9 @@ impl ToolbarState {
     }
 
     pub fn apply_action(&mut self, action: ToolbarAction) -> bool {
-        self.cancel_shortcut();
+        if !matches!(action, ToolbarAction::Toggle(_)) {
+            self.cancel_shortcut();
+        }
         match action {
             ToolbarAction::SelectMain(mode) => {
                 self.close_export_menu();
@@ -970,8 +989,6 @@ impl ToolbarState {
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
                     MainMode::Shapes => SHAPE_OPTIONS.get(submenu),
                     MainMode::Utilities => UTILITY_OPTIONS.get(submenu),
-                    MainMode::Layers => None,
-                    MainMode::Colors => None,
                 }
                 .map(|options| options.len());
                 if option_count.is_none_or(|count| option >= count) {
@@ -985,8 +1002,6 @@ impl ToolbarState {
                     }
                     MainMode::Shapes => self.shape_selected.get_mut(submenu),
                     MainMode::Utilities => (submenu == 0).then_some(&mut self.utility_selected),
-                    MainMode::Layers => None,
-                    MainMode::Colors => None,
                 };
                 let Some(selected) = selected else {
                     return false;
@@ -998,22 +1013,43 @@ impl ToolbarState {
                 self.toggle_export_menu();
                 true
             }
-            ToolbarAction::ToggleLayers => {
+            ToolbarAction::BeginLayersPath => {
                 if !self.multi_layer_mode() {
                     return false;
                 }
-                self.toggle_layers_mode();
+                self.begin_layers_path();
                 true
             }
-            ToolbarAction::ToggleColors => {
+            ToolbarAction::BeginLayerPath(layer) => {
+                if !self.multi_layer_mode() {
+                    return false;
+                }
+                self.close_export_menu();
+                self.shortcut_prefix = Some(PendingShortcut::Layer(layer));
+                true
+            }
+            ToolbarAction::BeginColorsPath => {
                 if !self.multi_color_mode() {
                     return false;
                 }
-                self.toggle_colors_mode();
+                self.begin_colors_path();
+                true
+            }
+            ToolbarAction::BeginColorPath(group) => {
+                if !self.multi_color_mode() || group >= 2 {
+                    return false;
+                }
+                self.close_export_menu();
+                self.shortcut_prefix = Some(PendingShortcut::ColorGroup(group));
                 true
             }
             ToolbarAction::Toggle(toggle) => {
+                let keep_toggle_menu =
+                    self.export_open && self.active_export_category == Some(FILES_TOGGLE_CATEGORY);
                 self.toggle_setting(toggle);
+                if keep_toggle_menu {
+                    self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
+                }
                 true
             }
             ToolbarAction::Layer { layer, operation } => {
@@ -1058,8 +1094,6 @@ impl ToolbarState {
                 exclusive_submenu: None,
             }),
             MainMode::Utilities => None,
-            MainMode::Layers => None,
-            MainMode::Colors => None,
         }
     }
 }
@@ -2545,8 +2579,6 @@ mod tests {
                     submenu: 0,
                     option: 2,
                 },
-                MainMode::Layers => unreachable!("feature modes are not in MainMode::ALL"),
-                MainMode::Colors => unreachable!("feature modes are not in MainMode::ALL"),
             };
             assert!(toolbar.apply_action(action));
             let durable = toolbar.durable_selections();
@@ -2868,11 +2900,11 @@ mod tests {
         );
         assert_eq!(
             Tooltip::Layers.text(),
-            "Lyrs: select, show, reorder, add, or delete a layer"
+            "Lyrs panel: 8, then layer and operation; 8 restarts the path"
         );
         assert_eq!(
             Tooltip::Colors.text(),
-            "Clrs: select the foreground color for future writes"
+            "Clrs panel: 9, then palette row and color; 9 restarts the path"
         );
     }
 

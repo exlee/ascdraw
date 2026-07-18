@@ -117,8 +117,10 @@ The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and do
 
 Press `0 5` to select Togls in the Files/Togls menu. Dark Mode (`0 5 1`) reverses the default
 foreground and background while preserving explicit selection, highlight, cursor, and tooltip
-accent colors. Multi Color Mode (`0 5 2`) adds the dedicated Clrs surface at `9`, and Multi
-Layer Mode (`0 5 3`) adds the dedicated Lyrs surface at `8`.
+accent colors. Multi Color Mode (`0 5 2`) keeps the Clrs panel expanded on the right, and Multi
+Layer Mode (`0 5 3`) keeps the Lyrs panel expanded beside it. Both panels can remain visible while
+the active drawing-mode menu stays on the left. Pressing `8` or `9` starts that panel's path; it
+never hides the panel or changes the drawing mode.
 
 Colors provides base and bright eight-color ANSI-style palettes. Press `9 1`, then `1` through `8`,
 for the primary/base row; use `9 2`, then `1` through `8`, for the secondary/bright row. The
@@ -126,10 +128,11 @@ selected color applies only to future nonblank text, replacements, stamps, lines
 text. Existing glyph colors and colors carried by move/cut operations are preserved. TXT export
 ignores color; PNG keeps it.
 
-Layers are ordered bottom-to-top. Enable Multi Layer Mode, then press `8`, a layer row, and an
-operation column. Column `1` selects by its Greek symbol; columns `2` through `7` select, hide/show,
-move up, move down, add, or delete. The base `α` layer cannot be moved or deleted. Editing affects
-only the selected layer.
+Layers are ordered bottom-to-top. Enable Multi Layer Mode, then use the visible `8.ROW.` prefix and
+an operation column, for example `8 1 2`. Column `1` selects by its Greek symbol; columns `2`
+through `7` select, hide/show, move up, move down, add, or delete. Press `8` at any time to restart
+the Layers path. The base `α` layer cannot be moved or deleted. Editing affects only the selected
+layer.
 TXT export chooses the highest visible nonblank glyph at each position, while PNG preserves every
 visible layer.
 

@@ -7,8 +7,6 @@ pub enum MainMode {
     Line,
     Shapes,
     Utilities,
-    Layers,
-    Colors,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -35,8 +33,6 @@ impl MainMode {
             Self::Stamp => "Stamp",
             Self::Shapes => "Shape",
             Self::Utilities => "Utils",
-            Self::Layers => "Layers",
-            Self::Colors => "Colors",
         }
     }
 
@@ -46,8 +42,6 @@ impl MainMode {
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
             Self::Utilities => Tooltip::UtilitiesPush,
-            Self::Layers => Tooltip::Layers,
-            Self::Colors => Tooltip::Colors,
         }
     }
 }
@@ -113,8 +107,8 @@ impl Tooltip {
             Self::Export => {
                 "Files/Togls: copy/export, save/load files, clear, or toggle display modes"
             }
-            Self::Layers => "Lyrs: select, show, reorder, add, or delete a layer",
-            Self::Colors => "Clrs: select the foreground color for future writes",
+            Self::Layers => "Lyrs panel: 8, then layer and operation; 8 restarts the path",
+            Self::Colors => "Clrs panel: 9, then palette row and color; 9 restarts the path",
             Self::Selection => {
                 "Selection: Alt-direction lifts and moves; Shift-direction expands; cancel key collapses; Backspace clears; r then KEY replaces"
             }

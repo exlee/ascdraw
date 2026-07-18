@@ -1982,11 +1982,15 @@ mod tests {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        state.apply_toolbar_action(ToolbarAction::ToggleColors);
         let spans = (crate::toolbar::MENU_FIRST_ROW + 1..crate::toolbar::MENU_FIRST_ROW + 3)
             .flat_map(|row| state.toolbar.toolbar_spans(row))
             .collect::<Vec<_>>();
-        let atoms = toolbar_atoms(&spans, &state);
+        let palette_spans = spans
+            .iter()
+            .filter(|span| matches!(span.action, Some(ToolbarAction::SelectColor(_))))
+            .cloned()
+            .collect::<Vec<_>>();
+        let atoms = toolbar_atoms(&palette_spans, &state);
         let blocks = atoms
             .iter()
             .filter(|atom| atom.contents == "■")
@@ -1997,7 +2001,7 @@ mod tests {
             assert_eq!(atom.face.fg, ColorId(index as u8).hex().unwrap());
         }
 
-        let selected = spans.iter().find(|span| span.selected).unwrap();
+        let selected = palette_spans.iter().find(|span| span.selected).unwrap();
         let expected = resolve_derived_face(
             &state.grid.default_face,
             &config.theme.color_selection,

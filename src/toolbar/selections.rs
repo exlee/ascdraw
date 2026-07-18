@@ -43,8 +43,11 @@ impl DurableMenuSelections {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 struct DurableToggleSelections {
+    #[serde(default)]
     dark_mode: bool,
+    #[serde(default)]
     multi_color_mode: bool,
+    #[serde(default)]
     multi_layer_mode: bool,
 }
 
@@ -273,11 +276,7 @@ impl ToolbarState {
             self.active_color = selections.active_color;
         }
 
-        if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode)
-            && (self.available_modes().contains(&main_mode)
-                || (main_mode == MainMode::Layers && self.multi_layer_mode())
-                || (main_mode == MainMode::Colors && self.multi_color_mode()))
-        {
+        if let Some(main_mode) = selections.main_mode.as_deref().and_then(parse_main_mode) {
             self.main_mode = main_mode;
         }
     }
@@ -315,8 +314,6 @@ fn main_mode_name(mode: MainMode) -> &'static str {
         MainMode::Stamp => "stamp",
         MainMode::Shapes => "shapes",
         MainMode::Utilities => "utilities",
-        MainMode::Layers => "layers",
-        MainMode::Colors => "colors",
     }
 }
 
@@ -326,8 +323,8 @@ fn parse_main_mode(value: &str) -> Option<MainMode> {
         "stamp" => Some(MainMode::Stamp),
         "shapes" => Some(MainMode::Shapes),
         "utilities" => Some(MainMode::Utilities),
-        "layers" => Some(MainMode::Layers),
-        "colors" => Some(MainMode::Colors),
+        // Legacy auxiliary surfaces are normalized to the default drawing mode.
+        "layers" | "colors" => Some(MainMode::Stamp),
         _ => None,
     }
 }
@@ -336,7 +333,6 @@ fn parse_main_mode(value: &str) -> Option<MainMode> {
 mod tests {
     use super::*;
     use crate::toolbar::{ToolbarAction, UtilityKind};
-    use winit::keyboard::{Key, ModifiersState};
 
     #[test]
     fn durable_selections_round_trip_every_field_and_drop_transients() {
@@ -366,10 +362,9 @@ mod tests {
             crate::toolbar::ToggleKind::MultiColorMode,
         ));
         source.apply_action(ToolbarAction::SelectColor(ColorId(15)));
-        source.apply_action(ToolbarAction::SelectMain(MainMode::Colors));
+        source.apply_action(ToolbarAction::ToggleExportMenu);
         let expected = source.durable_selections();
 
-        source.handle_shortcut(&Key::Character("0".into()), ModifiersState::empty());
         assert!(source.export_menu_open());
         let mut restored = source;
         restored.restore_durable_selections(&expected);
@@ -380,7 +375,7 @@ mod tests {
         assert_eq!(restored.pending_shortcut(), None);
         assert_eq!(restored.pending_export_action, None);
         assert_eq!(restored.active_color(), ColorId(15));
-        assert_eq!(restored.main_mode(), MainMode::Colors);
+        assert_eq!(restored.main_mode(), MainMode::Utilities);
     }
 
     #[test]
@@ -457,5 +452,28 @@ routing = "vertical-diagonal"
         assert_eq!(toolbar.routing_mode(), RoutingMode::VerticalDiagonal);
         let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
         assert!(serialized.contains("routing = \"vertical-diagonal\""));
+    }
+
+    #[test]
+    fn legacy_auxiliary_main_modes_normalize_to_stamp_while_preserving_feature_toggles() {
+        for legacy_mode in ["layers", "colors"] {
+            let selections: DurableMenuSelections = toml::from_str(&format!(
+                r#"
+main-mode = "{legacy_mode}"
+
+[toggles]
+multi-layer-mode = true
+multi-color-mode = true
+"#
+            ))
+            .unwrap();
+            let mut toolbar = ToolbarState::default();
+            toolbar.restore_durable_selections(&selections);
+
+            assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+            assert!(toolbar.multi_layer_mode());
+            assert!(toolbar.multi_color_mode());
+            assert_eq!(toolbar.pending_shortcut(), None);
+        }
     }
 }

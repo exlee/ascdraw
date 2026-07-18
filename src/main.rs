@@ -1040,7 +1040,7 @@ mod tests {
     use super::*;
     use crate::app::{AppConfig, CursorMode};
     use crate::model::{Coord, Direction};
-    use crate::toolbar::{MainMode, PendingShortcut, ToolbarAction};
+    use crate::toolbar::{MainMode, PendingShortcut, ToggleKind, ToolbarAction};
     use winit::keyboard::NamedKey;
 
     #[derive(Default)]
@@ -2421,9 +2421,9 @@ mod tests {
     }
 
     #[test]
-    fn layers_and_colors_allow_text_and_replace_entry_bindings() {
+    fn persistent_auxiliary_panels_leave_text_and_replace_bindings_in_the_drawing_mode() {
         let config = AppConfig::default();
-        for main_mode in [MainMode::Layers, MainMode::Colors] {
+        for toggle in [ToggleKind::MultiLayerMode, ToggleKind::MultiColorMode] {
             for (key, modifiers, expected) in [
                 (
                     Key::Character("i".into()),
@@ -2452,13 +2452,13 @@ mod tests {
                 ),
             ] {
                 let mut state = Editor::new(&config.theme, "test");
-                assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode)));
-                assert_eq!(state.state(), EditorState::NavigationMode);
+                assert!(state.apply_toolbar_action(ToolbarAction::Toggle(toggle)));
+                assert_eq!(state.state(), EditorState::StampMode);
 
                 assert_eq!(
                     handle_editor_key(&mut state, &key, None, false, modifiers),
                     Some(false),
-                    "main_mode={main_mode:?}, key={key:?}"
+                    "toggle={toggle:?}, key={key:?}"
                 );
                 assert_eq!(state.state(), expected);
 
@@ -2472,22 +2472,8 @@ mod tests {
                     ),
                     Some(false)
                 );
-                assert_eq!(state.state(), EditorState::NavigationMode);
-                assert_eq!(state.toolbar.main_mode(), main_mode);
-            }
-
-            let mut state = Editor::new(&config.theme, "test");
-            assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode)));
-            for (key, modifiers) in [
-                (Key::Named(NamedKey::Space), ModifiersState::empty()),
-                (Key::Named(NamedKey::ArrowRight), ModifiersState::CONTROL),
-            ] {
-                assert_eq!(
-                    handle_editor_key(&mut state, &key, None, false, modifiers),
-                    None,
-                    "main_mode={main_mode:?}, key={key:?}"
-                );
-                assert_eq!(state.state(), EditorState::NavigationMode);
+                assert_eq!(state.state(), EditorState::StampMode);
+                assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
             }
         }
     }

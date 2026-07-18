@@ -4,19 +4,16 @@ use unicode_width::UnicodeWidthStr;
 use crate::model::{BASE_COLORS, BRIGHT_COLORS, ColorId};
 
 use super::{
-    MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_prefix_span,
-    bold_span, plain_span,
+    PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_span, pad_spans_to_width,
+    panels::COLOR_PANEL_WIDTH, plain_span,
 };
 
 const GROUPS: [&[&str; 8]; 2] = [&BASE_COLORS, &BRIGHT_COLORS];
 
 impl ToolbarState {
-    pub(super) fn color_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        if row == MENU_FIRST_ROW {
-            let mut title = bold_prefix_span("Colors 9:".to_owned(), "Colors");
-            title.selected = true;
-            title.action = Some(ToolbarAction::ToggleColors);
-            let mut spans = vec![title, plain_span(" ".to_owned())];
+    pub(super) fn color_panel_spans(&self, panel_row: usize) -> Vec<ToolbarSpan> {
+        if panel_row == 0 {
+            let mut spans = vec![plain_span("     ".to_owned())];
             for digit in 1..=8 {
                 if digit > 1 {
                     spans.push(plain_span(" ".to_owned()));
@@ -26,15 +23,16 @@ impl ToolbarState {
             return spans;
         }
 
-        let Some(group) = row
-            .checked_sub(MENU_FIRST_ROW + 1)
+        let Some(group) = panel_row
+            .checked_sub(1)
             .filter(|group| *group < GROUPS.len())
         else {
-            return Vec::new();
+            return vec![plain_span(" ".repeat(COLOR_PANEL_WIDTH))];
         };
-        let mut row_prefix = bold_span(format!("{}.", group + 1));
+        let mut row_prefix = bold_span(format!("9.{}.", group + 1));
         row_prefix.highlighted =
             self.pending_shortcut() == Some(PendingShortcut::ColorGroup(group));
+        row_prefix.action = Some(ToolbarAction::BeginColorPath(group));
         let mut spans = vec![row_prefix, plain_span(" ".to_owned())];
         for index in 0..GROUPS[group].len() {
             if index > 0 {
@@ -52,6 +50,7 @@ impl ToolbarState {
                 foreground: color.hex().map(str::to_owned),
             });
         }
+        pad_spans_to_width(&mut spans, COLOR_PANEL_WIDTH);
         spans
     }
 
@@ -71,7 +70,9 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MAIN_LABEL_ROW, MainMode, ToggleKind, boxed_toolbar_spans};
+    use crate::toolbar::{
+        MAIN_LABEL_ROW, MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans,
+    };
     use winit::keyboard::{Key, ModifiersState};
 
     fn text(spans: Vec<ToolbarSpan>) -> String {
@@ -88,9 +89,7 @@ mod tests {
 
     fn enter_colors(toolbar: &mut ToolbarState) {
         assert!(toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
-        press(toolbar, "0");
-        press(toolbar, "9");
-        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
 
     fn action_columns(spans: &[ToolbarSpan]) -> Vec<(usize, ToolbarAction)> {
@@ -100,7 +99,9 @@ mod tests {
             .filter_map(|span| {
                 let span_start = start;
                 start += UnicodeWidthStr::width(span.contents.as_str());
-                span.action.map(|action| (span_start, action))
+                span.action
+                    .filter(|action| matches!(action, ToolbarAction::SelectColor(_)))
+                    .map(|action| (span_start, action))
             })
             .collect()
     }
@@ -111,19 +112,19 @@ mod tests {
         enter_colors(&mut toolbar);
 
         assert_eq!(
-            (MENU_FIRST_ROW..MENU_FIRST_ROW + 3)
-                .map(|row| text(toolbar.toolbar_spans(row)))
+            (0..3)
+                .map(|row| text(toolbar.color_panel_spans(row)))
                 .collect::<Vec<_>>(),
             [
-                "Colors 9: 1 2 3 4 5 6 7 8",
-                "1. ■ ■ ■ ■ ■ ■ ■ ■",
-                "2. ■ ■ ■ ■ ■ ■ ■ ■",
+                "     1 2 3 4 5 6 7 8",
+                "9.1. ■ ■ ■ ■ ■ ■ ■ ■",
+                "9.2. ■ ■ ■ ■ ■ ■ ■ ■",
             ]
         );
-        assert_eq!(toolbar.menu_row_count(), 3);
+        assert_eq!(toolbar.menu_row_count(), 4);
 
-        let colors = (MENU_FIRST_ROW + 1..MENU_FIRST_ROW + 3)
-            .flat_map(|row| toolbar.toolbar_spans(row))
+        let colors = (1..3)
+            .flat_map(|row| toolbar.color_panel_spans(row))
             .filter_map(|span| {
                 let ToolbarAction::SelectColor(color) = span.action? else {
                     return None;
@@ -143,6 +144,8 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         enter_colors(&mut toolbar);
         for (row, expected) in [("1", ColorId(7)), ("2", ColorId(15))] {
+            press(&mut toolbar, "9");
+            assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
             press(&mut toolbar, row);
             assert_eq!(
                 toolbar.pending_shortcut(),
@@ -153,7 +156,10 @@ mod tests {
             press(&mut toolbar, "8");
             assert_eq!(toolbar.active_color(), expected);
             assert_eq!(toolbar.pending_shortcut(), None);
-            assert_eq!(toolbar.main_mode(), MainMode::Colors);
+            assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+            press(&mut toolbar, "9");
+            assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
+            toolbar.cancel_shortcut();
         }
     }
 
@@ -176,14 +182,13 @@ mod tests {
     }
 
     #[test]
-    fn top_level_nine_exposure_tracks_only_multi_color() {
+    fn top_level_nine_begins_a_persistent_panel_path_without_changing_mode() {
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
         assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-        press(&mut toolbar, "0");
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
         assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
         press(&mut toolbar, "1");
@@ -191,21 +196,23 @@ mod tests {
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         press(&mut toolbar, "9");
-        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
         press(&mut toolbar, "9");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
-        press(&mut toolbar, "0");
         press(&mut toolbar, "9");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
 
     #[test]
-    fn durable_colors_mode_restores_outside_mode_one_with_one_selected_swatch() {
+    fn durable_color_restores_with_persistent_panel_and_original_drawing_mode() {
         let mut source = ToolbarState::default();
         enter_colors(&mut source);
+        press(&mut source, "9");
         press(&mut source, "2");
         press(&mut source, "4");
         let durable = source.durable_selections();
@@ -213,11 +220,11 @@ mod tests {
         let mut restored = ToolbarState::default();
         restored.restore_durable_selections(&durable);
         assert!(restored.multi_color_mode());
-        assert_eq!(restored.main_mode(), MainMode::Colors);
+        assert_eq!(restored.main_mode(), MainMode::Stamp);
         assert_eq!(restored.available_modes(), MainMode::ALL);
         assert_eq!(restored.active_color(), ColorId(11));
-        let selected = (MENU_FIRST_ROW + 1..MENU_FIRST_ROW + 3)
-            .flat_map(|row| restored.toolbar_spans(row))
+        let selected = (1..3)
+            .flat_map(|row| restored.color_panel_spans(row))
             .filter(|span| span.selected)
             .collect::<Vec<_>>();
         assert_eq!(selected.len(), 1);

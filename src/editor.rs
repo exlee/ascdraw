@@ -394,16 +394,46 @@ impl Editor {
             .toolbar_spans_with_layers(row, &self.layer_summaries());
         if row + 1 == self.toolbar.content_rows() {
             let (x, y) = self.cursor_coordinates();
-            spans.push(ToolbarSpan {
-                contents: format!("  ({x},{y})"),
-                bold_prefix: 0,
-                selected: false,
-                highlighted: false,
-                tooltip: false,
-                action: None,
-                right_aligned: true,
-                foreground: None,
-            });
+            let contents = format!("  ({x},{y})");
+            if self.toolbar.auxiliary_panels_visible() {
+                let width = self.toolbar.auxiliary_trailing_width();
+                let length = contents.chars().count();
+                let contents = if length > width {
+                    contents.chars().skip(length - width).collect()
+                } else {
+                    format!("{contents:>width$}")
+                };
+                let placeholder = spans
+                    .last_mut()
+                    .expect("auxiliary panels reserve the trailing header cell");
+                debug_assert!(
+                    placeholder
+                        .contents
+                        .chars()
+                        .all(|character| character == ' ')
+                );
+                *placeholder = ToolbarSpan {
+                    contents,
+                    bold_prefix: 0,
+                    selected: false,
+                    highlighted: false,
+                    tooltip: false,
+                    action: None,
+                    right_aligned: false,
+                    foreground: None,
+                };
+            } else {
+                spans.push(ToolbarSpan {
+                    contents,
+                    bold_prefix: 0,
+                    selected: false,
+                    highlighted: false,
+                    tooltip: false,
+                    action: None,
+                    right_aligned: true,
+                    foreground: None,
+                });
+            }
         }
         spans
     }
@@ -507,6 +537,10 @@ impl Editor {
             action,
             ToolbarAction::ToggleExportMenu
                 | ToolbarAction::Toggle(_)
+                | ToolbarAction::BeginLayersPath
+                | ToolbarAction::BeginLayerPath(_)
+                | ToolbarAction::BeginColorsPath
+                | ToolbarAction::BeginColorPath(_)
                 | ToolbarAction::RunExport(_)
         ) {
             return true;
@@ -625,7 +659,6 @@ impl Editor {
             MainMode::Stamp => CursorMode::Stamp,
             MainMode::Shapes => CursorMode::Shapes,
             MainMode::Utilities => CursorMode::Utilities,
-            MainMode::Layers | MainMode::Colors => CursorMode::Navigation,
         };
     }
 
@@ -1232,6 +1265,7 @@ mod tests {
     use super::*;
     use crate::editor_event::EditorState;
     use crate::export::lines_from_text;
+    use crate::model::ColorId;
     use crate::toolbar::{ToggleKind, UtilityKind};
 
     fn state() -> Editor {
@@ -1303,34 +1337,47 @@ mod tests {
 
         assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert_eq!(editor.state(), EditorState::UtilityMode);
-        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Layers)));
-        assert_eq!(editor.state(), EditorState::NavigationMode);
     }
 
     #[test]
-    fn disabling_multi_layer_mode_returns_the_editor_to_stamp() {
+    fn layer_panel_paths_and_disable_preserve_the_active_editor_mode() {
         let mut editor = state();
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
         assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
-        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleLayers));
-        assert_eq!(editor.toolbar.main_mode(), MainMode::Layers);
-        assert_eq!(editor.cursor_mode, CursorMode::Navigation);
+        assert!(editor.apply_toolbar_action(ToolbarAction::BeginLayersPath));
+        assert!(
+            editor.handle_toolbar_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        assert!(
+            editor.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty())
+        );
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(editor.cursor_mode, CursorMode::MoveDraw);
 
         assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
-        assert_eq!(editor.toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(editor.cursor_mode, CursorMode::Stamp);
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(editor.cursor_mode, CursorMode::MoveDraw);
     }
 
     #[test]
-    fn disabling_multi_color_mode_returns_the_editor_to_stamp() {
+    fn color_panel_paths_and_disable_preserve_the_active_editor_mode() {
         let mut editor = state();
+        assert!(editor.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
         assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
-        assert!(editor.apply_toolbar_action(ToolbarAction::ToggleColors));
-        assert_eq!(editor.toolbar.main_mode(), MainMode::Colors);
-        assert_eq!(editor.cursor_mode, CursorMode::Navigation);
+        assert!(editor.apply_toolbar_action(ToolbarAction::BeginColorsPath));
+        assert!(
+            editor.handle_toolbar_shortcut(&Key::Character("1".into()), ModifiersState::empty())
+        );
+        assert!(
+            editor.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty())
+        );
+        assert_eq!(editor.toolbar.active_color(), ColorId(1));
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Shapes);
+        assert_eq!(editor.cursor_mode, CursorMode::Shapes);
 
         assert!(editor.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode)));
-        assert_eq!(editor.toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(editor.cursor_mode, CursorMode::Stamp);
+        assert_eq!(editor.toolbar.main_mode(), MainMode::Shapes);
+        assert_eq!(editor.cursor_mode, CursorMode::Shapes);
     }
 
     #[test]

@@ -1,9 +1,6 @@
-use unicode_width::UnicodeWidthStr;
-
 use super::{
-    FILES_TOGGLE_CATEGORY, MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW, MainMode, PendingShortcut,
-    ToolbarAction, ToolbarSpan, ToolbarState, aligned_shortcut, bold_prefix_span, bold_span,
-    plain_span,
+    FILES_TOGGLE_CATEGORY, MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW, PendingShortcut, ToolbarAction,
+    ToolbarSpan, ToolbarState, aligned_shortcut, bold_prefix_span, bold_span, plain_span,
 };
 
 pub(super) const TOGGLE_LABELS: [&str; 3] = ["Dark Mode", "Multi Color Mode", "Multi Layer Mode"];
@@ -66,52 +63,7 @@ impl ToolbarState {
                 foreground: None,
             });
         }
-        let mut feature_entries = Vec::with_capacity(3);
-        if self.multi_layer_mode() {
-            feature_entries.push((
-                "Lyrs",
-                8,
-                ToolbarAction::ToggleLayers,
-                self.main_mode == MainMode::Layers && !self.export_open,
-            ));
-        }
-        if self.multi_color_mode() {
-            feature_entries.push((
-                "Clrs",
-                9,
-                ToolbarAction::ToggleColors,
-                self.main_mode == MainMode::Colors && !self.export_open,
-            ));
-        }
-        feature_entries.push((
-            "Files/Togls",
-            0,
-            ToolbarAction::ToggleExportMenu,
-            self.export_open,
-        ));
-        for (index, (label, digit, action, selected)) in feature_entries.into_iter().enumerate() {
-            if index > 0 {
-                spans.push(plain_span(" ".to_string()));
-            }
-            spans.push(ToolbarSpan {
-                contents: if row == MAIN_LABEL_ROW {
-                    aligned_shortcut(digit, label)
-                } else {
-                    label.to_string()
-                },
-                bold_prefix: if row == MAIN_SHORTCUT_ROW {
-                    UnicodeWidthStr::width(label)
-                } else {
-                    0
-                },
-                selected: row == MAIN_SHORTCUT_ROW && selected,
-                highlighted: false,
-                tooltip: false,
-                action: Some(action),
-                right_aligned: index == 0,
-                foreground: None,
-            });
-        }
+        self.append_auxiliary_header_spans(&mut spans, row);
         spans
     }
 
@@ -130,15 +82,22 @@ impl ToolbarState {
     pub(super) fn toggle_setting(&mut self, toggle: ToggleKind) {
         let enabled = &mut self.toggles[toggle.index()];
         *enabled = !*enabled;
-        if toggle == ToggleKind::MultiLayerMode && !*enabled && self.main_mode == MainMode::Layers {
-            self.main_mode = MainMode::Stamp;
+        if !*enabled {
+            let cancels_pending = match toggle {
+                ToggleKind::MultiLayerMode => matches!(
+                    self.shortcut_prefix,
+                    Some(PendingShortcut::Layers | PendingShortcut::Layer(_))
+                ),
+                ToggleKind::MultiColorMode => matches!(
+                    self.shortcut_prefix,
+                    Some(PendingShortcut::Colors | PendingShortcut::ColorGroup(_))
+                ),
+                ToggleKind::DarkMode => false,
+            };
+            if cancels_pending {
+                self.shortcut_prefix = None;
+            }
         }
-        if toggle == ToggleKind::MultiColorMode && !*enabled && self.main_mode == MainMode::Colors {
-            self.main_mode = MainMode::Stamp;
-        }
-        self.export_open = true;
-        self.active_export_category = Some(FILES_TOGGLE_CATEGORY);
-        self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
     }
 
     pub(super) fn select_toggle_digit(&mut self, digit: usize) {
@@ -147,6 +106,9 @@ impl ToolbarState {
             .and_then(|index| ToggleKind::ALL.get(index))
         {
             self.toggle_setting(*toggle);
+            self.export_open = true;
+            self.active_export_category = Some(FILES_TOGGLE_CATEGORY);
+            self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
         }
     }
 }
@@ -154,9 +116,9 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MENU_FIRST_ROW, ToolbarAction, boxed_toolbar_spans};
+    use crate::toolbar::{MENU_FIRST_ROW, MainMode, ToolbarAction, boxed_toolbar_spans};
     use std::ops::Range;
-    use unicode_width::UnicodeWidthChar;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     use winit::keyboard::{Key, ModifiersState};
 
     fn press(toolbar: &mut ToolbarState, key: &str) {
@@ -191,14 +153,18 @@ mod tests {
         expected: ToolbarAction,
     ) -> Range<usize> {
         let mut column = 0;
-        for span in boxed_toolbar_spans(&toolbar.toolbar_spans(row), width) {
+        let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+        let mut range = None;
+        for span in spans {
             let start = column;
             column += UnicodeWidthStr::width(span.contents.as_str());
             if span.action == Some(expected) {
-                return start..column;
+                range.get_or_insert(start..start).end = column;
+            } else if range.is_some() {
+                break;
             }
         }
-        panic!("action {expected:?} is not visible on toolbar row {row}");
+        range.unwrap_or_else(|| panic!("action {expected:?} is not visible on toolbar row {row}"))
     }
 
     fn right_group_text(toolbar: &ToolbarState, row: usize) -> String {
@@ -307,25 +273,31 @@ mod tests {
             (
                 true,
                 false,
-                "8    0          ",
-                "Lyrs Files/Togls",
-                vec![ToolbarAction::ToggleLayers, ToolbarAction::ToggleExportMenu],
+                "8                  0          ",
+                "Lyrs               Files/Togls",
+                vec![
+                    ToolbarAction::BeginLayersPath,
+                    ToolbarAction::ToggleExportMenu,
+                ],
             ),
             (
                 false,
                 true,
-                "9    0          ",
-                "Clrs Files/Togls",
-                vec![ToolbarAction::ToggleColors, ToolbarAction::ToggleExportMenu],
+                "9                    0          ",
+                "Clrs                 Files/Togls",
+                vec![
+                    ToolbarAction::BeginColorsPath,
+                    ToolbarAction::ToggleExportMenu,
+                ],
             ),
             (
                 true,
                 true,
-                "8    9    0          ",
-                "Lyrs Clrs Files/Togls",
+                "8                  9                    0          ",
+                "Lyrs               Clrs                 Files/Togls",
                 vec![
-                    ToolbarAction::ToggleLayers,
-                    ToolbarAction::ToggleColors,
+                    ToolbarAction::BeginLayersPath,
+                    ToolbarAction::BeginColorsPath,
                     ToolbarAction::ToggleExportMenu,
                 ],
             ),
@@ -363,9 +335,12 @@ mod tests {
                     );
                 }
             }
-            for absent in [ToolbarAction::ToggleLayers, ToolbarAction::ToggleColors]
-                .into_iter()
-                .filter(|action| !actions.contains(action))
+            for absent in [
+                ToolbarAction::BeginLayersPath,
+                ToolbarAction::BeginColorsPath,
+            ]
+            .into_iter()
+            .filter(|action| !actions.contains(action))
             {
                 assert!(
                     toolbar
@@ -384,33 +359,38 @@ mod tests {
     }
 
     #[test]
-    fn selected_feature_cell_is_highlighted_on_its_label_row_only() {
+    fn persistent_panel_headers_begin_paths_without_becoming_selected_modes() {
         let mut toolbar = ToolbarState::default();
         toolbar.toggles[ToggleKind::MultiLayerMode.index()] = true;
         toolbar.toggles[ToggleKind::MultiColorMode.index()] = true;
 
-        for (action, expected) in [
-            (ToolbarAction::ToggleLayers, "Lyrs"),
-            (ToolbarAction::ToggleColors, "Clrs"),
-            (ToolbarAction::ToggleExportMenu, "Files/Togls"),
+        for (action, expected_pending) in [
+            (ToolbarAction::BeginLayersPath, PendingShortcut::Layers),
+            (ToolbarAction::BeginColorsPath, PendingShortcut::Colors),
         ] {
             assert!(toolbar.apply_action(action));
+            assert_eq!(toolbar.pending_shortcut(), Some(expected_pending));
+            assert_eq!(toolbar.main_mode(), MainMode::Stamp);
             assert!(
                 toolbar
-                    .toolbar_spans(MAIN_LABEL_ROW)
+                    .toolbar_spans(MAIN_SHORTCUT_ROW)
                     .iter()
+                    .filter(|span| {
+                        matches!(
+                            span.action,
+                            Some(ToolbarAction::BeginLayersPath | ToolbarAction::BeginColorsPath)
+                        )
+                    })
                     .all(|span| !span.selected)
             );
-            assert_eq!(
-                toolbar
-                    .toolbar_spans(MAIN_SHORTCUT_ROW)
-                    .into_iter()
-                    .filter(|span| span.selected)
-                    .map(|span| span.contents)
-                    .collect::<Vec<_>>(),
-                [expected]
-            );
         }
+        assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
+        assert!(
+            toolbar
+                .toolbar_spans(MAIN_SHORTCUT_ROW)
+                .iter()
+                .any(|span| span.selected && span.contents == "Files/Togls")
+        );
     }
 
     #[test]
@@ -459,21 +439,45 @@ mod tests {
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
-        press(&mut toolbar, "0");
         press(&mut toolbar, "1");
         press(&mut toolbar, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
         press(&mut toolbar, "9");
-        assert_eq!(toolbar.main_mode(), MainMode::Colors);
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
-        press(&mut toolbar, "0");
         press(&mut toolbar, "8");
-        assert_eq!(toolbar.main_mode(), MainMode::Layers);
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Layers));
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
-        assert_eq!(toolbar.main_mode(), MainMode::Layers);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+    }
+
+    #[test]
+    fn disabling_a_panel_cancels_only_its_own_prefix_and_preserves_drawing_mode() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line));
+        toolbar.toggle_setting(ToggleKind::MultiLayerMode);
+        toolbar.toggle_setting(ToggleKind::MultiColorMode);
+
+        assert!(toolbar.apply_action(ToolbarAction::BeginColorsPath));
+        toolbar.toggle_setting(ToggleKind::MultiLayerMode);
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Colors));
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+
+        toolbar.toggle_setting(ToggleKind::MultiLayerMode);
+        assert!(toolbar.apply_action(ToolbarAction::BeginLayersPath));
+        toolbar.toggle_setting(ToggleKind::MultiLayerMode);
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
+
+        assert!(toolbar.apply_action(ToolbarAction::BeginColorsPath));
+        toolbar.toggle_setting(ToggleKind::MultiColorMode);
+        assert_eq!(toolbar.pending_shortcut(), None);
+        assert_eq!(toolbar.main_mode(), MainMode::Line);
     }
 }

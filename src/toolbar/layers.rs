@@ -4,8 +4,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::model::{LayerId, LayerSummary, MAX_LAYERS};
 
 use super::{
-    MENU_FIRST_ROW, PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_prefix_span,
-    bold_span, plain_span,
+    PendingShortcut, ToolbarAction, ToolbarSpan, ToolbarState, bold_span, pad_spans_to_width,
+    panels::LAYER_PANEL_WIDTH, plain_span,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,12 +39,13 @@ fn operation_enabled(operation: LayerOperation, index: usize, layer_count: usize
 }
 
 impl ToolbarState {
-    pub(super) fn layer_menu_spans(&self, row: usize, layers: &[LayerSummary]) -> Vec<ToolbarSpan> {
-        if row == MENU_FIRST_ROW {
-            let mut title = bold_prefix_span("Layers 8:".to_owned(), "Layers");
-            title.selected = true;
-            title.action = Some(ToolbarAction::ToggleLayers);
-            let mut spans = vec![title, plain_span(" ".to_owned())];
+    pub(super) fn layer_panel_spans(
+        &self,
+        panel_row: usize,
+        layers: &[LayerSummary],
+    ) -> Vec<ToolbarSpan> {
+        if panel_row == 0 {
+            let mut spans = vec![plain_span("     ".to_owned())];
             for digit in 1..=GRID_OPERATIONS.len() {
                 if digit > 1 {
                     spans.push(plain_span(" ".to_owned()));
@@ -54,15 +55,16 @@ impl ToolbarState {
             return spans;
         }
 
-        let Some(index) = row
-            .checked_sub(MENU_FIRST_ROW + 1)
+        let Some(index) = panel_row
+            .checked_sub(1)
             .filter(|index| *index < layers.len())
         else {
-            return Vec::new();
+            return vec![plain_span(" ".repeat(LAYER_PANEL_WIDTH))];
         };
         let layer = layers[index];
-        let mut row_prefix = bold_span(format!("{}.", index + 1));
+        let mut row_prefix = bold_span(format!("8.{}.", index + 1));
         row_prefix.highlighted = self.pending_shortcut() == Some(PendingShortcut::Layer(layer.id));
+        row_prefix.action = Some(ToolbarAction::BeginLayerPath(layer.id));
         let mut spans = vec![row_prefix, plain_span(" ".to_owned())];
         let glyphs = [
             layer.id.symbol(),
@@ -92,6 +94,7 @@ impl ToolbarState {
                 foreground: None,
             });
         }
+        pad_spans_to_width(&mut spans, LAYER_PANEL_WIDTH);
         spans
     }
 
@@ -113,7 +116,9 @@ impl ToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolbar::{MAIN_LABEL_ROW, MainMode, ToggleKind, boxed_toolbar_spans};
+    use crate::toolbar::{
+        MAIN_LABEL_ROW, MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans,
+    };
     use winit::keyboard::{Key, ModifiersState, NamedKey};
 
     fn text(spans: Vec<ToolbarSpan>) -> String {
@@ -149,10 +154,9 @@ mod tests {
     }
 
     fn enter_layers(toolbar: &mut ToolbarState, layers: &[LayerSummary]) {
+        toolbar.sync_layer_count(layers.len());
         assert!(toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
-        press(toolbar, layers, "0");
-        press(toolbar, layers, "8");
-        assert_eq!(toolbar.main_mode(), MainMode::Layers);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
 
     fn action_columns(spans: &[ToolbarSpan]) -> Vec<(usize, ToolbarAction)> {
@@ -162,7 +166,9 @@ mod tests {
             .filter_map(|span| {
                 let span_start = start;
                 start += UnicodeWidthStr::width(span.contents.as_str());
-                span.action.map(|action| (span_start, action))
+                span.action
+                    .filter(|action| matches!(action, ToolbarAction::Layer { .. }))
+                    .map(|action| (span_start, action))
             })
             .collect()
     }
@@ -173,16 +179,16 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         enter_layers(&mut toolbar, &layers);
 
-        let rows = (MENU_FIRST_ROW..MENU_FIRST_ROW + 4)
-            .map(|row| text(toolbar.toolbar_spans_with_layers(row, &layers)))
+        let rows = (0..4)
+            .map(|row| text(toolbar.layer_panel_spans(row, &layers)))
             .collect::<Vec<_>>();
         assert_eq!(
             rows,
             [
-                "Layers 8: 1 2 3 4 5 6 7",
-                "1. α × ▪ ↑ ↓ + ø",
-                "2. β   ▫ ↑ ↓ + ø",
-                "3. γ   ▫ ↑ ↓ + ø",
+                "     1 2 3 4 5 6 7",
+                "8.1. α × ▪ ↑ ↓ + ø",
+                "8.2. β   ▫ ↑ ↓ + ø",
+                "8.3. γ   ▫ ↑ ↓ + ø",
             ]
         );
         assert!(
@@ -190,7 +196,7 @@ mod tests {
                 .all(|row| UnicodeWidthStr::width(row.as_str()) == row.chars().count())
         );
         let selected = toolbar
-            .toolbar_spans_with_layers(MENU_FIRST_ROW + 1, &layers)
+            .layer_panel_spans(1, &layers)
             .into_iter()
             .filter(|span| span.selected)
             .map(|span| span.contents)
@@ -205,6 +211,8 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         enter_layers(&mut toolbar, &layers);
 
+        press(&mut toolbar, &layers, "8");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Layers));
         press(&mut toolbar, &layers, "2");
         assert_eq!(
             toolbar.pending_shortcut(),
@@ -216,7 +224,7 @@ mod tests {
             &layers,
         ));
         assert_eq!(toolbar.pending_shortcut(), None);
-        assert_eq!(toolbar.main_mode(), MainMode::Layers);
+        assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         for (row, column, operation) in [
             (2, 1, LayerOperation::Select),
@@ -227,12 +235,16 @@ mod tests {
             (2, 6, LayerOperation::New),
             (2, 7, LayerOperation::Delete),
         ] {
+            press(&mut toolbar, &layers, "8");
             press(&mut toolbar, &layers, &row.to_string());
             press(&mut toolbar, &layers, &column.to_string());
             assert_eq!(
                 toolbar.take_layer_action(),
                 Some((LayerId((row - 1) as u8), operation))
             );
+            press(&mut toolbar, &layers, "8");
+            assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Layers));
+            toolbar.cancel_shortcut();
         }
     }
 
@@ -243,7 +255,7 @@ mod tests {
         enter_layers(&mut toolbar, &layers);
         let width = 80;
 
-        let expected_columns = [3, 5, 7, 9, 11, 13, 15];
+        let expected_columns = [5, 7, 9, 11, 13, 15, 17];
         for (row_offset, layer) in layers.iter().enumerate() {
             let row = MENU_FIRST_ROW + 1 + row_offset;
             let boxed =
@@ -254,18 +266,19 @@ mod tests {
                     toolbar.action_at_with_layers(row, column, width, &layers),
                     Some(action)
                 );
-                assert!(expected_columns.contains(&(column - 2)));
+                let panel_start = width - 2 - (LAYER_PANEL_WIDTH + 1 + 11);
+                assert!(expected_columns.contains(&(column - panel_start)));
                 assert_eq!(
                     action,
                     ToolbarAction::Layer {
                         layer: layer.id,
-                        operation: match column - 2 {
-                            3 | 5 => LayerOperation::Select,
-                            7 => LayerOperation::Show,
-                            9 => LayerOperation::MoveUp,
-                            11 => LayerOperation::MoveDown,
-                            13 => LayerOperation::New,
-                            15 => LayerOperation::Delete,
+                        operation: match column - panel_start {
+                            5 | 7 => LayerOperation::Select,
+                            9 => LayerOperation::Show,
+                            11 => LayerOperation::MoveUp,
+                            13 => LayerOperation::MoveDown,
+                            15 => LayerOperation::New,
+                            17 => LayerOperation::Delete,
                             _ => unreachable!(),
                         },
                     }
@@ -296,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_eight_is_available_only_with_the_toggle_and_never_joins_mode_one() {
+    fn top_level_eight_begins_a_persistent_panel_path_without_changing_mode() {
         let layers = sample_layers();
         let mut toolbar = ToolbarState::default();
         press(&mut toolbar, &layers, "8");
@@ -304,21 +317,19 @@ mod tests {
         assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
-        press(&mut toolbar, &layers, "0");
-        assert!(!toolbar.available_modes().contains(&MainMode::Layers));
         assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
         press(&mut toolbar, &layers, "1");
         press(&mut toolbar, &layers, "5");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         press(&mut toolbar, &layers, "8");
-        assert_eq!(toolbar.main_mode(), MainMode::Layers);
-        press(&mut toolbar, &layers, "8");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Layers));
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
+        press(&mut toolbar, &layers, "8");
+        assert_eq!(toolbar.pending_shortcut(), Some(PendingShortcut::Layers));
 
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
         assert!(!text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
-        press(&mut toolbar, &layers, "0");
         press(&mut toolbar, &layers, "8");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
@@ -341,12 +352,12 @@ mod tests {
 
         assert_eq!(toolbar.menu_row_count(), 1 + MAX_LAYERS);
         assert_eq!(
-            text(toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW + 4, &layers)),
-            "4. δ   ▪ ↑ ↓ + ø"
+            text(toolbar.layer_panel_spans(4, &layers)),
+            "8.4. δ   ▪ ↑ ↓ + ø"
         );
         assert_eq!(
-            text(toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW + 6, &layers)),
-            "6. ζ   ▪ ↑ ↓ + ø"
+            text(toolbar.layer_panel_spans(6, &layers)),
+            "8.6. ζ   ▪ ↑ ↓ + ø"
         );
         for row in MENU_FIRST_ROW + 1..=MENU_FIRST_ROW + MAX_LAYERS {
             assert!(
@@ -363,13 +374,14 @@ mod tests {
             );
         }
 
+        press(&mut toolbar, &layers, "8");
         press(&mut toolbar, &layers, "1");
         press(&mut toolbar, &layers, "6");
         assert_eq!(toolbar.take_layer_action(), None);
     }
 
     #[test]
-    fn durable_layers_mode_restores_outside_the_mode_one_list() {
+    fn durable_layers_toggle_restores_panel_without_replacing_the_drawing_mode() {
         let layers = sample_layers();
         let mut source = ToolbarState::default();
         enter_layers(&mut source, &layers);
@@ -378,8 +390,7 @@ mod tests {
         let mut restored = ToolbarState::default();
         restored.restore_durable_selections(&durable);
         assert!(restored.multi_layer_mode());
-        assert_eq!(restored.main_mode(), MainMode::Layers);
-        assert!(!restored.available_modes().contains(&MainMode::Layers));
+        assert_eq!(restored.main_mode(), MainMode::Stamp);
         assert_eq!(restored.pending_shortcut(), None);
         assert!(!restored.export_menu_open());
 
