@@ -14,7 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use winit::window::Window;
 
-use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
+use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig, ThemeConfig};
 use crate::editor::Editor;
 use crate::face_resolution::{
     ResolvedFace, Rgba, UnderlineStyle, resolve_derived_face, resolve_root_face,
@@ -22,9 +22,10 @@ use crate::face_resolution::{
 use crate::layout::{
     LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, layout_metrics, minimap_rect,
 };
-use crate::model::{Atom, Face};
+use crate::model::{Atom, Coord, Face, LayerSummary};
 use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
+use crate::toolbar::ToolbarState;
 use crate::toolbar_stamp::toolbar_atoms;
 
 mod cell_graphics;
@@ -52,6 +53,7 @@ pub struct Renderer {
     logical_font_size: Cell<f32>,
     content_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
     fixed_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
+    toolbar_cache: RefCell<Option<ToolbarCache>>,
 }
 
 #[derive(Clone)]
@@ -102,12 +104,49 @@ struct RenderFrame<'a> {
     width: usize,
     viewport: ViewportOffset,
     toolbar_hotspot_hovered: bool,
+    content: &'a [Coord],
+    toolbar_cache: &'a RefCell<Option<ToolbarCache>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ToolbarCacheKey {
+    toolbar: ToolbarState,
+    layers: Vec<LayerSummary>,
+    cursor_coordinates: (i128, i128),
+    cursor_mode: CursorMode,
+    theme: ThemeConfig,
+    default_face: Face,
+    window_title: String,
+    width: usize,
+    height: i32,
+    top_padding_bits: u32,
+    grid_top_bits: u32,
+    cell_width_bits: u32,
+    cell_height_bits: u32,
+    baseline_offset_bits: u32,
+    underline_offset_bits: u32,
+    hotspot_hovered: bool,
+    transparent_menubar: bool,
+}
+
+#[derive(Clone)]
+struct ToolbarCache {
+    key: ToolbarCacheKey,
+    image: skia_safe::Image,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct RenderBreakdown {
+    pub(super) toolbar: std::time::Duration,
+    pub(super) grid: std::time::Duration,
+    pub(super) minimap: std::time::Duration,
 }
 
 pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
     state: &Editor,
+    content: &[Coord],
     renderer: &Renderer,
     config: &AppConfig,
     viewport: ViewportOffset,
@@ -141,7 +180,7 @@ pub fn render(
         .context("failed to wrap Skia surface around window buffer")?;
     let canvas = skia_surface.canvas();
 
-    render_canvas(
+    let breakdown = render_canvas(
         canvas,
         state,
         config,
@@ -160,6 +199,8 @@ pub fn render(
             width,
             viewport,
             toolbar_hotspot_hovered,
+            content,
+            toolbar_cache: &renderer.toolbar_cache,
         },
     );
     let rasterization = raster_started.elapsed();
@@ -172,10 +213,19 @@ pub fn render(
         buffer_acquisition,
         rasterization,
         presentation: presentation_started.elapsed(),
+        toolbar: breakdown.toolbar,
+        grid: breakdown.grid,
+        minimap: breakdown.minimap,
     })
 }
 
-fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: RenderFrame<'_>) {
+fn render_canvas(
+    canvas: &Canvas,
+    state: &Editor,
+    config: &AppConfig,
+    frame: RenderFrame<'_>,
+) -> RenderBreakdown {
+    let toolbar_started = std::time::Instant::now();
     let RenderFrame {
         metrics,
         toolbar_metrics,
@@ -183,27 +233,25 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         width,
         viewport,
         toolbar_hotspot_hovered,
+        content,
+        toolbar_cache,
     } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
-    render_window_title(
-        canvas,
-        &state.window_title,
-        &state.grid.default_face,
-        toolbar_metrics,
-        layout,
-        width,
-        config.transparent_menubar,
-    );
-    render_toolbar(
+    render_cached_toolbar(
         canvas,
         state,
         toolbar_metrics,
-        layout.top_padding,
+        layout,
         width,
         toolbar_hotspot_hovered,
+        config.transparent_menubar,
+        toolbar_cache,
+        default_face.bg,
     );
+    let toolbar_time = toolbar_started.elapsed();
 
+    let grid_started = std::time::Instant::now();
     let grid_layout = visible_grid_layout(layout, metrics, viewport);
     let visible_cells = VisibleCanvasCells::from_layout(
         layout,
@@ -288,6 +336,8 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         );
     }
     canvas.restore();
+    let grid_time = grid_started.elapsed();
+    let minimap_started = std::time::Instant::now();
     let minimap_panel = minimap_rect(
         width,
         layout.grid_top,
@@ -296,6 +346,7 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
     minimap::render(
         canvas,
         state,
+        content,
         visible_cells,
         minimap_panel,
         metrics,
@@ -303,6 +354,11 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         &default_face,
     );
     render_bottom_tooltip(canvas, state, toolbar_metrics, layout, width);
+    RenderBreakdown {
+        toolbar: toolbar_time,
+        grid: grid_time,
+        minimap: minimap_started.elapsed(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -394,6 +450,70 @@ fn marching_ants_phase(elapsed: std::time::Duration, segment: f32) -> f32 {
         .round()
         .max(1.0) as u128;
     (elapsed.as_millis() % cycle_millis) as f32 / MARCHING_ANTS_MILLIS_PER_PIXEL
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_cached_toolbar(
+    canvas: &Canvas,
+    state: &Editor,
+    metrics: &CellMetrics,
+    layout: LayoutMetrics,
+    width: usize,
+    hotspot_hovered: bool,
+    transparent_menubar: bool,
+    cache: &RefCell<Option<ToolbarCache>>,
+    background: Rgba,
+) {
+    let height = layout.grid_top.ceil().max(1.0) as i32;
+    let key = ToolbarCacheKey {
+        toolbar: state.toolbar.clone(),
+        layers: state.layer_summaries(),
+        cursor_coordinates: state.cursor_coordinates(),
+        cursor_mode: state.cursor_mode,
+        theme: state.theme.clone(),
+        default_face: state.grid.default_face.clone(),
+        window_title: state.window_title.clone(),
+        width,
+        height,
+        top_padding_bits: layout.top_padding.to_bits(),
+        grid_top_bits: layout.grid_top.to_bits(),
+        cell_width_bits: metrics.cell_width.to_bits(),
+        cell_height_bits: metrics.cell_height.to_bits(),
+        baseline_offset_bits: metrics.baseline_offset.to_bits(),
+        underline_offset_bits: metrics.underline_offset.to_bits(),
+        hotspot_hovered,
+        transparent_menubar,
+    };
+    if let Some(cached) = cache.borrow().as_ref().filter(|cached| cached.key == key) {
+        canvas.draw_image(&cached.image, (0.0, 0.0), None);
+        return;
+    }
+
+    let Some(mut surface) = surfaces::raster_n32_premul((width.max(1) as i32, height)) else {
+        return;
+    };
+    let toolbar_canvas = surface.canvas();
+    toolbar_canvas.clear(background.to_color());
+    render_window_title(
+        toolbar_canvas,
+        &state.window_title,
+        &state.grid.default_face,
+        metrics,
+        layout,
+        width,
+        transparent_menubar,
+    );
+    render_toolbar(
+        toolbar_canvas,
+        state,
+        metrics,
+        layout.top_padding,
+        width,
+        hotspot_hovered,
+    );
+    let image = surface.image_snapshot();
+    canvas.draw_image(&image, (0.0, 0.0), None);
+    *cache.borrow_mut() = Some(ToolbarCache { key, image });
 }
 
 fn render_toolbar(
@@ -747,7 +867,8 @@ fn render_line_at(
         };
         bg_paint.set_color(resolved.bg.to_color());
         fg_paint.set_color(resolved.fg.to_color());
-        let is_plain_blank = atom.contents.bytes().all(|byte| byte == b' ')
+        let is_blank = atom.contents.bytes().all(|byte| byte == b' ');
+        let is_plain_blank = is_blank
             && resolved.bg == root_face.bg
             && resolved.underline_style.is_none()
             && !resolved.strikethrough;
@@ -768,7 +889,20 @@ fn render_line_at(
                 &bg_paint,
             );
         }
-        let font = (!is_plain_blank).then(|| font_for_face(metrics, &resolved));
+        if is_blank {
+            if !is_plain_blank {
+                draw_text_decorations(
+                    canvas,
+                    visible_start,
+                    top,
+                    visible_width,
+                    metrics,
+                    &resolved,
+                );
+            }
+            continue;
+        }
+        let font = font_for_face(metrics, &resolved);
 
         let mut cluster_column = atom_start;
         for cluster in text_clusters(&atom.contents) {
@@ -778,32 +912,27 @@ fn render_line_at(
 
             let span = cluster_display_width(cluster);
             let cluster_end = cluster_column.saturating_add(span);
-            if cluster_end > position.first_column
-                && cluster_column < position.max_column
-                && let Some(font) = font.as_ref()
-            {
+            if cluster_end > position.first_column && cluster_column < position.max_column {
                 draw_text_cluster(
                     canvas,
                     cluster_column,
                     top,
                     cluster,
-                    font,
+                    &font,
                     metrics,
                     &fg_paint,
                 );
             }
             cluster_column = cluster_end;
         }
-        if !is_plain_blank {
-            draw_text_decorations(
-                canvas,
-                visible_start,
-                top,
-                visible_width,
-                metrics,
-                &resolved,
-            );
-        }
+        draw_text_decorations(
+            canvas,
+            visible_start,
+            top,
+            visible_width,
+            metrics,
+            &resolved,
+        );
     }
 }
 
@@ -1170,6 +1299,9 @@ fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell
 }
 
 pub fn atom_display_width(contents: &str) -> usize {
+    if contents.is_ascii() {
+        return contents.bytes().filter(|byte| *byte != b'\n').count();
+    }
     text_clusters(contents)
         .filter(|cluster| *cluster != "\n")
         .map(cluster_display_width)
@@ -1442,6 +1574,7 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
         logical_font_size: Cell::new(config.font_size),
         content_metrics_cache: RefCell::new(None),
         fixed_metrics_cache: RefCell::new(None),
+        toolbar_cache: RefCell::new(None),
     }
 }
 
@@ -1633,6 +1766,69 @@ mod tests {
 
         assert_eq!(title, "ascdraw - /t");
         assert_eq!(atom_display_width(&title), 12);
+    }
+
+    #[test]
+    fn toolbar_image_cache_reuses_and_invalidates_rendered_content() {
+        let config = AppConfig::default();
+        let renderer = load_renderer(&config);
+        let metrics = renderer.metrics(1.0);
+        let toolbar_metrics = renderer.title_metrics(1.0);
+        let width = 800;
+        let height = 600;
+        let layout = layout_metrics(
+            width,
+            height,
+            &metrics,
+            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+            &ToolbarState::default(),
+            config.transparent_menubar,
+            1.0,
+        );
+        let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
+        let state = Editor::new(&config.theme, "test");
+        let cache = RefCell::new(None);
+        let background = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG).bg;
+
+        render_cached_toolbar(
+            surface.canvas(),
+            &state,
+            &toolbar_metrics,
+            layout,
+            width,
+            false,
+            config.transparent_menubar,
+            &cache,
+            background,
+        );
+        let original = cache.borrow().as_ref().unwrap().image.unique_id();
+        render_cached_toolbar(
+            surface.canvas(),
+            &state,
+            &toolbar_metrics,
+            layout,
+            width,
+            false,
+            config.transparent_menubar,
+            &cache,
+            background,
+        );
+        assert_eq!(cache.borrow().as_ref().unwrap().image.unique_id(), original);
+
+        let mut changed = state;
+        changed.grid.cursor_pos.column = 1;
+        render_cached_toolbar(
+            surface.canvas(),
+            &changed,
+            &toolbar_metrics,
+            layout,
+            width,
+            false,
+            config.transparent_menubar,
+            &cache,
+            background,
+        );
+        assert_ne!(cache.borrow().as_ref().unwrap().image.unique_id(), original);
     }
 
     #[test]

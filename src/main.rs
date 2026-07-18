@@ -87,6 +87,7 @@ fn main() -> ExitCode {
 #[allow(deprecated)]
 fn try_main() -> Result<ExitCode> {
     let args = Args::parse();
+    let debug = args.debug;
     let mut config = load_config()?;
     if args.show_config {
         println!("Checked configuration paths:");
@@ -144,7 +145,7 @@ fn try_main() -> Result<ExitCode> {
                 }
 
                 if windows.is_empty() {
-                    match create_editor_window(elwt, &config, &document_session) {
+                    match create_editor_window(elwt, &config, &document_session, debug) {
                         Ok(mut editor) => {
                             editor.set_document_history_enabled(history_enabled);
                             editor.set_recent_documents(recent_documents.files());
@@ -170,6 +171,7 @@ fn try_main() -> Result<ExitCode> {
                     &config,
                     &document_session,
                     recent_documents.files(),
+                    debug,
                 );
             }
             Event::AboutToWait => {
@@ -194,6 +196,7 @@ fn try_main() -> Result<ExitCode> {
                         editor.request_redraw();
                     }
                     editor.clear_export_success_if_elapsed(now);
+                    editor.report_scroll_event_stats(now);
                 }
                 if now.saturating_duration_since(last_tooltip_redraw)
                     >= toolbar::TOOLTIP_ROTATION_INTERVAL
@@ -228,18 +231,12 @@ fn try_main() -> Result<ExitCode> {
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
+                            editor.note_redraw();
                             let scroll_changed = editor.advance_scroll_pan();
                             if scroll_changed {
                                 refresh_mouse_cell(editor, &config);
                             }
-                            match editor.surface.render(
-                                &editor.window,
-                                &editor.state,
-                                &editor.renderer,
-                                &config,
-                                editor.viewport,
-                                editor.toolbar_hotspot_hovered(),
-                            ) {
+                            match editor.render(&config) {
                                 Err(error) => {
                                     log_error(format!("render failed: {error:#}"));
                                     should_close = true;
@@ -548,6 +545,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.set_mouse_toolbar_hotspot(None);
                         }
                         WindowEvent::MouseWheel { delta, .. } => {
+                            editor.note_scroll_event();
                             let changed = if modified_wheel_zooms(editor.modifiers) {
                                 editor.zoom_from_mouse_wheel(delta)
                             } else {
@@ -643,6 +641,7 @@ fn try_main() -> Result<ExitCode> {
                         &config,
                         &document_session,
                         recent_documents.files(),
+                        debug,
                     );
                 } else if should_close {
                     close_window(&mut windows, window_id, elwt);

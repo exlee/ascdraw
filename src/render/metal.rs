@@ -22,6 +22,7 @@ use crate::app::{AppConfig, MacosColorSpace};
 use crate::editor::Editor;
 use crate::layout::{ViewportOffset, layout_metrics};
 use crate::macos::color_space_for_config;
+use crate::model::Coord;
 use crate::perf::FrameTiming;
 
 pub(super) struct MetalRenderer {
@@ -90,6 +91,7 @@ impl MetalRenderer {
         &mut self,
         window: &Window,
         state: &Editor,
+        content: &[Coord],
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,
@@ -121,7 +123,7 @@ impl MetalRenderer {
             None,
         )
         .context("failed to wrap Metal drawable as a Skia surface")?;
-        render_canvas(
+        let breakdown = render_canvas(
             surface.canvas(),
             state,
             config,
@@ -140,6 +142,8 @@ impl MetalRenderer {
                 width,
                 viewport,
                 toolbar_hotspot_hovered,
+                content,
+                toolbar_cache: &renderer.toolbar_cache,
             },
         );
         self.skia.flush_and_submit();
@@ -159,6 +163,9 @@ impl MetalRenderer {
             buffer_acquisition,
             rasterization,
             presentation: presentation_started.elapsed(),
+            toolbar: breakdown.toolbar,
+            grid: breakdown.grid,
+            minimap: breakdown.minimap,
         })
     }
 

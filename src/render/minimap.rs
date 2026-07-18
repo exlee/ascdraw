@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use skia_safe::{Canvas, Paint, Rect};
 
 use crate::editor::Editor;
@@ -213,16 +211,36 @@ fn density_level(occupied: usize, canvas_cells_per_cell: i64) -> u8 {
         .clamp(1, 4) as u8
 }
 
+fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<usize>> {
+    let len = usize::try_from(geometry.columns).ok().and_then(|columns| {
+        usize::try_from(geometry.rows)
+            .ok()
+            .and_then(|rows| columns.checked_mul(rows))
+    })?;
+    let mut occupancy = vec![0usize; len];
+    for coord in content {
+        let column = i64::try_from(coord.column).unwrap_or(i64::MAX);
+        let line = i64::try_from(coord.line).unwrap_or(i64::MAX);
+        if let Some((column, row)) = geometry.content_cell(column, line) {
+            let index = row.saturating_mul(geometry.columns).saturating_add(column);
+            if let Ok(index) = usize::try_from(index) {
+                occupancy[index] = occupancy[index].saturating_add(1);
+            }
+        }
+    }
+    Some(occupancy)
+}
+
 pub(super) fn render(
     canvas: &Canvas,
     state: &Editor,
+    content: &[Coord],
     viewport: VisibleCanvasCells,
     panel: ScreenRect,
     cell_metrics: &CellMetrics,
     border_metrics: &CellMetrics,
     default_face: &ResolvedFace,
 ) {
-    let content = state.content_cells();
     let drawing_cursor = is_drawing_mode(state.cursor_mode);
     let cursor_face = resolve_derived_face(
         &state.grid.default_face,
@@ -239,7 +257,7 @@ pub(super) fn render(
     } else {
         cursor_face.bg
     };
-    let canvas_bounds = MinimapBounds::canvas(&content, viewport);
+    let canvas_bounds = MinimapBounds::canvas(content, viewport);
     let required_bounds = canvas_bounds.union(MinimapBounds::viewport(viewport));
     let content_panel = ScreenRect {
         left: panel.left + border_metrics.cell_width,
@@ -274,15 +292,20 @@ pub(super) fn render(
     foreground
         .set_anti_alias(false)
         .set_color(default_face.fg.to_color());
-    let mut occupancy = HashMap::<(i64, i64), usize>::new();
-    for coord in content {
-        let column = i64::try_from(coord.column).unwrap_or(i64::MAX);
-        let line = i64::try_from(coord.line).unwrap_or(i64::MAX);
-        if let Some(cell) = geometry.content_cell(column, line) {
-            *occupancy.entry(cell).or_default() += 1;
-        }
-    }
-    for (cell, occupied) in occupancy {
+    let Some(occupancy) = occupancy(content, geometry) else {
+        canvas.restore();
+        return;
+    };
+    for (index, occupied) in occupancy
+        .into_iter()
+        .enumerate()
+        .filter(|(_, count)| *count > 0)
+    {
+        let index = i64::try_from(index).unwrap_or(i64::MAX);
+        let cell = (
+            index.rem_euclid(geometry.columns),
+            index.div_euclid(geometry.columns),
+        );
         let mut density = foreground.clone();
         density
             .set_alpha_f(f32::from(density_level(occupied, geometry.canvas_cells_per_cell)) / 4.0);
@@ -428,5 +451,36 @@ mod tests {
         assert_eq!(density_level(2, 2), 2);
         assert_eq!(density_level(3, 2), 3);
         assert_eq!(density_level(4, 2), 4);
+    }
+
+    #[test]
+    fn aggregates_content_into_a_bounded_dense_grid() {
+        let panel = ScreenRect {
+            left: 0.0,
+            top: 0.0,
+            right: 10.0,
+            bottom: 10.0,
+        };
+        let bounds = MinimapBounds {
+            left: 0,
+            top: 0,
+            right: 8,
+            bottom: 8,
+        };
+        let geometry = MinimapGeometry::new(panel, bounds, bounds, 1.0, 1.0).unwrap();
+        let content = [
+            Coord { line: 0, column: 0 },
+            Coord { line: 0, column: 1 },
+            Coord { line: 7, column: 7 },
+        ];
+
+        let occupancy = occupancy(&content, geometry).unwrap();
+
+        assert_eq!(
+            occupancy.len(),
+            geometry.columns as usize * geometry.rows as usize
+        );
+        assert_eq!(occupancy.iter().sum::<usize>(), content.len());
+        assert_eq!(occupancy.iter().filter(|count| **count > 0).count(), 2);
     }
 }

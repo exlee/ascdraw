@@ -156,11 +156,13 @@ pub struct EditorWindow {
     scroll_pan: ScrollPan,
     pinch_zoom_remainder: f64,
     wheel_zoom_remainder: f64,
+    scroll_stats: ScrollStats,
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
     view_cursor_anchor: Option<ViewCursorAnchor>,
     history: EditHistory,
+    content_index: ContentIndex,
     perf: PerfDiagnostics,
     transparent_menubar: bool,
     document_session: DocumentSession,
@@ -169,6 +171,158 @@ pub struct EditorWindow {
     saved_canvas_position: document::CanvasPosition,
     last_keypress: Instant,
     export_success_deadline: Option<Instant>,
+}
+
+#[derive(Debug)]
+struct ContentIndex {
+    cells: Vec<Coord>,
+    dirty: bool,
+    #[cfg(test)]
+    rebuilds: usize,
+}
+
+impl ContentIndex {
+    fn new(state: &Editor) -> Self {
+        Self {
+            cells: state.content_cells(),
+            dirty: false,
+            #[cfg(test)]
+            rebuilds: 1,
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    fn refresh(&mut self, state: &Editor) {
+        if self.dirty {
+            self.cells = state.content_cells();
+            self.dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuilds += 1;
+            }
+        }
+    }
+
+    fn cells(&self) -> &[Coord] {
+        &self.cells
+    }
+
+    #[cfg(test)]
+    fn rebuilds(&self) -> usize {
+        self.rebuilds
+    }
+}
+
+#[derive(Debug)]
+struct ScrollStats {
+    enabled: bool,
+    scroll_events: u64,
+    redraws: u64,
+    buffer_time: Duration,
+    raster_time: Duration,
+    presentation_time: Duration,
+    toolbar_time: Duration,
+    grid_time: Duration,
+    minimap_time: Duration,
+    started: Instant,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollStatsReport {
+    scroll_events: u64,
+    redraws: u64,
+    buffer_time: Duration,
+    raster_time: Duration,
+    presentation_time: Duration,
+    toolbar_time: Duration,
+    grid_time: Duration,
+    minimap_time: Duration,
+}
+
+impl ScrollStats {
+    fn new(enabled: bool, now: Instant) -> Self {
+        Self {
+            enabled,
+            scroll_events: 0,
+            redraws: 0,
+            buffer_time: Duration::ZERO,
+            raster_time: Duration::ZERO,
+            presentation_time: Duration::ZERO,
+            toolbar_time: Duration::ZERO,
+            grid_time: Duration::ZERO,
+            minimap_time: Duration::ZERO,
+            started: now,
+        }
+    }
+
+    fn note_scroll_event(&mut self, now: Instant) -> Option<ScrollStatsReport> {
+        let report = self.advance(now);
+        if self.enabled {
+            self.scroll_events = self.scroll_events.saturating_add(1);
+        }
+        report
+    }
+
+    fn note_redraw(&mut self, now: Instant) -> Option<ScrollStatsReport> {
+        let report = self.advance(now);
+        if self.enabled {
+            self.redraws = self.redraws.saturating_add(1);
+        }
+        report
+    }
+
+    fn note_frame(&mut self, timing: FrameTiming, now: Instant) -> Option<ScrollStatsReport> {
+        if self.enabled {
+            self.buffer_time += timing.buffer_acquisition;
+            self.raster_time += timing.rasterization;
+            self.presentation_time += timing.presentation;
+            self.toolbar_time += timing.toolbar;
+            self.grid_time += timing.grid;
+            self.minimap_time += timing.minimap;
+        }
+        self.advance(now)
+    }
+
+    fn advance(&mut self, now: Instant) -> Option<ScrollStatsReport> {
+        if !self.enabled || now.saturating_duration_since(self.started) < Duration::from_secs(1) {
+            return None;
+        }
+        let report = ScrollStatsReport {
+            scroll_events: std::mem::take(&mut self.scroll_events),
+            redraws: std::mem::take(&mut self.redraws),
+            buffer_time: std::mem::take(&mut self.buffer_time),
+            raster_time: std::mem::take(&mut self.raster_time),
+            presentation_time: std::mem::take(&mut self.presentation_time),
+            toolbar_time: std::mem::take(&mut self.toolbar_time),
+            grid_time: std::mem::take(&mut self.grid_time),
+            minimap_time: std::mem::take(&mut self.minimap_time),
+        };
+        self.started = now;
+        (report.redraws > 0).then_some(report)
+    }
+}
+
+fn print_scroll_stats(report: ScrollStatsReport) {
+    let frames = report.redraws as f64;
+    let milliseconds = |duration: Duration| duration.as_secs_f64() * 1_000.0 / frames;
+    let measured = report.toolbar_time + report.grid_time + report.minimap_time;
+    let other = report.raster_time.saturating_sub(measured);
+    println!(
+        "debug: scroll={}/s redraw={}/s frame={:.2}ms [buffer={:.2} raster={:.2} present={:.2}] raster=[toolbar={:.2} grid={:.2} minimap={:.2} other={:.2}]",
+        report.scroll_events,
+        report.redraws,
+        milliseconds(report.buffer_time + report.raster_time + report.presentation_time),
+        milliseconds(report.buffer_time),
+        milliseconds(report.raster_time),
+        milliseconds(report.presentation_time),
+        milliseconds(report.toolbar_time),
+        milliseconds(report.grid_time),
+        milliseconds(report.minimap_time),
+        milliseconds(other),
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +616,9 @@ impl EditorWindow {
                 _ => unreachable!(),
             };
         }
+        if drag.document_changed {
+            self.content_index.invalidate();
+        }
         self.mouse_drag = Some(drag);
         self.request_redraw();
     }
@@ -529,6 +686,24 @@ impl EditorWindow {
 
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    pub fn note_scroll_event(&mut self) {
+        if let Some(report) = self.scroll_stats.note_scroll_event(Instant::now()) {
+            print_scroll_stats(report);
+        }
+    }
+
+    pub fn note_redraw(&mut self) {
+        if let Some(report) = self.scroll_stats.note_redraw(Instant::now()) {
+            print_scroll_stats(report);
+        }
+    }
+
+    pub fn report_scroll_event_stats(&mut self, now: Instant) {
+        if let Some(report) = self.scroll_stats.advance(now) {
+            print_scroll_stats(report);
+        }
     }
 
     pub fn set_mouse_toolbar_hotspot(&mut self, hotspot: Option<usize>) {
@@ -619,6 +794,9 @@ impl EditorWindow {
     }
 
     pub fn record_present(&mut self, timing: FrameTiming, now: Instant) {
+        if let Some(report) = self.scroll_stats.note_frame(timing, now) {
+            print_scroll_stats(report);
+        }
         self.perf.record_present(timing, now);
     }
 
@@ -641,6 +819,24 @@ impl EditorWindow {
 
     pub fn mark_document_dirty(&mut self) {
         self.document_dirty = true;
+    }
+
+    fn refresh_content_index(&mut self) {
+        self.content_index.refresh(&self.state);
+    }
+
+    pub fn render(&mut self, config: &AppConfig) -> Result<FrameTiming> {
+        self.refresh_content_index();
+        let toolbar_hotspot_hovered = self.toolbar_hotspot_hovered();
+        self.surface.render(
+            &self.window,
+            &self.state,
+            self.content_index.cells(),
+            &self.renderer,
+            config,
+            self.viewport,
+            toolbar_hotspot_hovered,
+        )
     }
 
     pub fn history_snapshot(&self) -> HistorySnapshot {
@@ -676,12 +872,13 @@ impl EditorWindow {
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
-        let content = self.state.content_cells();
+        self.refresh_content_index();
+        let content = self.content_index.cells();
         resolve_navigation_origin(
             self.viewport.origin(cell_size),
             cursor,
             (layout.cols.max(1), layout.rows.max(1)),
-            &content,
+            content,
         )
     }
 
@@ -709,6 +906,7 @@ impl EditorWindow {
 
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.state.restore_edit_snapshot(snapshot.edit);
+        self.content_index.invalidate();
         self.viewport = snapshot.viewport;
         self.ensure_cursor_in_viewport();
         self.mark_document_dirty();
@@ -789,6 +987,9 @@ impl EditorWindow {
             &previous_state.toolbar,
             &self.state.toolbar,
         );
+        if document_changed {
+            self.content_index.invalidate();
+        }
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let view_mode_changed = reconcile_view_cursor(
@@ -800,6 +1001,9 @@ impl EditorWindow {
             layout.grid_top,
         );
         let prepend = self.state.take_pending_prepend();
+        if prepend != (0, 0) {
+            self.content_index.invalidate();
+        }
         self.viewport
             .compensate_for_prepend(prepend.0, prepend.1, cell_size);
 
@@ -822,14 +1026,15 @@ impl EditorWindow {
 
         let current = self.viewport.origin(cell_size);
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.state.content_cells();
+        self.refresh_content_index();
+        let content = self.content_index.cells();
 
         if let Some(origin) = resolve_state_change_origin(
             viewport_policy,
             current,
             self.state.grid.cursor_pos,
             viewport_cells,
-            &content,
+            content,
         ) {
             self.menu_selections_dirty |= menu_selections_changed;
             if origin != current {
@@ -843,7 +1048,7 @@ impl EditorWindow {
             debug_assert!(
                 viewport_policy == StateChangeViewportPolicy::CursorOnly
                     || content.is_empty()
-                    || content_intersects_inner_screen(origin, viewport_cells, &content)
+                    || content_intersects_inner_screen(origin, viewport_cells, content)
             );
             if !document_changed {
                 return false;
@@ -858,6 +1063,7 @@ impl EditorWindow {
         }
 
         self.state = previous_state;
+        self.content_index.invalidate();
         self.viewport = previous_viewport;
         false
     }
@@ -870,6 +1076,7 @@ impl EditorWindow {
         self.menu_selections_dirty |=
             durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
         self.state.compact_blank_runs_preserving_cursor();
+        self.content_index.invalidate();
         self.ensure_cursor_in_viewport();
         let previous = HistorySnapshot {
             edit: previous_state.edit_snapshot(),
@@ -892,10 +1099,11 @@ impl EditorWindow {
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let current = self.viewport.origin(cell_size);
-        let content = self.state.content_cells();
+        self.refresh_content_index();
+        let content = self.content_index.cells();
         let old_cursor = self.state.grid.cursor_pos;
         let (cursor, origin) =
-            normalized_cursor_and_origin(current, old_cursor, viewport_cells, &content);
+            normalized_cursor_and_origin(current, old_cursor, viewport_cells, content);
         if cursor != old_cursor {
             self.state.clamp_cursor_to_content(cursor);
         }
@@ -908,7 +1116,7 @@ impl EditorWindow {
             viewport_cells
         ));
         debug_assert!(
-            content.is_empty() || content_intersects_inner_screen(origin, viewport_cells, &content)
+            content.is_empty() || content_intersects_inner_screen(origin, viewport_cells, content)
         );
     }
 
@@ -919,7 +1127,8 @@ impl EditorWindow {
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.state.content_cells();
+        self.refresh_content_index();
+        let content = self.content_index.cells();
         self.view_cursor_anchor.get_or_insert_with(|| {
             ViewCursorAnchor::capture(
                 self.state.grid.cursor_pos,
@@ -931,7 +1140,7 @@ impl EditorWindow {
         let changed = match command {
             ViewCommand::Pan(direction) => pan_viewport(&mut self.viewport, direction, cell_size),
             ViewCommand::Center => {
-                center_viewport(&mut self.viewport, cell_size, viewport_cells, &content)
+                center_viewport(&mut self.viewport, cell_size, viewport_cells, content)
             }
         };
         if changed {
@@ -1042,12 +1251,13 @@ impl EditorWindow {
         );
 
         let viewport_cells = (new_layout.cols.max(1), new_layout.rows.max(1));
-        let content = self.state.content_cells();
+        self.refresh_content_index();
+        let content = self.content_index.cells();
         let origin = self.viewport.origin(new_cell_size);
-        if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, &content)
+        if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, content)
         {
             if let Some(origin) =
-                constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, &content)
+                constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, content)
             {
                 self.viewport.set_origin(origin, new_cell_size);
             } else {
@@ -1055,7 +1265,7 @@ impl EditorWindow {
                     origin,
                     self.state.grid.cursor_pos,
                     viewport_cells,
-                    &content,
+                    content,
                 );
                 self.state.clamp_cursor_to_content(cursor);
                 self.viewport.set_origin(origin, new_cell_size);
@@ -1537,6 +1747,7 @@ pub fn create_editor_window(
     elwt: &ActiveEventLoop,
     config: &AppConfig,
     document_session: &DocumentSession,
+    debug: bool,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
     let surface = WindowSurface::new(&window, config)?;
@@ -1575,6 +1786,7 @@ pub fn create_editor_window(
         }
         DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
     }
+    let content_index = ContentIndex::new(&state);
     let mut editor = EditorWindow {
         window,
         surface,
@@ -1589,11 +1801,13 @@ pub fn create_editor_window(
         scroll_pan: ScrollPan::default(),
         pinch_zoom_remainder: 0.0,
         wheel_zoom_remainder: 0.0,
+        scroll_stats: ScrollStats::new(debug, Instant::now()),
         state,
         renderer,
         viewport,
         view_cursor_anchor: None,
         history: EditHistory::default(),
+        content_index,
         perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
         document_session: document_session.clone(),
@@ -1658,6 +1872,7 @@ pub fn handle_command(
     config: &AppConfig,
     document_session: &DocumentSession,
     recent_documents: &[PathBuf],
+    debug: bool,
 ) {
     let target = source_window_id
         .filter(|window_id| windows.contains_key(window_id))
@@ -1665,14 +1880,16 @@ pub fn handle_command(
 
     match command {
         AppCommand::WindowNew if document_session.is_stdin() => {}
-        AppCommand::WindowNew => match create_editor_window(elwt, config, document_session) {
-            Ok(mut editor) => {
-                editor.set_document_history_enabled(document_session.allows_document_history());
-                editor.set_recent_documents(recent_documents);
-                windows.insert(editor.window_id(), editor);
+        AppCommand::WindowNew => {
+            match create_editor_window(elwt, config, document_session, debug) {
+                Ok(mut editor) => {
+                    editor.set_document_history_enabled(document_session.allows_document_history());
+                    editor.set_recent_documents(recent_documents);
+                    windows.insert(editor.window_id(), editor);
+                }
+                Err(error) => log_error(format!("new window creation failed: {error:#}")),
             }
-            Err(error) => log_error(format!("new window creation failed: {error:#}")),
-        },
+        }
         AppCommand::WindowClose => {
             if let Some(window_id) = target {
                 close_window(windows, window_id, elwt);
@@ -1874,6 +2091,61 @@ mod tests {
             })
             .collect();
         state
+    }
+
+    #[test]
+    fn content_index_rebuilds_only_after_document_invalidation() {
+        let mut state = state_with_rows(&["a"]);
+        let mut index = ContentIndex::new(&state);
+
+        index.refresh(&state);
+        index.refresh(&state);
+        assert_eq!(index.rebuilds(), 1);
+        assert_eq!(index.cells(), &[Coord::default()]);
+
+        state.grid.lines[0].push(Atom {
+            face: Face::default(),
+            contents: "b".to_owned(),
+        });
+        index.invalidate();
+        index.refresh(&state);
+
+        assert_eq!(index.rebuilds(), 2);
+        assert_eq!(
+            index.cells(),
+            &[Coord::default(), Coord { line: 0, column: 1 }]
+        );
+    }
+
+    #[test]
+    fn scroll_stats_reports_each_active_second_and_skips_idle_seconds() {
+        let started = Instant::now();
+        let mut stats = ScrollStats::new(true, started);
+        for _ in 0..3 {
+            assert!(
+                stats
+                    .note_scroll_event(started + Duration::from_millis(100))
+                    .is_none()
+            );
+        }
+        for _ in 0..2 {
+            assert!(
+                stats
+                    .note_redraw(started + Duration::from_millis(100))
+                    .is_none()
+            );
+        }
+
+        let report = stats.advance(started + Duration::from_secs(1)).unwrap();
+
+        assert_eq!(report.scroll_events, 3);
+        assert_eq!(report.redraws, 2);
+        assert!(stats.advance(started + Duration::from_secs(2)).is_none());
+
+        let mut disabled = ScrollStats::new(false, started);
+        assert!(disabled.note_scroll_event(started).is_none());
+        assert!(disabled.note_redraw(started).is_none());
+        assert!(disabled.advance(started + Duration::from_secs(2)).is_none());
     }
 
     fn line_mouse_state() -> Editor {
@@ -2105,25 +2377,35 @@ mod tests {
         );
 
         let mut pan = ScrollPan::default();
-        pan.queue((0.4, -0.4));
-        pan.queue((0.4, -0.4));
-        assert_eq!(pan.next_step((9.0, 13.0)), (0, 0));
-        pan.queue((0.4, -0.4));
-        assert_eq!(pan.next_step((9.0, 13.0)), (1, -1));
-        pan.consume((1, -1), (1, -1));
-        pan.queue((-0.4, 0.4));
-        assert_eq!(pan.next_step((9.0, 13.0)), (0, 0));
+        for _ in 0..3 {
+            pan.queue((0.4, -0.4));
+        }
+        let step = pan.next_step((9.0, 13.0));
+        assert_eq!(step, (1, -1));
+        pan.consume(step, step);
+        assert!(!pan.is_active());
     }
 
     #[test]
-    fn queued_scroll_is_applied_without_animation_lag() {
+    fn queued_scroll_is_applied_directly_without_synthetic_motion() {
+        let mut pan = ScrollPan::default();
+        pan.queue((3.0, -5.0));
+        pan.queue((4.0, -6.0));
+        pan.queue((5.0, -7.0));
+
+        let step = pan.next_step((8.0, 16.0));
+        assert_eq!(step, (12, -18));
+        pan.consume(step, step);
+        assert!(!pan.is_active());
+        assert_eq!(pan.next_step((8.0, 16.0)), (0, 0));
+    }
+
+    #[test]
+    fn line_scroll_is_applied_without_easing() {
         let mut pan = ScrollPan::default();
         pan.queue((16.0, -32.0));
 
-        let step = pan.next_step((8.0, 16.0));
-        assert_eq!(step, (16, -32));
-        pan.consume(step, step);
-        assert!(!pan.is_active());
+        assert_eq!(pan.next_step((8.0, 16.0)), (16, -32));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::app::AppConfig;
 use crate::diagnostics::log_error;
 use crate::editor::Editor;
 use crate::layout::ViewportOffset;
+use crate::model::Coord;
 use crate::perf::FrameTiming;
 
 pub struct WindowSurface {
@@ -72,6 +73,7 @@ impl WindowSurface {
         &mut self,
         window: &Window,
         state: &Editor,
+        content: &[Coord],
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,
@@ -82,6 +84,7 @@ impl WindowSurface {
             Backend::Metal(surface) => surface.render(
                 window,
                 state,
+                content,
                 renderer,
                 config,
                 viewport,
@@ -91,6 +94,7 @@ impl WindowSurface {
                 window,
                 surface,
                 state,
+                content,
                 renderer,
                 config,
                 viewport,

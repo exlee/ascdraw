@@ -11,6 +11,9 @@ pub struct FrameTiming {
     pub buffer_acquisition: Duration,
     pub rasterization: Duration,
     pub presentation: Duration,
+    pub toolbar: Duration,
+    pub grid: Duration,
+    pub minimap: Duration,
 }
 
 #[derive(Clone, Copy, Debug)]
