@@ -265,11 +265,8 @@ impl ScrollPan {
         self.y += delta.1;
     }
 
-    fn next_step(&self, cell_size: (usize, usize)) -> (i64, i64) {
-        (
-            scroll_animation_step(self.x, cell_size.0),
-            scroll_animation_step(self.y, cell_size.1),
-        )
+    fn next_step(&self, _cell_size: (usize, usize)) -> (i64, i64) {
+        (self.x.trunc() as i64, self.y.trunc() as i64)
     }
 
     fn consume(&mut self, requested: (i64, i64), applied: (i64, i64)) {
@@ -1287,17 +1284,6 @@ fn zoom_anchored_viewport(
     }
 }
 
-fn scroll_animation_step(pending: f64, cell_size: usize) -> i64 {
-    let whole = pending.trunc() as i64;
-    let magnitude = whole.unsigned_abs();
-    if magnitude <= 2 {
-        return whole;
-    }
-    let maximum = u64::try_from((cell_size / 2).max(1)).unwrap_or(u64::MAX);
-    let step = magnitude.div_ceil(2).min(maximum);
-    i64::try_from(step).unwrap_or(i64::MAX) * whole.signum()
-}
-
 fn consume_scroll_axis(pending: &mut f64, requested: i64, applied: i64) {
     if requested == 0 {
         return;
@@ -2080,23 +2066,14 @@ mod tests {
     }
 
     #[test]
-    fn queued_scroll_is_split_into_sub_cell_render_steps() {
+    fn queued_scroll_is_applied_without_animation_lag() {
         let mut pan = ScrollPan::default();
         pan.queue((16.0, -32.0));
 
-        let mut total = (0, 0);
-        let mut frames = 0;
-        while pan.is_active() {
-            let step = pan.next_step((8, 16));
-            assert!(step.0.unsigned_abs() <= 4);
-            assert!(step.1.unsigned_abs() <= 8);
-            pan.consume(step, step);
-            total.0 += step.0;
-            total.1 += step.1;
-            frames += 1;
-        }
-        assert_eq!(total, (16, -32));
-        assert!(frames > 1);
+        let step = pan.next_step((8, 16));
+        assert_eq!(step, (16, -32));
+        pan.consume(step, step);
+        assert!(!pan.is_active());
     }
 
     #[test]
