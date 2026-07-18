@@ -35,6 +35,7 @@ mod runtime;
 pub mod selection;
 mod title_policy;
 mod toolbar;
+mod toolbar_stamp;
 mod user_keys;
 
 use app::{
@@ -66,6 +67,7 @@ use runtime::window::{
     EditorWindow, close_window, create_editor_window, handle_command, modified_wheel_zooms,
     save_windows_on_exit,
 };
+use toolbar_stamp::{HotspotClick, hotspot_click, styled_toolbar_snapshot, toolbar_hotspot_at};
 use user_keys::{FontSizeAction, UserAction, UserKeys};
 
 fn main() -> ExitCode {
@@ -212,6 +214,7 @@ fn try_main() -> Result<ExitCode> {
                                 should_close = true;
                             }
                             editor.ensure_cursor_in_viewport();
+                            refresh_mouse_cell(editor, &config);
                             editor.request_redraw();
                         }
                         WindowEvent::RedrawRequested => {
@@ -225,6 +228,7 @@ fn try_main() -> Result<ExitCode> {
                                 &editor.renderer,
                                 &config,
                                 editor.viewport,
+                                editor.toolbar_hotspot_hovered(),
                             ) {
                                 Err(error) => {
                                     log_error(format!("render failed: {error:#}"));
@@ -505,26 +509,15 @@ fn try_main() -> Result<ExitCode> {
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             editor.mouse_position = Some((position.x, position.y));
-                            editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
-                                position.x,
-                                position.y,
-                                editor.window.inner_size().width as usize,
-                                &editor.renderer,
-                                editor.window.scale_factor(),
-                                &config,
-                                &editor.state.toolbar,
-                            );
-                            editor.mouse_cell = pointer_position_to_coord(
-                                position.x,
-                                position.y,
-                                &editor.renderer,
-                                editor.window.scale_factor(),
-                                &config,
-                                &editor.state.toolbar,
-                                editor.viewport,
-                            );
+                            refresh_mouse_cell(editor, &config);
                             editor.continue_mouse_drag();
                             editor.continue_passive_line_preview();
+                        }
+                        WindowEvent::CursorLeft { .. } => {
+                            editor.mouse_position = None;
+                            editor.mouse_toolbar_position = None;
+                            editor.mouse_cell = None;
+                            editor.set_mouse_toolbar_hotspot(None);
                         }
                         WindowEvent::MouseWheel { delta, .. } => {
                             let changed = if modified_wheel_zooms(editor.modifiers) {
@@ -547,28 +540,44 @@ fn try_main() -> Result<ExitCode> {
                             button: MouseButton::Left,
                             ..
                         } => {
-                            editor.cancel_scroll_pan();
-                            let toolbar_action =
-                                editor
-                                    .mouse_toolbar_position
-                                    .and_then(|(row, column, width)| {
+                            let hotspot_handled = match hotspot_click(
+                                editor.mouse_toolbar_hotspot(),
+                                editor.modifiers,
+                            ) {
+                                HotspotClick::Paste { box_width } => {
+                                    editor.cancel_scroll_pan();
+                                    editor.note_keypress(Instant::now());
+                                    paste_toolbar_under_cursor(editor, box_width);
+                                    editor.request_redraw();
+                                    true
+                                }
+                                HotspotClick::Consume => true,
+                                HotspotClick::Ignore => false,
+                            };
+                            if !hotspot_handled {
+                                editor.cancel_scroll_pan();
+                                let toolbar_action = editor.mouse_toolbar_position.and_then(
+                                    |(row, column, width)| {
                                         editor.state.toolbar_action_at(row, column, width)
-                                    });
-                            if let Some(action) = toolbar_action {
-                                editor.note_keypress(Instant::now());
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
-                                editor.state.apply_toolbar_action(action);
-                                let document_changed = editor.state.take_toolbar_document_change();
-                                editor.finish_state_change(
-                                    previous_state,
-                                    previous_viewport,
-                                    document_changed,
+                                    },
                                 );
-                                perform_pending_export(editor, &config);
-                                editor.request_redraw();
-                            } else if let Some(coord) = editor.mouse_cell {
-                                editor.begin_mouse_drag(coord);
+                                if let Some(action) = toolbar_action {
+                                    editor.note_keypress(Instant::now());
+                                    let previous_state = editor.state.clone();
+                                    let previous_viewport = editor.viewport;
+                                    editor.state.apply_toolbar_action(action);
+                                    let document_changed =
+                                        editor.state.take_toolbar_document_change();
+                                    editor.finish_state_change(
+                                        previous_state,
+                                        previous_viewport,
+                                        document_changed,
+                                    );
+                                    perform_pending_export(editor, &config);
+                                    editor.request_redraw();
+                                } else if let Some(coord) = editor.mouse_cell {
+                                    editor.begin_mouse_drag(coord);
+                                }
                             }
                         }
                         WindowEvent::MouseInput {
@@ -585,6 +594,7 @@ fn try_main() -> Result<ExitCode> {
                                 should_close = true;
                             }
                             editor.ensure_cursor_in_viewport();
+                            refresh_mouse_cell(editor, &config);
                             editor.request_redraw();
                         }
                         _ => {}
@@ -624,16 +634,52 @@ fn try_main() -> Result<ExitCode> {
 
 fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
     if let Some((x, y)) = editor.mouse_position {
+        let scale_factor = editor.window.scale_factor();
+        let viewport_width = editor.window.inner_size().width as usize;
+        editor.mouse_toolbar_position = pointer_position_to_toolbar_position(
+            x,
+            y,
+            viewport_width,
+            &editor.renderer,
+            scale_factor,
+            config,
+            &editor.state.toolbar,
+        );
         editor.mouse_cell = pointer_position_to_coord(
             x,
             y,
             &editor.renderer,
-            editor.window.scale_factor(),
+            scale_factor,
             config,
             &editor.state.toolbar,
             editor.viewport,
         );
+        let metrics = editor.renderer.title_metrics(scale_factor);
+        let hotspot = toolbar_hotspot_at(
+            x,
+            y,
+            viewport_width,
+            metrics.cell_width,
+            metrics.cell_height,
+            layout::content_top_padding(scale_factor, config.transparent_menubar),
+        );
+        editor.set_mouse_toolbar_hotspot(hotspot);
     }
+}
+
+fn paste_toolbar_under_cursor(editor: &mut EditorWindow, box_width: usize) -> bool {
+    let Some(snapshot) = styled_toolbar_snapshot(&editor.state, box_width) else {
+        return false;
+    };
+    editor.finish_history_transaction();
+    let previous_state = editor.state.clone();
+    let previous_viewport = editor.viewport;
+    let document_changed = editor.state.paste_styled_rectangle_at_cursor(&snapshot);
+    let changed = editor.finish_state_change(previous_state, previous_viewport, document_changed);
+    if changed {
+        editor.mark_document_dirty();
+    }
+    changed
 }
 
 #[cfg(test)]

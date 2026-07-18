@@ -10,7 +10,7 @@ use skia_safe::{
 };
 use softbuffer::Surface;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use winit::window::Window;
 
 use crate::app::{AppConfig, CursorMode, CursorShape, CursorShapeConfig};
@@ -22,6 +22,7 @@ use crate::layout::{LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, 
 use crate::model::{Atom, Face};
 use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
+use crate::toolbar_stamp::toolbar_atoms;
 
 mod export_png;
 mod jump;
@@ -31,8 +32,8 @@ mod window_surface;
 pub use export_png::{CanvasImage, render_canvas_image, render_canvas_layers_image};
 pub use window_surface::WindowSurface;
 
-const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
-const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
+pub(crate) const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
@@ -96,6 +97,7 @@ struct RenderFrame<'a> {
     layout: LayoutMetrics,
     width: usize,
     viewport: ViewportOffset,
+    toolbar_hotspot_hovered: bool,
 }
 
 pub fn render(
@@ -105,6 +107,7 @@ pub fn render(
     renderer: &Renderer,
     config: &AppConfig,
     viewport: ViewportOffset,
+    toolbar_hotspot_hovered: bool,
 ) -> Result<FrameTiming> {
     let buffer_started = std::time::Instant::now();
     let size = window.inner_size();
@@ -152,6 +155,7 @@ pub fn render(
             ),
             width,
             viewport,
+            toolbar_hotspot_hovered,
         },
     );
     let rasterization = raster_started.elapsed();
@@ -174,6 +178,7 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         layout,
         width,
         viewport,
+        toolbar_hotspot_hovered,
     } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
@@ -186,7 +191,14 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         width,
         config.transparent_menubar,
     );
-    render_toolbar(canvas, state, toolbar_metrics, layout.top_padding, width);
+    render_toolbar(
+        canvas,
+        state,
+        toolbar_metrics,
+        layout.top_padding,
+        width,
+        toolbar_hotspot_hovered,
+    );
 
     let grid_layout = visible_grid_layout(layout, metrics, viewport);
     let visible_cells = VisibleCanvasCells::from_layout(
@@ -456,6 +468,7 @@ fn render_toolbar(
     metrics: &CellMetrics,
     top_padding: usize,
     width: usize,
+    hotspot_hovered: bool,
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let mut rows = vec![(0, crate::toolbar::toolbar_border_spans(max_columns, true))];
@@ -486,6 +499,31 @@ fn render_toolbar(
     for (row, spans) in &rows {
         render_toolbar_span_outlines(canvas, *row, spans, state, metrics, top_padding);
     }
+    render_toolbar_hotspot(canvas, hotspot_hovered, max_columns, metrics, top_padding);
+}
+
+fn render_toolbar_hotspot(
+    canvas: &Canvas,
+    hovered: bool,
+    box_width: usize,
+    metrics: &CellMetrics,
+    top_padding: usize,
+) {
+    if !hovered || box_width < 2 {
+        return;
+    }
+    let mut paint = Paint::default();
+    paint.set_anti_alias(false);
+    paint.set_color(Rgba::rgb(0, 0, 0).to_color());
+    canvas.draw_rect(
+        Rect::from_xywh(
+            (PADDING + (box_width - 1) * metrics.cell_width.max(1)) as f32,
+            top_padding as f32,
+            metrics.cell_width.max(1) as f32,
+            metrics.cell_height as f32,
+        ),
+        &paint,
+    );
 }
 
 fn render_bottom_tooltip(
@@ -532,61 +570,6 @@ fn render_toolbar_span_contents(
             top_padding: top_padding + crate::toolbar::toolbar_row_offset(row, metrics.cell_height),
         },
     );
-}
-
-fn toolbar_atoms(spans: &[crate::toolbar::ToolbarSpan], state: &Editor) -> Vec<Atom> {
-    let mut atoms = Vec::new();
-    for span in spans {
-        let split = display_width_byte_index(&span.contents, span.bold_prefix);
-        let (bold, normal) = span.contents.split_at(split);
-        if !bold.is_empty() {
-            let mut face = toolbar_span_face(span, state);
-            face.attributes.push("bold".to_string());
-            atoms.push(Atom {
-                face,
-                contents: bold.to_string(),
-            });
-        }
-        if !normal.is_empty() {
-            atoms.push(Atom {
-                face: toolbar_span_face(span, state),
-                contents: normal.to_string(),
-            });
-        }
-    }
-    atoms
-}
-
-fn toolbar_span_face(span: &crate::toolbar::ToolbarSpan, state: &Editor) -> Face {
-    let mut face = if span.tooltip {
-        state.theme.tooltip.clone()
-    } else {
-        Face::default()
-    };
-    if let Some(foreground) = &span.foreground {
-        face.fg = foreground.clone();
-    }
-    face
-}
-
-fn display_width_byte_index(contents: &str, requested_width: usize) -> usize {
-    if requested_width == 0 {
-        return 0;
-    }
-    let mut width = 0;
-    let mut end = 0;
-    for (index, character) in contents.char_indices() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if width + character_width > requested_width {
-            break;
-        }
-        width += character_width;
-        end = index + character.len_utf8();
-        if width == requested_width {
-            break;
-        }
-    }
-    end
 }
 
 fn render_toolbar_span_outlines(
@@ -2051,6 +2034,49 @@ mod tests {
                 .fg
             )
         );
+    }
+
+    #[test]
+    fn toolbar_hover_fill_appears_only_in_the_top_right_corner_cell() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8,
+            cell_height: 16,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let columns = 20;
+        let top = 7;
+        let width = PADDING * 2 + columns * metrics.cell_width;
+        let height = top + metrics.cell_height + 2;
+        let hotspot_x = PADDING + (columns - 1) * metrics.cell_width;
+
+        let render_pixels = |hovered| {
+            let mut pixels = vec![0xff; width * height * 4];
+            let image_info = ImageInfo::new(
+                (width as i32, height as i32),
+                ColorType::BGRA8888,
+                AlphaType::Premul,
+                None,
+            );
+            let mut surface =
+                surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                    .expect("test surface");
+            render_toolbar_hotspot(surface.canvas(), hovered, columns, &metrics, top);
+            drop(surface);
+            pixels
+        };
+
+        let hidden = render_pixels(false);
+        let shown = render_pixels(true);
+        let center =
+            ((top + metrics.cell_height / 2) * width + hotspot_x + metrics.cell_width / 2) * 4;
+        let immediately_left = ((top + metrics.cell_height / 2) * width + hotspot_x - 1) * 4;
+        assert_eq!(&hidden[center..center + 4], &[0xff; 4]);
+        assert_eq!(&shown[center..center + 4], &[0, 0, 0, 0xff]);
+        assert_eq!(&shown[immediately_left..immediately_left + 4], &[0xff; 4]);
     }
 
     #[test]

@@ -75,13 +75,27 @@ impl WindowSurface {
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,
+        toolbar_hotspot_hovered: bool,
     ) -> Result<FrameTiming> {
         match &mut self.backend {
             #[cfg(target_os = "macos")]
-            Backend::Metal(surface) => surface.render(window, state, renderer, config, viewport),
-            Backend::Softbuffer(surface) => {
-                render(window, surface, state, renderer, config, viewport)
-            }
+            Backend::Metal(surface) => surface.render(
+                window,
+                state,
+                renderer,
+                config,
+                viewport,
+                toolbar_hotspot_hovered,
+            ),
+            Backend::Softbuffer(surface) => render(
+                window,
+                surface,
+                state,
+                renderer,
+                config,
+                viewport,
+                toolbar_hotspot_hovered,
+            ),
         }
     }
 }

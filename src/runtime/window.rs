@@ -30,6 +30,7 @@ use crate::model::{Coord, Direction};
 use crate::perf::{FrameTiming, PerfDiagnostics};
 use crate::render::{Renderer, WindowSurface, load_renderer};
 use crate::title_policy::window_attributes;
+use crate::toolbar_stamp::toolbar_hotspot_at;
 use crate::user_keys::FontSizeAction;
 
 #[cfg(target_os = "macos")]
@@ -125,6 +126,7 @@ pub struct EditorWindow {
     pub mouse_position: Option<(f64, f64)>,
     pub mouse_cell: Option<Coord>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
+    mouse_toolbar_hotspot: Option<usize>,
     mouse_drag: Option<MouseDrag>,
     last_line_click: Option<(Instant, Coord)>,
     scroll_pan: ScrollPan,
@@ -511,6 +513,21 @@ impl EditorWindow {
         self.window.request_redraw();
     }
 
+    pub fn set_mouse_toolbar_hotspot(&mut self, hotspot: Option<usize>) {
+        if self.mouse_toolbar_hotspot != hotspot {
+            self.mouse_toolbar_hotspot = hotspot;
+            self.request_redraw();
+        }
+    }
+
+    pub fn mouse_toolbar_hotspot(&self) -> Option<usize> {
+        self.mouse_toolbar_hotspot
+    }
+
+    pub fn toolbar_hotspot_hovered(&self) -> bool {
+        self.mouse_toolbar_hotspot.is_some()
+    }
+
     pub fn apply_config(&mut self, config: &AppConfig) {
         let scale_factor = self.window.scale_factor();
         let old_metrics = self.renderer.metrics(scale_factor);
@@ -546,6 +563,17 @@ impl EditorWindow {
         }
         if let Err(error) = self.surface.apply_config(config) {
             log_error(format!("renderer configuration failed: {error:#}"));
+        }
+        if let Some((x, y)) = self.mouse_position {
+            let metrics = self.renderer.title_metrics(scale_factor);
+            self.mouse_toolbar_hotspot = toolbar_hotspot_at(
+                x,
+                y,
+                self.window.inner_size().width as usize,
+                metrics.cell_width,
+                metrics.cell_height,
+                content_top_padding(scale_factor, config.transparent_menubar),
+            );
         }
         self.request_redraw();
     }
@@ -1503,6 +1531,7 @@ pub fn create_editor_window(
         mouse_position: None,
         mouse_cell: Some(Coord::default()),
         mouse_toolbar_position: None,
+        mouse_toolbar_hotspot: None,
         mouse_drag: None,
         last_line_click: None,
         scroll_pan: ScrollPan::default(),

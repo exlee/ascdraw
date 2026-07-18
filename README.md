@@ -114,6 +114,11 @@ The toolbar displays every remaining path. Short groups use `group option`; long
 as in `2 1 3`. On a page, `1` through `9` choose the first nine entries and `0` chooses the tenth.
 Pending prefixes are highlighted, and Escape cancels an unfinished path.
 The toolbar's bottom-right corner shows the cursor as `(x,y)`, with right and down positive.
+Hover the toolbar's top-right corner to reveal its black stamp control. Command-click that corner on
+macOS, or Control-click it on other platforms, to place the complete visible toolbar on the active
+layer with the cursor as its top-left corner. The stamped cells retain the toolbar's current text,
+box, alignment, colors, and styles, and the placement is one undoable edit. A plain click on the
+corner does nothing.
 
 Press `0 5` to select Togls in the Files/Togls menu. Dark Mode (`0 5 1`) reverses the default
 foreground and background while preserving explicit selection, highlight, cursor, and tooltip

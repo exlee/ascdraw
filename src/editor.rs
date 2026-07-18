@@ -979,6 +979,39 @@ impl Editor {
         true
     }
 
+    pub fn paste_styled_rectangle_at_cursor(&mut self, rectangle: &TextRectangle) -> bool {
+        if rectangle.width == 0
+            || rectangle.rows.is_empty()
+            || rectangle.rows.iter().any(|row| {
+                display_width(row) != rectangle.width
+                    || row.iter().any(|atom| atom.contents.contains('\n'))
+            })
+        {
+            return false;
+        }
+        self.cancel_line_preview();
+        self.end_stroke();
+        self.shape_preview = None;
+        self.move_lift = None;
+
+        let origin = self.grid.cursor_pos;
+        let bounds = rectangle.bounds_at(origin);
+        let mut lines = self.grid.lines.clone();
+        overwrite_rectangle(&mut lines, origin, rectangle);
+        let mut line_markers = self.line_markers.clone();
+        line_markers.retain(|marker| !bounds.contains(marker.coord));
+        if lines == self.grid.lines && line_markers == self.line_markers {
+            return false;
+        }
+
+        self.grid.lines = lines;
+        self.line_markers = line_markers;
+        self.selection.collapse(origin);
+        self.grid.cursor_pos = origin;
+        self.cursor_index = index_for_column(&self.grid.lines[origin.line], origin.column);
+        true
+    }
+
     pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
         self.layers.reset();
         self.toolbar.sync_layer_count(self.layers.layers().len());
@@ -2445,6 +2478,81 @@ mod tests {
         assert_eq!(state.selection_bounds().width(), 2);
         assert_eq!(state.selection_bounds().height(), 2);
         assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
+    }
+
+    #[test]
+    fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo() {
+        use crate::history::{EditHistory, HistorySnapshot};
+        use crate::layout::ViewportOffset;
+        use crate::selection::{CanvasRegion, region_atoms};
+        use crate::toolbar_stamp::styled_toolbar_snapshot;
+
+        let mut editor = state();
+        editor.insert("base");
+        let base = editor.active_layer_id();
+        assert!(editor.add_layer_above(base));
+        let upper = editor.active_layer_id();
+        let base_before = editor.layer_views()[0].lines.to_vec();
+        editor.move_to(Coord { line: 2, column: 3 });
+        editor.canvas_origin = Coord { line: 4, column: 5 };
+        let origin = editor.grid.cursor_pos;
+        let signed_origin = editor.cursor_coordinates();
+        let rectangle = styled_toolbar_snapshot(&editor, 52).unwrap();
+        let previous = HistorySnapshot {
+            edit: editor.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+
+        assert!(editor.paste_styled_rectangle_at_cursor(&rectangle));
+        assert_eq!(editor.grid.cursor_pos, origin);
+        assert_eq!(editor.cursor_coordinates(), signed_origin);
+        assert!(editor.selection.is_collapsed());
+        assert_eq!(editor.active_layer_id(), upper);
+        assert_eq!(editor.layer_views()[0].lines, base_before);
+        let pasted = region_atoms(
+            &editor.grid.lines,
+            CanvasRegion {
+                left: origin.column as i64,
+                top: origin.line as i64,
+                width: rectangle.width,
+                height: rectangle.rows.len(),
+            },
+        );
+        assert_eq!(pasted, rectangle.rows);
+        assert!(pasted.iter().any(|row| {
+            row.iter().any(|atom| {
+                atom.contents.bytes().all(|byte| byte == b' ') && atom.face.bg != "default"
+            })
+        }));
+
+        let current = HistorySnapshot {
+            edit: editor.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(previous.clone(), &current));
+        assert_eq!(history.lengths(), (1, 0));
+        let undone = history.undo(current).unwrap();
+        editor.restore_edit_snapshot(undone.edit);
+        assert_eq!(editor.edit_snapshot(), previous.edit);
+        assert_eq!(history.lengths(), (0, 1));
+    }
+
+    #[test]
+    fn plain_toolbar_hotspot_click_is_an_exact_editor_no_op() {
+        use crate::toolbar_stamp::{HotspotClick, hotspot_click, styled_toolbar_snapshot};
+
+        let mut editor = state();
+        editor.insert("unchanged");
+        let before = editor.edit_snapshot();
+        let click = hotspot_click(Some(48), ModifiersState::empty());
+        if let HotspotClick::Paste { box_width } = click {
+            let rectangle = styled_toolbar_snapshot(&editor, box_width).unwrap();
+            editor.paste_styled_rectangle_at_cursor(&rectangle);
+        }
+
+        assert_eq!(click, HotspotClick::Consume);
+        assert_eq!(editor.edit_snapshot(), before);
     }
 
     #[test]

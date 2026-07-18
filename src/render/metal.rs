@@ -93,6 +93,7 @@ impl MetalRenderer {
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,
+        toolbar_hotspot_hovered: bool,
     ) -> Result<FrameTiming> {
         let size = window.inner_size();
         let width = size.width.max(1) as usize;
@@ -138,6 +139,7 @@ impl MetalRenderer {
                 ),
                 width,
                 viewport,
+                toolbar_hotspot_hovered,
             },
         );
         self.skia.flush_and_submit();
