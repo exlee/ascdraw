@@ -1,17 +1,21 @@
 use super::*;
 
+const BAND_GAP_ROWS: usize = 1;
+
+struct MenuBlock {
+    width: usize,
+    rows: Vec<Vec<ToolbarSpan>>,
+}
+
 #[derive(Clone, Copy)]
-struct CategoryPlacement {
-    category: usize,
+struct BlockPlacement {
+    block: usize,
     row: usize,
+    column: usize,
 }
 
 pub(super) fn hierarchical_menu_row_count(toolbar: &ToolbarState, box_width: usize) -> usize {
-    category_placements(toolbar, box_width)
-        .into_iter()
-        .map(|placement| placement.row + category_height(toolbar, placement.category))
-        .max()
-        .unwrap_or(0)
+    hierarchical_menu_rows(toolbar, box_width).len()
 }
 
 pub(super) fn hierarchical_menu_spans(
@@ -19,103 +23,120 @@ pub(super) fn hierarchical_menu_spans(
     row: usize,
     box_width: usize,
 ) -> Vec<ToolbarSpan> {
-    let layout = toolbar
-        .layout()
-        .expect("hierarchical menu rendering excludes Utilities");
     let relative_row = row - MENU_FIRST_ROW;
-    let mut spans = Vec::new();
-    let placements = category_placements(toolbar, box_width);
-    let active_band_row = placements
-        .iter()
-        .filter(|placement| placement.row <= relative_row)
-        .map(|placement| placement.row)
-        .max();
-    for placement in placements
-        .into_iter()
-        .filter(|placement| Some(placement.row) == active_band_row)
-    {
-        let category = placement.category;
-        let category_row = relative_row - placement.row;
-        if !spans.is_empty() {
-            spans.push(plain_span(GAP.to_string()));
-        }
-        let options = layout.options[category];
-        let prefix_width = submenu_prefix_width(layout.labels[category], category, options.len());
-        let cell_width = submenu_cell_width(prefix_width, options);
-        let cell_start = spans_width(&spans);
-        match category_row.checked_sub(1) {
-            None => push_header(&mut spans, layout.labels[category], prefix_width, options),
-            Some(page) => push_page(
-                &mut spans,
-                toolbar,
-                category,
-                page,
-                prefix_width,
-                options,
-                layout.selected[category],
-                layout.exclusive_submenu,
-                cell_width,
-            ),
-        }
-        pad_spans_to_width(&mut spans, cell_start + cell_width);
-    }
-    spans
+    hierarchical_menu_rows(toolbar, box_width)
+        .get(relative_row)
+        .cloned()
+        .unwrap_or_default()
 }
 
-fn category_placements(toolbar: &ToolbarState, box_width: usize) -> Vec<CategoryPlacement> {
+fn hierarchical_menu_rows(toolbar: &ToolbarState, box_width: usize) -> Vec<Vec<ToolbarSpan>> {
+    let blocks = category_blocks(toolbar);
+    let placements = block_placements(toolbar, box_width, &blocks);
+    let row_count = placements
+        .iter()
+        .map(|placement| placement.row + blocks[placement.block].rows.len())
+        .max()
+        .unwrap_or(0);
+    let mut rows = vec![Vec::new(); row_count];
+    for placement in placements {
+        let block = &blocks[placement.block];
+        for (local_row, block_row) in block.rows.iter().enumerate() {
+            let row = &mut rows[placement.row + local_row];
+            pad_spans_to_width(row, placement.column);
+            row.extend(block_row.iter().cloned());
+        }
+    }
+    rows
+}
+
+fn category_blocks(toolbar: &ToolbarState) -> Vec<MenuBlock> {
     let layout = toolbar
         .layout()
         .expect("hierarchical menu layout excludes Utilities");
+    (0..layout.labels.len())
+        .map(|category| category_block(toolbar, category))
+        .collect()
+}
+
+fn category_block(toolbar: &ToolbarState, category: usize) -> MenuBlock {
+    let layout = toolbar
+        .layout()
+        .expect("hierarchical menu layout excludes Utilities");
+    let options = layout.options[category];
+    let prefix_width = submenu_prefix_width(layout.labels[category], category, options.len());
+    let width = submenu_cell_width(prefix_width, options);
+    let mut rows = Vec::with_capacity(1 + options.len().div_ceil(OPTIONS_PER_PAGE));
+    let mut header = Vec::new();
+    push_header(&mut header, layout.labels[category], prefix_width, options);
+    pad_spans_to_width(&mut header, width);
+    rows.push(header);
+    for page in 0..options.len().div_ceil(OPTIONS_PER_PAGE) {
+        let mut row = Vec::new();
+        push_page(
+            &mut row,
+            toolbar,
+            category,
+            page,
+            prefix_width,
+            options,
+            layout.selected[category],
+            layout.exclusive_submenu,
+            width,
+        );
+        pad_spans_to_width(&mut row, width);
+        rows.push(row);
+    }
+    MenuBlock { width, rows }
+}
+
+fn block_placements(
+    toolbar: &ToolbarState,
+    box_width: usize,
+    blocks: &[MenuBlock],
+) -> Vec<BlockPlacement> {
     let available_width = toolbar_content_width(box_width);
     let auxiliary_width = toolbar.auxiliary_panel_width_for_width(box_width);
     let auxiliary_height = toolbar.auxiliary_panel_row_count_for_width(box_width);
     let first_band_width = available_width.saturating_sub(
         auxiliary_width + usize::from(auxiliary_width > 0) * UnicodeWidthStr::width(GAP),
     );
-    let mut placements = Vec::with_capacity(layout.labels.len());
+    let gap_width = UnicodeWidthStr::width(GAP);
+    let mut placements = Vec::with_capacity(blocks.len());
     let mut band_row = 0;
     let mut band_width = 0usize;
     let mut band_height = 0;
-    for category in 0..layout.labels.len() {
-        let options = layout.options[category];
-        let prefix_width = submenu_prefix_width(layout.labels[category], category, options.len());
-        let category_width = submenu_cell_width(prefix_width, options);
+    for (block_index, block) in blocks.iter().enumerate() {
         let band_limit = if band_row == 0 {
             first_band_width
         } else {
             available_width
         };
-        let width_with_gap =
-            category_width + usize::from(band_width > 0) * UnicodeWidthStr::width(GAP);
+        let width_with_gap = block.width + usize::from(band_width > 0) * gap_width;
         if (band_width > 0 && band_width.saturating_add(width_with_gap) > band_limit)
-            || (band_width == 0 && band_row == 0 && category_width > band_limit)
+            || (band_width == 0 && band_row == 0 && block.width > band_limit)
         {
-            band_row = if band_row == 0 {
+            let completed_height = if band_row == 0 {
                 auxiliary_height.max(band_height)
             } else {
-                band_row + band_height
+                band_height
             };
+            if completed_height > 0 {
+                band_row += completed_height + BAND_GAP_ROWS;
+            }
             band_width = 0;
             band_height = 0;
         }
-        placements.push(CategoryPlacement {
-            category,
+        let column = band_width + usize::from(band_width > 0) * gap_width;
+        placements.push(BlockPlacement {
+            block: block_index,
             row: band_row,
+            column,
         });
-        band_width = band_width.saturating_add(
-            category_width + usize::from(band_width > 0) * UnicodeWidthStr::width(GAP),
-        );
-        band_height = band_height.max(category_height(toolbar, category));
+        band_width = column.saturating_add(block.width);
+        band_height = band_height.max(block.rows.len());
     }
     placements
-}
-
-fn category_height(toolbar: &ToolbarState, category: usize) -> usize {
-    let options = toolbar
-        .layout()
-        .expect("hierarchical menu layout excludes Utilities")
-        .options[category];
-    1 + options.len().div_ceil(OPTIONS_PER_PAGE)
 }
 
 fn push_header(spans: &mut Vec<ToolbarSpan>, label: &str, prefix_width: usize, options: &[&str]) {

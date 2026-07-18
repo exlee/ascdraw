@@ -2186,6 +2186,35 @@ mod tests {
                 1
             );
         }
+        let header_rows = layout
+            .labels
+            .iter()
+            .map(|label| {
+                rows.iter()
+                    .position(|row| spans_text(row).contains(&format!("{label}:")))
+                    .expect("every category has a header row")
+            })
+            .collect::<Vec<_>>();
+        for (category, header_row) in header_rows.iter().copied().enumerate() {
+            assert!(spans_text(&rows[header_row]).starts_with(layout.labels[category]));
+            if category > 0 {
+                assert!(rows[header_row - 1].is_empty());
+                assert_eq!(
+                    header_row,
+                    header_rows[category - 1]
+                        + 1
+                        + layout.options[category - 1]
+                            .len()
+                            .div_ceil(OPTIONS_PER_PAGE)
+                        + 1
+                );
+            }
+        }
+        assert_eq!(
+            option_start(&rows[header_rows[1] + 1], 1, 0),
+            option_start(&rows[header_rows[3] + 1], 3, 0),
+            "equally prefixed wrapped blocks share the same option column"
+        );
 
         let expected = ToolbarAction::SelectSubmenu {
             submenu: layout.labels.len() - 1,

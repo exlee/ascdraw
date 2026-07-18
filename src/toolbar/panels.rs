@@ -437,8 +437,11 @@ mod tests {
         assert_eq!(right_text(&rows[12]), "Files/Togls");
         assert!(rows.iter().all(|row| !text(row).contains("Decorators:")));
 
-        let drawing_row =
+        let separator =
             toolbar.toolbar_spans_with_layers_for_width(MENU_FIRST_ROW + 13, width, &layers);
+        assert!(separator.is_empty());
+        let drawing_row =
+            toolbar.toolbar_spans_with_layers_for_width(MENU_FIRST_ROW + 14, width, &layers);
         assert!(text(&drawing_row).starts_with("Decorators:"));
 
         for (row, action) in [
