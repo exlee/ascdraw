@@ -4,8 +4,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-#[cfg(target_os = "macos")]
-use winit::event::DeviceEvent;
 use winit::event::{ElementState, Event, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 #[cfg(test)]
@@ -62,7 +60,6 @@ use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 #[cfg(target_os = "macos")]
-use runtime::window::focused_window_id;
 use runtime::window::{
     EditorWindow, close_window, create_editor_window, handle_command, modified_wheel_zooms,
     save_windows_on_exit,
@@ -168,8 +165,6 @@ fn try_main() -> Result<ExitCode> {
                     if editor.state.move_lift_active() {
                         editor.request_redraw();
                     }
-                    #[cfg(target_os = "macos")]
-                    editor.hide_cursor_if_idle(now);
                     editor.clear_export_success_if_elapsed(now);
                 }
                 if now.saturating_duration_since(last_tooltip_redraw)
@@ -187,19 +182,6 @@ fn try_main() -> Result<ExitCode> {
                         }
                     }
                     last_autosave_check = now;
-                }
-            }
-            #[cfg(target_os = "macos")]
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { .. },
-                ..
-            } => {
-                // macOS continues to emit raw motion after hiding the cursor even when the
-                // window-level CursorMoved event no longer arrives.
-                if let Some(window_id) = focused_window_id(&windows)
-                    && let Some(editor) = windows.get_mut(&window_id)
-                {
-                    editor.note_cursor_activity(Instant::now());
                 }
             }
             Event::WindowEvent { window_id, event } => {

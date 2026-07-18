@@ -33,8 +33,6 @@ use crate::title_policy::window_attributes;
 use crate::toolbar_stamp::toolbar_hotspot_at;
 use crate::user_keys::FontSizeAction;
 
-#[cfg(target_os = "macos")]
-const CURSOR_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,10 +142,6 @@ pub struct EditorWindow {
     menu_selections_dirty: bool,
     last_keypress: Instant,
     export_success_deadline: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    last_cursor_activity: Instant,
-    #[cfg(target_os = "macos")]
-    cursor_hidden: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -606,23 +600,6 @@ impl EditorWindow {
             if self.state.toolbar.clear_export_success() {
                 self.request_redraw();
             }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn note_cursor_activity(&mut self, now: Instant) {
-        if record_cursor_activity(&mut self.last_cursor_activity, &mut self.cursor_hidden, now) {
-            self.window.set_cursor_visible(true);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn hide_cursor_if_idle(&mut self, now: Instant) {
-        if !self.cursor_hidden
-            && now.saturating_duration_since(self.last_cursor_activity) >= CURSOR_IDLE_TIMEOUT
-        {
-            self.window.set_cursor_visible(false);
-            self.cursor_hidden = true;
         }
     }
 
@@ -1140,16 +1117,6 @@ impl EditorWindow {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn record_cursor_activity(
-    last_cursor_activity: &mut Instant,
-    cursor_hidden: &mut bool,
-    now: Instant,
-) -> bool {
-    *last_cursor_activity = now;
-    std::mem::take(cursor_hidden)
-}
-
 fn durable_menu_selections_changed(
     previous: &crate::toolbar::ToolbarState,
     current: &crate::toolbar::ToolbarState,
@@ -1535,10 +1502,6 @@ pub fn create_editor_window(
         menu_selections_dirty: false,
         last_keypress: Instant::now(),
         export_success_deadline: None,
-        #[cfg(target_os = "macos")]
-        last_cursor_activity: Instant::now(),
-        #[cfg(target_os = "macos")]
-        cursor_hidden: false,
     };
     editor.ensure_cursor_in_viewport();
     editor.request_redraw();
@@ -1694,32 +1657,6 @@ mod tests {
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cursor_activity_reveals_once_and_always_refreshes_the_idle_deadline() {
-        let initial = Instant::now();
-        let first_motion = initial + CURSOR_IDLE_TIMEOUT;
-        let mut last_activity = initial;
-        let mut hidden = true;
-
-        assert!(record_cursor_activity(
-            &mut last_activity,
-            &mut hidden,
-            first_motion
-        ));
-        assert_eq!(last_activity, first_motion);
-        assert!(!hidden);
-
-        let next_motion = first_motion + Duration::from_millis(1);
-        assert!(!record_cursor_activity(
-            &mut last_activity,
-            &mut hidden,
-            next_motion
-        ));
-        assert_eq!(last_activity, next_motion);
-        assert!(!hidden);
-    }
 
     #[test]
     fn line_double_click_requires_same_stationary_cell_within_interval() {
