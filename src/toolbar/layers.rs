@@ -287,7 +287,7 @@ mod tests {
                     toolbar.action_at_with_layers(row, column, width, &layers),
                     Some(action)
                 );
-                let panel_start = width - 2 - (LAYER_PANEL_WIDTH + 1 + 11);
+                let panel_start = width - 2 - LAYER_PANEL_WIDTH;
                 assert!(expected_columns.contains(&(column - panel_start)));
                 assert_eq!(
                     action,

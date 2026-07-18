@@ -395,44 +395,24 @@ impl Editor {
         if row + 1 == self.toolbar.content_rows() {
             let (x, y) = self.cursor_coordinates();
             let contents = format!("  ({x},{y})");
+            let coordinates = ToolbarSpan {
+                contents,
+                bold_prefix: 0,
+                selected: false,
+                highlighted: false,
+                tooltip: false,
+                action: None,
+                right_aligned: !self.toolbar.auxiliary_panels_visible(),
+                foreground: None,
+            };
             if self.toolbar.auxiliary_panels_visible() {
-                let width = self.toolbar.auxiliary_trailing_width();
-                let length = contents.chars().count();
-                let contents = if length > width {
-                    contents.chars().skip(length - width).collect()
-                } else {
-                    format!("{contents:>width$}")
-                };
-                let placeholder = spans
-                    .last_mut()
-                    .expect("auxiliary panels reserve the trailing header cell");
-                debug_assert!(
-                    placeholder
-                        .contents
-                        .chars()
-                        .all(|character| character == ' ')
-                );
-                *placeholder = ToolbarSpan {
-                    contents,
-                    bold_prefix: 0,
-                    selected: false,
-                    highlighted: false,
-                    tooltip: false,
-                    action: None,
-                    right_aligned: false,
-                    foreground: None,
-                };
+                let panel_start = spans
+                    .iter()
+                    .position(|span| span.right_aligned)
+                    .expect("auxiliary panels are right-aligned");
+                spans.insert(panel_start, coordinates);
             } else {
-                spans.push(ToolbarSpan {
-                    contents,
-                    bold_prefix: 0,
-                    selected: false,
-                    highlighted: false,
-                    tooltip: false,
-                    action: None,
-                    right_aligned: true,
-                    foreground: None,
-                });
+                spans.push(coordinates);
             }
         }
         spans

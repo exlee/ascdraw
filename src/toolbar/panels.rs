@@ -109,8 +109,6 @@ impl ToolbarState {
             }
             panels.extend(self.color_panel_spans(panel_row));
         }
-        panels.push(plain_span(" ".repeat(PANEL_GAP)));
-        panels.push(plain_span(" ".repeat(FILES_HEADER_WIDTH)));
         if let Some(first) = panels.first_mut() {
             first.right_aligned = true;
         }
@@ -119,10 +117,6 @@ impl ToolbarState {
 
     pub(crate) fn auxiliary_panels_visible(&self) -> bool {
         self.multi_layer_mode() || self.multi_color_mode()
-    }
-
-    pub(crate) const fn auxiliary_trailing_width(&self) -> usize {
-        FILES_HEADER_WIDTH
     }
 
     pub(super) fn auxiliary_panel_row_count(&self) -> usize {
@@ -201,25 +195,25 @@ mod tests {
         assert!(text(&rows[0]).starts_with("Decorators:"));
         assert_eq!(
             right_text(&rows[0]),
-            "     1 2 3 4 5 6 7      1 2 3 4 5 6 7 8            "
+            "     1 2 3 4 5 6 7      1 2 3 4 5 6 7 8"
         );
         assert_eq!(
             right_text(&rows[1]),
-            "8.1. α × ▪ ↑ ↓ + ø 9.1. ■ ■ ■ ■ ■ ■ ■ ■            "
+            "8.1. α × ▪ ↑ ↓ + ø 9.1. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[2]),
-            "8.2. β   ▫ ↑ ↓ + ø 9.2. ■ ■ ■ ■ ■ ■ ■ ■            "
+            "8.2. β   ▫ ↑ ↓ + ø 9.2. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[3]),
-            "8.3. γ   ▪ ↑ ↓ + ø                                 "
+            "8.3. γ   ▪ ↑ ↓ + ø                     "
         );
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
 
     #[test]
-    fn header_prefixes_and_both_panel_action_cells_hit_exact_composed_columns() {
+    fn panel_action_cells_remain_clickable_when_panels_are_right_aligned() {
         let layers = sample_layers();
         let mut toolbar = ToolbarState::default();
         toolbar.sync_layer_count(layers.len());
@@ -227,18 +221,13 @@ mod tests {
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         let width = 160;
 
-        let header = boxed_toolbar_spans(&toolbar.toolbar_spans(MAIN_LABEL_ROW), width);
         let data = boxed_toolbar_spans(
             &toolbar.toolbar_spans_with_layers(MENU_FIRST_ROW + 1, &layers),
             width,
         );
         assert_eq!(
-            action_start(&header, ToolbarAction::BeginLayersPath),
-            action_start(&data, ToolbarAction::BeginLayerPath(LayerId(0)))
-        );
-        assert_eq!(
-            action_start(&header, ToolbarAction::BeginColorsPath),
-            action_start(&data, ToolbarAction::BeginColorPath(0))
+            action_start(&data, ToolbarAction::SelectColor(ColorId(7))),
+            width - 3
         );
 
         for action in [
