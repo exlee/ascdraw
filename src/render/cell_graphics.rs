@@ -58,6 +58,26 @@ fn shade_level(character: char) -> Option<u8> {
     }
 }
 
+pub(super) fn foreground_coverage(text: &str) -> f32 {
+    const BLOCK_COVERAGE_EIGHTHS: [u8; 32] = [
+        4, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1, 4, 2, 4, 6, 1, 1, 2, 2, 2, 6, 4, 6, 6, 2,
+        4, 6,
+    ];
+    let mut characters = text.chars();
+    let Some(character) = characters.next() else {
+        return 0.0;
+    };
+    if characters.next().is_some() {
+        return 0.0;
+    }
+    let codepoint = character as u32;
+    if (0x2580..=0x259f).contains(&codepoint) {
+        f32::from(BLOCK_COVERAGE_EIGHTHS[(codepoint - 0x2580) as usize]) / 8.0
+    } else {
+        0.0
+    }
+}
+
 fn draw_shade(canvas: &Canvas, cell: Rect, level: u8, paint: &Paint) {
     let mut paint = paint.clone();
     paint
@@ -163,6 +183,28 @@ mod tests {
 
     use super::*;
     use crate::face_resolution::Rgba;
+
+    #[test]
+    fn foreground_coverage_matches_custom_block_and_shade_rendering() {
+        for codepoint in 0x2580..=0x259f {
+            let character = char::from_u32(codepoint).unwrap();
+            let rendered_coverage = block_element_rects(character)
+                .map(|rects| {
+                    rects
+                        .into_iter()
+                        .flatten()
+                        .map(|(_, _, width, height)| width * height)
+                        .sum()
+                })
+                .or_else(|| shade_level(character).map(|level| f32::from(level) / 4.0))
+                .unwrap_or(0.0);
+            assert_eq!(
+                foreground_coverage(&character.to_string()),
+                rendered_coverage
+            );
+        }
+        assert_eq!(foreground_coverage("x"), 0.0);
+    }
 
     #[test]
     fn uses_grid_geometry_without_row_gaps() {

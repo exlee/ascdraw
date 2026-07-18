@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
@@ -72,6 +73,7 @@ struct CursorCell {
 
 const CURSOR_BEAM_WIDTH_RATIO: f32 = 0.14;
 const CURSOR_UNDERLINE_HEIGHT_RATIO: f32 = 0.12;
+const MIN_CURSOR_CONTRAST_RATIO: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct FallbackFontKey {
@@ -910,18 +912,76 @@ fn render_hollow_drawing_cursor(
     render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
 
     let outline = drawing_cursor_outline(column, top, metrics);
+    let color = visible_drawing_cursor_color(cell, cell_resolved, cursor_resolved.fg);
     let mut paint = Paint::default();
     paint
         .set_anti_alias(false)
         .set_style(skia_safe::paint::Style::Stroke)
         .set_stroke_join(skia_safe::paint::Join::Miter)
-        .set_color(cursor_resolved.fg.to_color())
+        .set_color(color.to_color())
         .set_stroke_width(outline_stroke_width(metrics));
 
     canvas.draw_rect(
         Rect::new(outline.left, outline.top, outline.right, outline.bottom),
         &paint,
     );
+}
+
+fn visible_drawing_cursor_color(
+    cell: &CursorCell,
+    cell_resolved: &ResolvedFace,
+    configured: Rgba,
+) -> Rgba {
+    let coverage = cell
+        .text
+        .as_deref()
+        .map_or(0.0, cell_graphics::foreground_coverage);
+    let backdrop = blend_rgb(cell_resolved.bg, cell_resolved.fg, coverage);
+    if contrast_ratio(configured, backdrop) >= MIN_CURSOR_CONTRAST_RATIO {
+        return configured;
+    }
+
+    let black = Rgba::rgb(0, 0, 0);
+    let white = Rgba::rgb(0xff, 0xff, 0xff);
+    if contrast_ratio(black, backdrop) >= contrast_ratio(white, backdrop) {
+        black
+    } else {
+        white
+    }
+}
+
+fn blend_rgb(background: Rgba, foreground: Rgba, coverage: f32) -> Rgba {
+    let blend = |background: u8, foreground: u8| {
+        (f32::from(background) * (1.0 - coverage) + f32::from(foreground) * coverage).round() as u8
+    };
+    Rgba::rgb(
+        blend(background.r, foreground.r),
+        blend(background.g, foreground.g),
+        blend(background.b, foreground.b),
+    )
+}
+
+fn contrast_ratio(first: Rgba, second: Rgba) -> f32 {
+    let first = relative_luminance(first);
+    let second = relative_luminance(second);
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
+}
+
+fn relative_luminance(color: Rgba) -> f32 {
+    static LINEAR_CHANNELS: OnceLock<[f32; 256]> = OnceLock::new();
+    let channels = LINEAR_CHANNELS.get_or_init(|| {
+        std::array::from_fn(|value| {
+            let value = value as f32 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    });
+    0.2126 * channels[color.r as usize]
+        + 0.7152 * channels[color.g as usize]
+        + 0.0722 * channels[color.b as usize]
 }
 
 pub(super) fn outline_stroke_width(metrics: &CellMetrics) -> f32 {
@@ -1731,6 +1791,37 @@ mod tests {
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
         assert_eq!(cursor.text, Some("c".to_string()));
         assert_eq!(cursor.face.bg, "#ffffff");
+    }
+
+    #[test]
+    fn drawing_cursor_adapts_to_full_block_foreground_and_preserves_visible_theme_color() {
+        let config = AppConfig::default();
+        let cell_resolved = resolve_root_face(&config.theme.default, FALLBACK_FG, FALLBACK_BG);
+        let cursor_resolved = resolve_derived_face(
+            &config.theme.default,
+            &config.theme.cursor_drawing,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        let blank = CursorCell {
+            face: config.theme.default.clone(),
+            text: Some(" ".to_string()),
+        };
+        let full_block = CursorCell {
+            face: config.theme.default,
+            text: Some("█".to_string()),
+        };
+
+        assert_eq!(
+            visible_drawing_cursor_color(&blank, &cell_resolved, cursor_resolved.fg),
+            cursor_resolved.fg
+        );
+        let adapted = visible_drawing_cursor_color(&full_block, &cell_resolved, cursor_resolved.fg);
+        assert!(contrast_ratio(adapted, cell_resolved.fg) >= MIN_CURSOR_CONTRAST_RATIO);
+        assert!(
+            contrast_ratio(adapted, cell_resolved.fg)
+                > contrast_ratio(cursor_resolved.fg, cell_resolved.fg)
+        );
     }
 
     #[test]
