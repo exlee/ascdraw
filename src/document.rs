@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::editor::{PersistedLayer, compact_blank_runs, compacted_blank_runs};
-use crate::model::{Atom, LayerId};
+use crate::layout::ViewportOffset;
+use crate::model::{Atom, Coord, LayerId};
 use crate::toolbar::DurableMenuSelections;
 
 const DOCUMENT_VERSION: u32 = 2;
@@ -50,6 +51,18 @@ pub struct Document {
         skip_serializing_if = "Option::is_none"
     )]
     pub menu_selections: Option<DurableMenuSelections>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<CanvasPosition>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct CanvasPosition {
+    pub cursor: Coord,
+    pub canvas_origin: Coord,
+    pub viewport: ViewportOffset,
+    #[serde(default)]
+    pub zoom: i32,
 }
 
 impl Document {
@@ -57,6 +70,7 @@ impl Document {
         layers: Vec<PersistedLayer>,
         active_layer: LayerId,
         menu_selections: Option<DurableMenuSelections>,
+        position: Option<CanvasPosition>,
     ) -> Self {
         Self {
             version: DOCUMENT_VERSION,
@@ -64,6 +78,7 @@ impl Document {
             layers,
             active_layer: Some(active_layer),
             menu_selections,
+            position,
         }
     }
 }
@@ -112,6 +127,7 @@ pub fn save(
     layers: &[PersistedLayer],
     active_layer: LayerId,
     menu_selections: &DurableMenuSelections,
+    position: CanvasPosition,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -129,6 +145,7 @@ pub fn save(
         layers,
         active_layer,
         Some(menu_selections.clone()),
+        Some(position),
     ))
     .context("failed to serialize document")?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
@@ -254,13 +271,20 @@ mod tests {
             visible: true,
             lines: lines.clone(),
         }];
-        save(&path, &layers, LayerId(0), &menu_selections).unwrap();
+        let position = CanvasPosition {
+            cursor: Coord { line: 3, column: 5 },
+            canvas_origin: Coord { line: 2, column: 1 },
+            viewport: ViewportOffset { x: -17, y: 23 },
+            zoom: 4,
+        };
+        save(&path, &layers, LayerId(0), &menu_selections, position).unwrap();
         let loaded = load(&path).unwrap().unwrap();
         let _ = fs::remove_file(path);
 
         assert_eq!(loaded.layers[0].lines, lines);
         assert_eq!(loaded.active_layer, Some(LayerId(0)));
         assert_eq!(loaded.menu_selections, Some(menu_selections));
+        assert_eq!(loaded.position, Some(position));
     }
 
     #[test]
@@ -301,7 +325,19 @@ mod tests {
         ));
         let selections = toolbar.durable_selections();
 
-        save(&path, &layers, LayerId(1), &selections).unwrap();
+        save(
+            &path,
+            &layers,
+            LayerId(1),
+            &selections,
+            CanvasPosition {
+                cursor: Coord::default(),
+                canvas_origin: Coord::default(),
+                viewport: ViewportOffset::default(),
+                zoom: 0,
+            },
+        )
+        .unwrap();
         let loaded = load(&path).unwrap().unwrap();
         let _ = fs::remove_file(path);
 
@@ -347,6 +383,12 @@ mod tests {
             }],
             LayerId(0),
             &selections,
+            CanvasPosition {
+                cursor: Coord::default(),
+                canvas_origin: Coord::default(),
+                viewport: ViewportOffset::default(),
+                zoom: 0,
+            },
         )
         .unwrap();
         let loaded = load(&path).unwrap().unwrap();
@@ -407,6 +449,7 @@ mod tests {
             }],
             LayerId(0),
             Some(selections),
+            None,
         ))
         .unwrap();
 

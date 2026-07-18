@@ -154,6 +154,17 @@ impl Editor {
         Ok(())
     }
 
+    pub fn canvas_origin(&self) -> Coord {
+        self.canvas_origin
+    }
+
+    pub fn restore_canvas_position(&mut self, cursor: Coord, canvas_origin: Coord) {
+        self.canvas_origin = canvas_origin;
+        self.grid.cursor_pos = cursor;
+        self.sync_cursor_to_active_layer();
+        self.selection.collapse(cursor);
+    }
+
     pub fn select_layer(&mut self, id: LayerId) -> bool {
         let Some(index) = self.layers.index_of(id) else {
             return false;

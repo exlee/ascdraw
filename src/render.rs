@@ -1469,6 +1469,18 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
 }
 
 impl Renderer {
+    pub fn zoom(&self) -> i32 {
+        (self.logical_font_size.get() - self.default_logical_font_size).round() as i32
+    }
+
+    pub fn restore_zoom(&self, zoom: i32) {
+        const MIN_FONT_SIZE: f32 = 6.0;
+
+        self.logical_font_size
+            .set((self.default_logical_font_size + zoom as f32).max(MIN_FONT_SIZE));
+        self.content_metrics_cache.borrow_mut().take();
+    }
+
     pub fn apply_config(&mut self, config: &AppConfig) {
         let font_size_delta = self.logical_font_size.get() - self.default_logical_font_size;
         self.preferred_font_family = config.font_family.clone();

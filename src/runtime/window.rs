@@ -166,6 +166,7 @@ pub struct EditorWindow {
     document_session: DocumentSession,
     document_dirty: bool,
     menu_selections_dirty: bool,
+    saved_canvas_position: document::CanvasPosition,
     last_keypress: Instant,
     export_success_deadline: Option<Instant>,
 }
@@ -1109,7 +1110,9 @@ impl EditorWindow {
             return Ok(false);
         }
         if !should_autosave(
-            self.document_dirty || self.menu_selections_dirty,
+            self.document_dirty
+                || self.menu_selections_dirty
+                || self.canvas_position() != self.saved_canvas_position,
             self.last_keypress,
             now,
         ) {
@@ -1131,19 +1134,27 @@ impl EditorWindow {
             );
         }
         let layers = self.state.persisted_layers();
+        let position = self.canvas_position();
+        self.document_dirty |= position != self.saved_canvas_position;
         let path = self
             .document_session
             .path()
             .expect("stdin sessions returned before path persistence");
-        save_document_if_dirty(
+        let saved = save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
             path,
             &layers,
             self.state.active_layer_id(),
             &self.state.toolbar.durable_selections(),
-            document::save,
-        )
+            |path, layers, active_layer, menu_selections| {
+                document::save(path, layers, active_layer, menu_selections, position)
+            },
+        )?;
+        if saved {
+            self.saved_canvas_position = position;
+        }
+        Ok(saved)
     }
 
     pub fn set_recent_documents(&mut self, files: &[PathBuf]) {
@@ -1163,6 +1174,9 @@ impl EditorWindow {
         };
         let title = session.window_title();
         let mut state = Editor::new(&self.state.theme, title.clone());
+        let mut viewport = ViewportOffset::default();
+        let mut restored_position = false;
+        self.renderer.restore_zoom(0);
         if let Some(document) = document::load(&path)? {
             let active_layer = document
                 .active_layer
@@ -1171,6 +1185,12 @@ impl EditorWindow {
             if let Some(selections) = document.menu_selections {
                 state.restore_menu_selections(&selections);
             }
+            if let Some(position) = document.position {
+                state.restore_canvas_position(position.cursor, position.canvas_origin);
+                self.renderer.restore_zoom(position.zoom);
+                viewport = position.viewport;
+                restored_position = true;
+            }
         }
         self.window.set_title(&title);
         self.state = state;
@@ -1178,10 +1198,22 @@ impl EditorWindow {
         self.document_dirty = false;
         self.menu_selections_dirty = false;
         self.history = EditHistory::default();
-        self.viewport = ViewportOffset::default();
-        self.ensure_cursor_in_viewport();
+        self.viewport = viewport;
+        if !restored_position {
+            self.ensure_cursor_in_viewport();
+        }
+        self.saved_canvas_position = self.canvas_position();
         self.request_redraw();
         Ok(())
+    }
+
+    fn canvas_position(&self) -> document::CanvasPosition {
+        document::CanvasPosition {
+            cursor: self.state.grid.cursor_pos,
+            canvas_origin: self.state.canvas_origin(),
+            viewport: self.viewport,
+            zoom: self.renderer.zoom(),
+        }
     }
 }
 
@@ -1520,6 +1552,9 @@ pub fn create_editor_window(
     let title = document_session.window_title();
     window.set_title(&title);
     let mut state = Editor::new(&config.theme, title);
+    let renderer = load_renderer(config);
+    let mut viewport = ViewportOffset::default();
+    let mut restored_position = false;
     match document_session {
         DocumentSession::Scratchpad(document_path) | DocumentSession::File(document_path) => {
             if let Some(document) = document::load(document_path)? {
@@ -1529,6 +1564,12 @@ pub fn create_editor_window(
                 state.restore_layers(document.layers, active_layer)?;
                 if let Some(menu_selections) = document.menu_selections {
                     state.restore_menu_selections(&menu_selections);
+                }
+                if let Some(position) = document.position {
+                    state.restore_canvas_position(position.cursor, position.canvas_origin);
+                    renderer.restore_zoom(position.zoom);
+                    viewport = position.viewport;
+                    restored_position = true;
                 }
             }
         }
@@ -1549,8 +1590,8 @@ pub fn create_editor_window(
         pinch_zoom_remainder: 0.0,
         wheel_zoom_remainder: 0.0,
         state,
-        renderer: load_renderer(config),
-        viewport: ViewportOffset::default(),
+        renderer,
+        viewport,
         view_cursor_anchor: None,
         history: EditHistory::default(),
         perf: PerfDiagnostics::from_env(),
@@ -1558,10 +1599,19 @@ pub fn create_editor_window(
         document_session: document_session.clone(),
         document_dirty: document_session.is_stdin(),
         menu_selections_dirty: false,
+        saved_canvas_position: document::CanvasPosition {
+            cursor: Coord::default(),
+            canvas_origin: Coord::default(),
+            viewport: ViewportOffset::default(),
+            zoom: 0,
+        },
         last_keypress: Instant::now(),
         export_success_deadline: None,
     };
-    editor.ensure_cursor_in_viewport();
+    if !restored_position {
+        editor.ensure_cursor_in_viewport();
+    }
+    editor.saved_canvas_position = editor.canvas_position();
     editor.request_redraw();
     Ok(editor)
 }
