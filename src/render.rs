@@ -298,7 +298,7 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         state,
         visible_cells,
         minimap_panel,
-        metrics.cell_width / metrics.cell_height.max(1.0),
+        metrics,
         toolbar_metrics,
         &default_face,
     );
