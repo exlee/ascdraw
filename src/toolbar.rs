@@ -170,7 +170,7 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
 const LINE_STYLE_OPTIONS: [&str; 4] = ["─", "━", "═", "╴"];
 const LINE_ROUTING_OPTIONS: [&str; 5] = ["┘", "└", "⭜", "⭞", "▞"];
 const LINE_CORNER_OPTIONS: [&str; 2] = ["Smooth", "Sharp"];
-const LINE_CORNER_LABELS: [&str; 2] = ["Smth", "Shrp"];
+const LINE_CORNER_LABELS: [&str; 2] = ["╭", "┌"];
 const LINE_OPTIONS: [&[&str]; 5] = [
     &LINE_START_OPTIONS,
     &LINE_END_OPTIONS,
@@ -1553,7 +1553,7 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. ┘ └ ⭜ ⭞ ▞"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("6. Smth Shrp"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("6. ╭ ┌"));
     }
 
     #[test]
@@ -1610,6 +1610,56 @@ mod tests {
                 .windows(2)
                 .all(|columns| columns[1] == columns[0] + 2)
         );
+    }
+
+    #[test]
+    fn corner_glyphs_keep_durable_names_single_cell_width_and_mouse_alignment() {
+        let expected = [CornerStyle::Smooth, CornerStyle::Sharp];
+        assert_eq!(LINE_CORNER_LABELS, ["╭", "┌"]);
+        assert_eq!(LINE_CORNER_OPTIONS, ["Smooth", "Sharp"]);
+        for glyph in LINE_CORNER_LABELS {
+            assert_eq!(glyph.graphemes(true).count(), 1);
+            assert_eq!(UnicodeWidthStr::width(glyph), 1);
+        }
+
+        let mut toolbar = ToolbarState::default();
+        assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let row = MENU_FIRST_ROW + 1;
+        let width = 160;
+        let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+        let mut columns = Vec::new();
+        for (option, (glyph, corner)) in LINE_CORNER_LABELS.into_iter().zip(expected).enumerate() {
+            let action = ToolbarAction::SelectSubmenu { submenu: 4, option };
+            let (column, span) = span_starts(&spans)
+                .into_iter()
+                .find(|(_, span)| span.action == Some(action))
+                .expect("corner glyph is visible and clickable");
+            assert_eq!(span.contents, glyph);
+            assert_eq!(toolbar.action_at(row, column, width), Some(action));
+            columns.push(column);
+
+            assert!(toolbar.apply_action(action));
+            assert_eq!(toolbar.line_corner(), corner);
+            assert_eq!(
+                toolbar
+                    .toolbar_spans(row)
+                    .into_iter()
+                    .filter(|span| {
+                        span.selected
+                            && matches!(
+                                span.action,
+                                Some(ToolbarAction::SelectSubmenu { submenu: 4, .. })
+                            )
+                    })
+                    .map(|span| span.contents)
+                    .collect::<Vec<_>>(),
+                [glyph]
+            );
+        }
+        assert_eq!(columns[1], columns[0] + 2);
+        let serialized = toml::to_string(&toolbar.durable_selections()).unwrap();
+        assert!(serialized.contains("corner = \"Sharp\""));
+        assert!(!serialized.contains('┌'));
     }
 
     #[test]

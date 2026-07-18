@@ -170,8 +170,9 @@ Shift- and Alt-drag keep their selection and move behavior.
 
 Line options control the start marker, end marker, style (thin, heavy, double, or dashed), routing
 (`┘` horizontal-first/vertical-next, `└` vertical-first/horizontal-next, `⭜` horizontal-diagonal,
-`⭞` vertical-diagonal, or `▞` stairs), and corner style for thin and dashed lines. Routing changes
-affect only the live or next segment. Dashed lines repeat `╴` horizontally and `╵` vertically.
+`⭞` vertical-diagonal, or `▞` stairs), and corner style (`╭` smooth or `┌` sharp) for thin and
+dashed lines. Routing changes affect only the live or next segment. Dashed lines repeat `╴`
+horizontally and `╵` vertically.
 
 ### Shape
 
