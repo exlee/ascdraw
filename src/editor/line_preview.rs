@@ -324,20 +324,26 @@ impl Editor {
         });
         let mut first_direction = None;
         let mut last_direction = None;
+        let mut previous_step = None;
         for segment in &preview.segments {
-            if let Some((first, last)) =
-                draw_routed_body(&mut composed, adjust(segment.end), segment.routing)
-            {
+            if let Some((first, last, final_step)) = draw_routed_body(
+                &mut composed,
+                adjust(segment.end),
+                segment.routing,
+                previous_step,
+            ) {
                 first_direction.get_or_insert(first);
                 last_direction = Some(last);
+                previous_step = Some(final_step);
             }
         }
         if include_active
             && preview.end != preview.anchor()
-            && let Some((first, last)) = draw_routed_body(
+            && let Some((first, last, _)) = draw_routed_body(
                 &mut composed,
                 adjust(preview.end),
                 self.toolbar.routing_mode(),
+                previous_step,
             )
         {
             first_direction.get_or_insert(first);
@@ -368,29 +374,48 @@ fn draw_routed_body(
     state: &mut Editor,
     end: Coord,
     routing: RoutingMode,
-) -> Option<(Direction, Direction)> {
+    preceding_step: Option<RouteStep>,
+) -> Option<(Direction, Direction, RouteStep)> {
     let start = state.grid.cursor_pos;
     let steps = route_steps(start, end, routing);
-    let directions = steps
-        .first()
-        .zip(steps.last())
-        .map(|(first, last)| (step_direction(*first, false), step_direction(*last, true)));
+    let directions = steps.first().zip(steps.last()).map(|(first, last)| {
+        (
+            step_direction(*first, false),
+            step_direction(*last, true),
+            *last,
+        )
+    });
+    let mut previous = preceding_step;
     for step in &steps {
+        let diagonal_corner = previous.is_some_and(|previous| {
+            previous != *step
+                && (matches!(previous, RouteStep::Diagonal { .. })
+                    || matches!(step, RouteStep::Diagonal { .. }))
+        });
         match step {
             RouteStep::Orthogonal(direction) => {
+                if diagonal_corner {
+                    state.write_diagonal_cell(state.grid.cursor_pos, "·", true, true);
+                }
                 state.move_or_draw_routed(*direction);
             }
             RouteStep::Diagonal {
                 horizontal,
                 vertical,
-            } => draw_diagonal_step(state, *horizontal, *vertical),
+            } => draw_diagonal_step(state, *horizontal, *vertical, diagonal_corner),
         }
+        previous = Some(*step);
     }
     state.end_stroke();
     directions
 }
 
-fn draw_diagonal_step(state: &mut Editor, horizontal: Direction, vertical: Direction) {
+fn draw_diagonal_step(
+    state: &mut Editor,
+    horizontal: Direction,
+    vertical: Direction,
+    starts_at_corner: bool,
+) {
     let glyph = if matches!(horizontal, Direction::Right) == matches!(vertical, Direction::Down) {
         "╲"
     } else {
@@ -402,7 +427,12 @@ fn draw_diagonal_step(state: &mut Editor, horizontal: Direction, vertical: Direc
         .as_ref()
         .is_some_and(|stroke| stroke.end == from);
     state.end_stroke();
-    state.write_diagonal_cell(from, glyph, overwrite_active_endpoint, true);
+    state.write_diagonal_cell(
+        from,
+        if starts_at_corner { "·" } else { glyph },
+        overwrite_active_endpoint || starts_at_corner,
+        true,
+    );
     let mut target = state.grid.cursor_pos;
     target.column = match horizontal {
         Direction::Right => target.column + 1,
@@ -542,6 +572,53 @@ mod tests {
                 .flatten()
                 .any(|atom| atom.contents == "╲")
         );
+    }
+
+    #[test]
+    fn diagonal_routes_use_dots_where_the_direction_changes() {
+        let cases = [
+            (
+                2,
+                Coord { line: 2, column: 5 },
+                Coord { line: 0, column: 3 },
+                "╲",
+            ),
+            (
+                3,
+                Coord { line: 2, column: 5 },
+                Coord { line: 2, column: 2 },
+                "╴",
+            ),
+        ];
+
+        for (option, target, corner, endpoint) in cases {
+            let mut state = line_editor();
+            state.apply_toolbar_action(ToolbarAction::SelectSubmenu { submenu: 3, option });
+            state.start_or_advance_line_preview();
+            state.move_line_preview_to(target);
+            assert!(state.start_or_advance_line_preview());
+
+            assert_eq!(state.cell_contents(corner), Some("·"));
+            assert_eq!(state.cell_contents(target), Some(endpoint));
+        }
+    }
+
+    #[test]
+    fn changing_diagonal_direction_at_an_anchor_uses_a_dot() {
+        let mut state = line_editor();
+        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 3,
+            option: 2,
+        });
+        state.start_or_advance_line_preview();
+        let anchor = Coord { line: 2, column: 2 };
+        state.move_line_preview_to(anchor);
+        assert!(state.start_or_advance_line_preview());
+
+        state.move_line_preview_to(Coord { line: 4, column: 0 });
+        assert!(state.start_or_advance_line_preview());
+
+        assert_eq!(state.cell_contents(anchor), Some("·"));
     }
 
     #[test]

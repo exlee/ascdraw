@@ -288,7 +288,7 @@ impl Editor {
         }
         let writable = self.cell_contents(coord).is_none_or(|contents| {
             contents.chars().all(char::is_whitespace)
-                || matches!(contents, "╱" | "╲")
+                || matches!(contents, "·" | "╱" | "╲")
                 || (overwrite_active_endpoint && is_line_glyph(contents))
         });
         if !writable {

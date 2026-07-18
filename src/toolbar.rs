@@ -221,7 +221,7 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
 const LINE_STYLE_OPTIONS: [&str; 4] = ["─", "━", "═", "╴"];
-const LINE_ROUTING_OPTIONS: [&str; 5] = ["┘", "└", "⭜", "⭞", "▞"];
+const LINE_ROUTING_OPTIONS: [&str; 5] = ["┘", "└", "◩", "◪", "▞"];
 const LINE_CORNER_OPTIONS: [&str; 2] = ["Smooth", "Sharp"];
 const LINE_CORNER_LABELS: [&str; 2] = ["╭", "┌"];
 const LINE_OPTIONS: [&[&str]; 5] = [
@@ -1862,7 +1862,7 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. ┘ └ ⭜ ⭞ ▞"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. ┘ └ ◩ ◪ ▞"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("6. ╭ ┌"));
     }
 
@@ -1875,7 +1875,7 @@ mod tests {
             RoutingMode::VerticalDiagonal,
             RoutingMode::Stairs,
         ];
-        assert_eq!(LINE_ROUTING_OPTIONS, ["┘", "└", "⭜", "⭞", "▞"]);
+        assert_eq!(LINE_ROUTING_OPTIONS, ["┘", "└", "◩", "◪", "▞"]);
         for glyph in LINE_ROUTING_OPTIONS {
             assert_eq!(glyph.graphemes(true).count(), 1);
             assert_eq!(UnicodeWidthStr::width(glyph), 1);
