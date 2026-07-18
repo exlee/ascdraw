@@ -30,11 +30,14 @@ struct PanelPlacement {
 impl ToolbarState {
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
-        if self.multi_layer_mode() && !self.export_menu_open() {
+        let layers_visible = self.multi_layer_mode() && !self.export_menu_open();
+        let colors_visible = self.multi_color_mode() && !self.export_menu_open();
+        let trailing_files_width = PANEL_GAP + FILES_HEADER_WIDTH;
+        if layers_visible {
             entries.push((
                 "Lyrs",
                 8,
-                LAYER_PANEL_WIDTH,
+                LAYER_PANEL_WIDTH - usize::from(!colors_visible) * trailing_files_width,
                 ToolbarAction::BeginLayersPath,
                 matches!(
                     self.pending_shortcut(),
@@ -42,11 +45,11 @@ impl ToolbarState {
                 ),
             ));
         }
-        if self.multi_color_mode() && !self.export_menu_open() {
+        if colors_visible {
             entries.push((
                 "Clrs",
                 9,
-                COLOR_PANEL_WIDTH,
+                COLOR_PANEL_WIDTH - trailing_files_width,
                 ToolbarAction::BeginColorsPath,
                 matches!(
                     self.pending_shortcut(),
@@ -389,6 +392,21 @@ mod tests {
                 Some(action)
             );
         }
+    }
+
+    #[test]
+    fn colors_only_header_starts_at_the_palette_prefix() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+        let width = 120;
+
+        let header = boxed_toolbar_spans(&toolbar.toolbar_spans(MAIN_LABEL_ROW), width);
+        let palette = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width);
+
+        assert_eq!(
+            action_start(&header, ToolbarAction::BeginColorsPath),
+            action_start(&palette, ToolbarAction::BeginColorPath(0))
+        );
     }
 
     #[test]

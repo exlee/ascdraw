@@ -122,7 +122,7 @@ mod tests {
     use super::*;
     use crate::toolbar::{
         MENU_FIRST_ROW, MainMode, ToolbarAction, boxed_toolbar_spans,
-        panels::{COLOR_PANEL_WIDTH, LAYER_PANEL_WIDTH},
+        panels::{COLOR_PANEL_WIDTH, FILES_HEADER_WIDTH, LAYER_PANEL_WIDTH},
     };
     use std::ops::Range;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -303,12 +303,12 @@ mod tests {
                 format!(
                     "8{:layer_padding$}  0          ",
                     "",
-                    layer_padding = LAYER_PANEL_WIDTH - 1
+                    layer_padding = LAYER_PANEL_WIDTH - FILES_HEADER_WIDTH - 3
                 ),
                 format!(
                     "Lyrs{:layer_padding$}  Files/Togls",
                     "",
-                    layer_padding = LAYER_PANEL_WIDTH - 4
+                    layer_padding = LAYER_PANEL_WIDTH - FILES_HEADER_WIDTH - 6
                 ),
                 vec![
                     ToolbarAction::BeginLayersPath,
@@ -321,12 +321,12 @@ mod tests {
                 format!(
                     "9{:color_padding$}  0          ",
                     "",
-                    color_padding = COLOR_PANEL_WIDTH - 1
+                    color_padding = COLOR_PANEL_WIDTH - FILES_HEADER_WIDTH - 3
                 ),
                 format!(
                     "Clrs{:color_padding$}  Files/Togls",
                     "",
-                    color_padding = COLOR_PANEL_WIDTH - 4
+                    color_padding = COLOR_PANEL_WIDTH - FILES_HEADER_WIDTH - 6
                 ),
                 vec![
                     ToolbarAction::BeginColorsPath,
@@ -341,14 +341,14 @@ mod tests {
                     "",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 1,
-                    color_padding = COLOR_PANEL_WIDTH - 1,
+                    color_padding = COLOR_PANEL_WIDTH - FILES_HEADER_WIDTH - 3,
                 ),
                 format!(
                     "Lyrs{:layer_padding$}  Clrs{:color_padding$}  Files/Togls",
                     "",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 4,
-                    color_padding = COLOR_PANEL_WIDTH - 4,
+                    color_padding = COLOR_PANEL_WIDTH - FILES_HEADER_WIDTH - 6,
                 ),
                 vec![
                     ToolbarAction::BeginLayersPath,
