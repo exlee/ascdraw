@@ -1537,7 +1537,7 @@ impl Renderer {
         let typeface = preferred_typeface(&self.font_mgr, &self.preferred_font_family)
             .unwrap_or_else(|| {
                 self.font_mgr
-                    .match_family_style("", FontStyle::normal())
+                    .legacy_make_typeface(None, FontStyle::normal())
                     .expect("expected a fallback system typeface")
             });
 
@@ -1570,16 +1570,44 @@ impl Renderer {
 }
 
 fn preferred_typeface(font_mgr: &FontMgr, configured_family: &str) -> Option<skia_safe::Typeface> {
-    [
-        configured_family,
-        "SF Mono",
-        "Menlo",
-        "Monaco",
-        "JetBrains Mono",
-        "Courier New",
-    ]
-    .iter()
-    .find_map(|family| font_mgr.match_family_style(family, FontStyle::normal()))
+    font_mgr
+        .match_family_style(configured_family, FontStyle::normal())
+        .or_else(|| {
+            matching_font_family(configured_family, font_mgr.family_names())
+                .and_then(|family| font_mgr.match_family_style(family, FontStyle::normal()))
+        })
+        .or_else(|| {
+            [
+                "SF Mono",
+                "Menlo",
+                "Monaco",
+                "JetBrains Mono",
+                "Courier New",
+            ]
+            .iter()
+            .find_map(|family| font_mgr.match_family_style(family, FontStyle::normal()))
+        })
+}
+
+fn matching_font_family(
+    configured_family: &str,
+    available_families: impl IntoIterator<Item = String>,
+) -> Option<String> {
+    let configured = normalize_font_family(configured_family);
+    if configured.is_empty() {
+        return None;
+    }
+    available_families
+        .into_iter()
+        .find(|family| normalize_font_family(family) == configured)
+}
+
+fn normalize_font_family(family: &str) -> String {
+    family
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 unsafe fn buffer_as_u8_mut(buffer: &mut [u32]) -> &mut [u8] {
@@ -1619,6 +1647,22 @@ mod tests {
 
         assert_eq!(title, "ascdraw - /t");
         assert_eq!(atom_display_width(&title), 12);
+    }
+
+    #[test]
+    fn configured_font_family_matches_canonical_spacing_and_case() {
+        let available = ["SF Mono", "JetBrainsMono Nerd Font", "Courier New"]
+            .into_iter()
+            .map(str::to_owned);
+
+        assert_eq!(
+            matching_font_family("Jetbrains Mono Nerd Font", available),
+            Some("JetBrainsMono Nerd Font".to_owned())
+        );
+        assert_eq!(
+            matching_font_family("---", ["SF Mono"].into_iter().map(str::to_owned)),
+            None
+        );
     }
 
     #[test]
