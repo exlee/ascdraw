@@ -15,13 +15,6 @@ const PANEL_GAP: usize = 2;
 impl ToolbarState {
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
-        entries.push((
-            "Files/Togls",
-            0,
-            FILES_HEADER_WIDTH,
-            ToolbarAction::ToggleExportMenu,
-            self.export_menu_open(),
-        ));
         if self.multi_layer_mode() {
             entries.push((
                 "Lyrs",
@@ -46,6 +39,13 @@ impl ToolbarState {
                 ),
             ));
         }
+        entries.push((
+            "Files/Togls",
+            0,
+            FILES_HEADER_WIDTH,
+            ToolbarAction::ToggleExportMenu,
+            self.export_menu_open(),
+        ));
 
         for (index, (label, digit, width, action, active)) in entries.into_iter().enumerate() {
             if index > 0 {
@@ -68,11 +68,7 @@ impl ToolbarState {
                     && action != ToolbarAction::ToggleExportMenu,
                 tooltip: false,
                 action: Some(action),
-                right_aligned: matches!(action, ToolbarAction::BeginLayersPath)
-                    || (!self.multi_layer_mode()
-                        && matches!(action, ToolbarAction::BeginColorsPath))
-                    || (!self.auxiliary_panels_visible()
-                        && matches!(action, ToolbarAction::ToggleExportMenu)),
+                right_aligned: index == 0,
                 foreground: None,
             });
             if width > used {

@@ -277,12 +277,12 @@ mod tests {
                 true,
                 false,
                 format!(
-                    "8{:layer_padding$}",
+                    "8{:layer_padding$}  0          ",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 1
                 ),
                 format!(
-                    "Lyrs{:layer_padding$}",
+                    "Lyrs{:layer_padding$}  Files/Togls",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 4
                 ),
@@ -295,12 +295,12 @@ mod tests {
                 false,
                 true,
                 format!(
-                    "9{:color_padding$}",
+                    "9{:color_padding$}  0          ",
                     "",
                     color_padding = COLOR_PANEL_WIDTH - 1
                 ),
                 format!(
-                    "Clrs{:color_padding$}",
+                    "Clrs{:color_padding$}  Files/Togls",
                     "",
                     color_padding = COLOR_PANEL_WIDTH - 4
                 ),
@@ -313,14 +313,14 @@ mod tests {
                 true,
                 true,
                 format!(
-                    "8{:layer_padding$}  9{:color_padding$}",
+                    "8{:layer_padding$}  9{:color_padding$}  0          ",
                     "",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 1,
                     color_padding = COLOR_PANEL_WIDTH - 1,
                 ),
                 format!(
-                    "Lyrs{:layer_padding$}  Clrs{:color_padding$}",
+                    "Lyrs{:layer_padding$}  Clrs{:color_padding$}  Files/Togls",
                     "",
                     "",
                     layer_padding = LAYER_PANEL_WIDTH - 4,
@@ -340,10 +340,7 @@ mod tests {
             assert_eq!(right_group_text(&toolbar, MAIN_LABEL_ROW), top);
             assert_eq!(right_group_text(&toolbar, MAIN_SHORTCUT_ROW), bottom);
             let expected_group_start = width - 2 - UnicodeWidthStr::width(bottom.as_str());
-            for action in actions
-                .iter()
-                .filter(|action| !layers && !colors || **action != ToolbarAction::ToggleExportMenu)
-            {
+            for action in &actions {
                 let top_range = action_range(&toolbar, MAIN_LABEL_ROW, width, *action);
                 let bottom_range = action_range(&toolbar, MAIN_SHORTCUT_ROW, width, *action);
                 assert_eq!(top_range, bottom_range);
