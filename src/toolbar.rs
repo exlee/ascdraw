@@ -168,7 +168,7 @@ const LINE_END_OPTIONS: [&str; LINE_ENDINGS.len()] = [
     "ø", "╳", "╱", "╲", "÷", "×", "±", "¤",
 ];
 const LINE_STYLE_OPTIONS: [&str; 4] = ["─", "━", "═", "╴"];
-const LINE_ROUTING_OPTIONS: [&str; 5] = ["H->V", "V->H", "H-Diag", "V-Diag", "Stairs"];
+const LINE_ROUTING_OPTIONS: [&str; 5] = ["┘", "└", "⭜", "⭞", "▞"];
 const LINE_CORNER_OPTIONS: [&str; 2] = ["Smooth", "Sharp"];
 const LINE_CORNER_LABELS: [&str; 2] = ["Smth", "Shrp"];
 const LINE_OPTIONS: [&[&str]; 5] = [
@@ -1552,8 +1552,64 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW).contains("Start: 1 2 3 4 5 6 7 8 9 0"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1.   ◁ ◀ ← ◃ ◂ ↔ □ ■ ▫"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ─ ━ ═ ╴"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. H->V V->H H-Diag V-Diag Stairs"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5. ┘ └ ⭜ ⭞ ▞"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("6. Smth Shrp"));
+    }
+
+    #[test]
+    fn routing_glyphs_keep_mode_order_single_cell_width_and_mouse_alignment() {
+        let expected = [
+            RoutingMode::HorizontalVertical,
+            RoutingMode::VerticalHorizontal,
+            RoutingMode::HorizontalDiagonal,
+            RoutingMode::VerticalDiagonal,
+            RoutingMode::Stairs,
+        ];
+        assert_eq!(LINE_ROUTING_OPTIONS, ["┘", "└", "⭜", "⭞", "▞"]);
+        for glyph in LINE_ROUTING_OPTIONS {
+            assert_eq!(glyph.graphemes(true).count(), 1);
+            assert_eq!(UnicodeWidthStr::width(glyph), 1);
+        }
+
+        let mut toolbar = ToolbarState::default();
+        assert!(toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let row = MENU_FIRST_ROW + 1;
+        let width = 160;
+        let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+        let mut columns = Vec::new();
+        for (option, (glyph, mode)) in LINE_ROUTING_OPTIONS.into_iter().zip(expected).enumerate() {
+            let action = ToolbarAction::SelectSubmenu { submenu: 3, option };
+            let (column, span) = span_starts(&spans)
+                .into_iter()
+                .find(|(_, span)| span.action == Some(action))
+                .expect("routing glyph is visible and clickable");
+            assert_eq!(span.contents, glyph);
+            assert_eq!(toolbar.action_at(row, column, width), Some(action));
+            columns.push(column);
+
+            assert!(toolbar.apply_action(action));
+            assert_eq!(toolbar.routing_mode(), mode);
+            assert_eq!(
+                toolbar
+                    .toolbar_spans(row)
+                    .into_iter()
+                    .filter(|span| {
+                        span.selected
+                            && matches!(
+                                span.action,
+                                Some(ToolbarAction::SelectSubmenu { submenu: 3, .. })
+                            )
+                    })
+                    .map(|span| span.contents)
+                    .collect::<Vec<_>>(),
+                [glyph]
+            );
+        }
+        assert!(
+            columns
+                .windows(2)
+                .all(|columns| columns[1] == columns[0] + 2)
+        );
     }
 
     #[test]
