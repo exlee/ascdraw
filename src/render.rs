@@ -1303,11 +1303,21 @@ fn draw_text_cluster(
     if text.chars().all(char::is_control) {
         return;
     }
+    if is_full_block(text) {
+        let mut paint = paint.clone();
+        paint.set_anti_alias(false);
+        fill_cells(canvas, column, top, 1, metrics, &paint);
+        return;
+    }
 
     let left = PADDING + column * metrics.cell_width;
     let baseline = top as f32 + metrics.baseline_offset;
     let font = font_for_text(metrics, font, text);
     canvas.draw_str(text, (left as f32, baseline), &font, paint);
+}
+
+fn is_full_block(text: &str) -> bool {
+    text == "█"
 }
 
 fn text_clusters(text: &str) -> impl Iterator<Item = &str> {
@@ -1931,6 +1941,13 @@ mod tests {
 
         assert_eq!(row_top(1, &metrics, 100) - row_top(0, &metrics, 100), 16);
         assert_eq!(row_top(2, &metrics, 100) - row_top(1, &metrics, 100), 16);
+    }
+
+    #[test]
+    fn full_block_uses_cell_geometry_while_other_glyphs_use_the_font() {
+        assert!(is_full_block("█"));
+        assert!(!is_full_block("■"));
+        assert!(!is_full_block("██"));
     }
 
     #[test]
