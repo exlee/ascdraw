@@ -83,7 +83,7 @@ impl ToolbarState {
             spans.push(ToolbarSpan {
                 contents: glyph.to_owned(),
                 bold_prefix: 0,
-                selected: column == 1 && layer.active || column == 2 && layer.visible,
+                selected: false,
                 highlighted: false,
                 tooltip: false,
                 action: enabled.then_some(ToolbarAction::Layer {
@@ -195,14 +195,35 @@ mod tests {
             rows.iter()
                 .all(|row| UnicodeWidthStr::width(row.as_str()) == row.chars().count())
         );
-        let selected = toolbar
-            .layer_panel_spans(1, &layers)
-            .into_iter()
-            .filter(|span| span.selected)
-            .map(|span| span.contents)
-            .collect::<Vec<_>>();
-        assert_eq!(selected, ["×", "▪"]);
         assert_eq!(toolbar.menu_row_count(), 4);
+    }
+
+    #[test]
+    fn layer_state_glyphs_are_self_describing_without_operation_outline_state() {
+        let layers = sample_layers();
+        let mut toolbar = ToolbarState::default();
+        enter_layers(&mut toolbar, &layers);
+
+        let operation_spans = (1..=layers.len())
+            .flat_map(|row| toolbar.layer_panel_spans(row, &layers))
+            .filter(|span| matches!(span.action, Some(ToolbarAction::Layer { .. })))
+            .collect::<Vec<_>>();
+
+        assert!(operation_spans.iter().all(|span| !span.selected));
+        assert!(operation_spans.iter().all(|span| !span.highlighted));
+        assert!(operation_spans.iter().any(|span| span.contents == "×"));
+        assert!(operation_spans.iter().any(|span| span.contents == " "));
+        assert!(operation_spans.iter().any(|span| span.contents == "▪"));
+        assert!(operation_spans.iter().any(|span| span.contents == "▫"));
+
+        press(&mut toolbar, &layers, "8");
+        press(&mut toolbar, &layers, "2");
+        let row = toolbar.layer_panel_spans(2, &layers);
+        let prefix = row
+            .iter()
+            .find(|span| span.action == Some(ToolbarAction::BeginLayerPath(LayerId(1))))
+            .unwrap();
+        assert!(prefix.highlighted);
     }
 
     #[test]

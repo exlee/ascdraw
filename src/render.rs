@@ -1621,7 +1621,7 @@ mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::{ColorId, Coord, Direction};
+    use crate::model::{ColorId, Coord, Direction, LayerId};
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 
@@ -2010,6 +2010,47 @@ mod tests {
         )
         .fg;
         assert_eq!(toolbar_span_outline_color(&state, selected), Some(expected));
+    }
+
+    #[test]
+    fn layer_state_glyphs_have_no_outline_while_the_pending_row_prefix_does() {
+        let config = AppConfig::default();
+        let mut state = Editor::new(&config.theme, "test");
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode,)));
+
+        let row = crate::toolbar::MENU_FIRST_ROW + 1;
+        let spans = state.toolbar_spans(row);
+        let operation_spans = spans
+            .iter()
+            .filter(|span| matches!(span.action, Some(ToolbarAction::Layer { .. })))
+            .collect::<Vec<_>>();
+        assert!(operation_spans.iter().any(|span| span.contents == "×"));
+        assert!(operation_spans.iter().any(|span| span.contents == "▪"));
+        assert!(
+            operation_spans
+                .iter()
+                .all(|span| toolbar_span_outline_color(&state, span).is_none())
+        );
+
+        assert!(state.apply_toolbar_action(ToolbarAction::BeginLayerPath(LayerId(0))));
+        let spans = state.toolbar_spans(row);
+        let prefix = spans
+            .iter()
+            .find(|span| span.action == Some(ToolbarAction::BeginLayerPath(LayerId(0))))
+            .unwrap();
+        assert!(prefix.highlighted);
+        assert_eq!(
+            toolbar_span_outline_color(&state, prefix),
+            Some(
+                resolve_derived_face(
+                    &state.grid.default_face,
+                    &config.theme.selection_highlight,
+                    FALLBACK_FG,
+                    FALLBACK_BG,
+                )
+                .fg
+            )
+        );
     }
 
     #[test]
