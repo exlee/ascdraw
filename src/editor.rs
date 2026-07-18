@@ -395,23 +395,22 @@ impl Editor {
         if row + 1 == self.toolbar.content_rows() {
             let (x, y) = self.cursor_coordinates();
             let contents = format!("  ({x},{y})");
-            let coordinates = ToolbarSpan {
+            let mut coordinates = ToolbarSpan {
                 contents,
                 bold_prefix: 0,
                 selected: false,
                 highlighted: false,
                 tooltip: false,
                 action: None,
-                right_aligned: !self.toolbar.auxiliary_panels_visible(),
+                right_aligned: false,
                 foreground: None,
             };
-            if self.toolbar.auxiliary_panels_visible() {
-                let panel_start = spans
-                    .iter()
-                    .position(|span| span.right_aligned)
-                    .expect("auxiliary panels are right-aligned");
+            if self.toolbar.auxiliary_panels_visible()
+                && let Some(panel_start) = spans.iter().position(|span| span.right_aligned)
+            {
                 spans.insert(panel_start, coordinates);
             } else {
+                coordinates.right_aligned = true;
                 spans.push(coordinates);
             }
         }
@@ -1503,7 +1502,11 @@ mod tests {
             column: 10,
         });
 
-        for action in [None, Some(ToolbarAction::ToggleExportMenu)] {
+        for action in [
+            None,
+            Some(ToolbarAction::ToggleExportMenu),
+            Some(ToolbarAction::Toggle(ToggleKind::MultiColorMode)),
+        ] {
             if let Some(action) = action {
                 assert!(state.apply_toolbar_action(action));
             }

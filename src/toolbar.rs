@@ -680,7 +680,7 @@ impl ToolbarState {
     }
 
     pub fn content_rows(&self) -> usize {
-        MENU_FIRST_ROW + self.menu_row_count()
+        MENU_FIRST_ROW + self.menu_row_count() + usize::from(self.auxiliary_panels_visible())
     }
 
     pub fn rows(&self) -> usize {
