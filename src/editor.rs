@@ -2487,6 +2487,13 @@ mod tests {
         };
 
         assert!(editor.paste_styled_rectangle_at_cursor(&rectangle));
+        assert_eq!(
+            editor.navigation_target(Direction::Right, false, 1),
+            Some(Coord {
+                line: origin.line,
+                column: origin.column + 1,
+            })
+        );
         assert_eq!(editor.grid.cursor_pos, origin);
         assert_eq!(editor.cursor_coordinates(), signed_origin);
         assert!(editor.selection.is_collapsed());

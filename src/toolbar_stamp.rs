@@ -1,3 +1,4 @@
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use winit::keyboard::ModifiersState;
 
@@ -101,6 +102,7 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
                     atom.face = concrete_toolbar_face(&state.grid.default_face, &atom.face);
                     atom
                 })
+                .flat_map(split_atom_graphemes)
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -114,6 +116,16 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
         rows,
         width: box_width,
     })
+}
+
+fn split_atom_graphemes(atom: Atom) -> Vec<Atom> {
+    atom.contents
+        .graphemes(true)
+        .map(|contents| Atom {
+            contents: contents.to_owned(),
+            face: atom.face.clone(),
+        })
+        .collect()
 }
 
 fn toolbar_span_face(span: &ToolbarSpan, state: &Editor) -> Face {
@@ -337,7 +349,7 @@ mod tests {
             .rows
             .iter()
             .flatten()
-            .find(|atom| atom.contents == "1.")
+            .find(|atom| atom.contents == "1")
             .unwrap();
         let expected = resolve_derived_face(
             &theme.default,
