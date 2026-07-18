@@ -1288,12 +1288,12 @@ fn draw_text_cluster(
     if text.chars().all(char::is_control) {
         return;
     }
-    let font = font_for_text(metrics, font, text);
-    if cell_graphics::draw(canvas, column, top, text, &font, metrics, paint) {
+    if cell_graphics::draw(canvas, column, top, text, metrics, paint) {
         return;
     }
     let left = PADDING as f32 + column as f32 * metrics.cell_width;
     let baseline = top + metrics.baseline_offset;
+    let font = font_for_text(metrics, font, text);
     canvas.draw_str(text, (left, baseline), &font, paint);
 }
 

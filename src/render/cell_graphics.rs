@@ -1,4 +1,4 @@
-use skia_safe::{Canvas, Font, Paint, Rect};
+use skia_safe::{Canvas, Paint, Rect};
 
 use super::{CellMetrics, PADDING};
 
@@ -49,45 +49,49 @@ fn block_element_rects(character: char) -> Option<BlockElementRects> {
     }
 }
 
-fn stretched_glyph_target(character: char, cell: Rect) -> Option<Rect> {
-    if matches!(character, '░' | '▒' | '▓') {
-        return Some(cell);
+fn shade_level(character: char) -> Option<u8> {
+    match character {
+        '░' => Some(1),
+        '▒' => Some(2),
+        '▓' => Some(3),
+        _ => None,
     }
-    if !matches!(character, '╱' | '╲' | '╳') {
-        return None;
-    }
-
-    let overhang = (cell.width().min(cell.height()) / 12.0).max(1.0);
-    Some(Rect::new(
-        cell.left - overhang,
-        cell.top - overhang,
-        cell.right + overhang,
-        cell.bottom + overhang,
-    ))
 }
 
-fn draw_stretched_glyph(
-    canvas: &Canvas,
-    text: &str,
-    font: &Font,
-    paint: &Paint,
-    target: Rect,
-) -> bool {
-    let bounds = font.measure_str(text, Some(paint)).1;
-    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
-        return false;
-    }
+fn draw_shade(canvas: &Canvas, cell: Rect, level: u8, paint: &Paint) {
+    let mut paint = paint.clone();
+    paint
+        .set_anti_alias(false)
+        .set_alpha_f(f32::from(level) / 4.0);
+    canvas.draw_rect(cell, &paint);
+}
 
-    canvas.save();
-    canvas.translate((target.left, target.top));
-    canvas.scale((
-        target.width() / bounds.width(),
-        target.height() / bounds.height(),
-    ));
-    canvas.translate((-bounds.left, -bounds.top));
-    canvas.draw_str(text, (0.0, 0.0), font, paint);
-    canvas.restore();
-    true
+type DiagonalSegment = ((f32, f32), (f32, f32));
+
+fn diagonal_segments(
+    character: char,
+    cell: Rect,
+    overlap: f32,
+) -> Option<[Option<DiagonalSegment>; 2]> {
+    let diagonals = match character {
+        '╱' => (true, false),
+        '╲' => (false, true),
+        '╳' => (true, true),
+        _ => return None,
+    };
+    let length = cell.width().hypot(cell.height());
+    let overlap_x = overlap * cell.width() / length;
+    let overlap_y = overlap * cell.height() / length;
+    Some([
+        diagonals.0.then_some((
+            (cell.left - overlap_x, cell.bottom + overlap_y),
+            (cell.right + overlap_x, cell.top - overlap_y),
+        )),
+        diagonals.1.then_some((
+            (cell.left - overlap_x, cell.top - overlap_y),
+            (cell.right + overlap_x, cell.bottom + overlap_y),
+        )),
+    ])
 }
 
 pub(super) fn draw(
@@ -95,7 +99,6 @@ pub(super) fn draw(
     column: usize,
     top: f32,
     text: &str,
-    font: &Font,
     metrics: &CellMetrics,
     paint: &Paint,
 ) -> bool {
@@ -107,10 +110,16 @@ pub(super) fn draw(
         return false;
     }
 
-    let left = (PADDING as f32 + column as f32 * metrics.cell_width).round();
-    let right = (PADDING as f32 + (column + 1) as f32 * metrics.cell_width).round();
-    let bottom = (top + metrics.cell_height).round();
-    let top = top.round();
+    let cell = Rect::from_xywh(
+        PADDING as f32 + column as f32 * metrics.cell_width,
+        top,
+        metrics.cell_width,
+        metrics.cell_height,
+    );
+    let left = cell.left.round();
+    let right = cell.right.round();
+    let bottom = cell.bottom.round();
+    let top = cell.top.round();
     if let Some(rects) = block_element_rects(character) {
         let mut paint = paint.clone();
         paint.set_anti_alias(false);
@@ -127,11 +136,21 @@ pub(super) fn draw(
         return true;
     }
 
-    let cell = Rect::new(left, top, right, bottom);
-    let Some(target) = stretched_glyph_target(character, cell) else {
+    if let Some(level) = shade_level(character) {
+        draw_shade(canvas, Rect::new(left, top, right, bottom), level, paint);
+        return true;
+    }
+
+    let stroke_width = (cell.width().min(cell.height()) / 14.0).max(1.0);
+    let Some(segments) = diagonal_segments(character, cell, stroke_width) else {
         return false;
     };
-    draw_stretched_glyph(canvas, text, font, paint, target)
+    let mut paint = paint.clone();
+    paint.set_anti_alias(true).set_stroke_width(stroke_width);
+    for (start, end) in segments.into_iter().flatten() {
+        canvas.draw_line(start, end, &paint);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -151,12 +170,10 @@ mod tests {
             block_element_rects('█'),
             Some([Some((0.0, 0.0, 1.0, 1.0)), None, None, None])
         );
-        let cell = Rect::new(10.0, 20.0, 18.0, 36.0);
         for codepoint in 0x2580..=0x259f {
             let character = char::from_u32(codepoint).unwrap();
             assert!(
-                block_element_rects(character).is_some()
-                    || stretched_glyph_target(character, cell).is_some(),
+                block_element_rects(character).is_some() || shade_level(character).is_some(),
                 "missing Block Element U+{codepoint:04X}"
             );
         }
@@ -191,7 +208,6 @@ mod tests {
                 0,
                 row as f32 * metrics.cell_height,
                 "█",
-                &metrics.font,
                 &metrics,
                 &paint,
             ));
@@ -206,19 +222,81 @@ mod tests {
     }
 
     #[test]
-    fn fits_shades_to_the_cell_and_stretches_diagonals_past_it() {
+    fn shades_have_terminal_densities_and_diagonals_extend_past_the_cell() {
+        assert_eq!(shade_level('░'), Some(1));
+        assert_eq!(shade_level('▒'), Some(2));
+        assert_eq!(shade_level('▓'), Some(3));
+        assert_eq!(shade_level('█'), None);
+
         let cell = Rect::new(10.0, 20.0, 18.0, 36.0);
-        for shade in ['░', '▒', '▓'] {
-            assert_eq!(stretched_glyph_target(shade, cell), Some(cell));
+        let segments = diagonal_segments('╳', cell, 2.0).unwrap();
+        for (start, end) in segments.into_iter().flatten() {
+            assert!(start.0 < cell.left);
+            assert!(end.0 > cell.right);
+            assert!(start.1 < cell.top || start.1 > cell.bottom);
+            assert!(end.1 < cell.top || end.1 > cell.bottom);
         }
-        for diagonal in ['╱', '╲', '╳'] {
-            let target = stretched_glyph_target(diagonal, cell).unwrap();
-            assert!(target.left < cell.left);
-            assert!(target.top < cell.top);
-            assert!(target.right > cell.right);
-            assert!(target.bottom > cell.bottom);
+        assert_eq!(diagonal_segments('a', cell, 2.0), None);
+
+        let width = cell.width();
+        let height = cell.height();
+        let upper_right = Rect::from_xywh(cell.right, cell.top, width, height);
+        let lower_left = Rect::from_xywh(cell.left, cell.bottom, width, height);
+        let upper = diagonal_segments('╱', upper_right, 2.0).unwrap()[0].unwrap();
+        let lower = diagonal_segments('╱', lower_left, 2.0).unwrap()[0].unwrap();
+        let upper_direction = (upper.1.0 - upper.0.0, upper.1.1 - upper.0.1);
+        let lower_direction = (lower.1.0 - lower.0.0, lower.1.1 - lower.0.1);
+        assert!((upper_direction.0 - lower_direction.0).abs() < 0.0001);
+        assert!((upper_direction.1 - lower_direction.1).abs() < 0.0001);
+        assert!(lower.1.0 > upper.0.0);
+        assert!(lower.1.1 < upper.0.1);
+    }
+
+    #[test]
+    fn shade_cells_are_uniform_and_increase_in_density() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8.25,
+            cell_height: 16.375,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let width = PADDING + (metrics.cell_width * 3.0).ceil() as usize;
+        let height = metrics.cell_height.ceil() as usize;
+        let mut pixels = vec![0xff; width * height * 4];
+        let image_info = ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::BGRA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface =
+            surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                .expect("test surface");
+        let mut paint = Paint::default();
+        paint.set_color(Rgba::rgb(0, 0, 0).to_color());
+        for (column, shade) in ["░", "▒", "▓"].into_iter().enumerate() {
+            assert!(draw(surface.canvas(), column, 0.0, shade, &metrics, &paint,));
         }
-        assert_eq!(stretched_glyph_target('█', cell), None);
-        assert_eq!(stretched_glyph_target('a', cell), None);
+        drop(surface);
+
+        let mut shades = Vec::new();
+        let bottom = metrics.cell_height.round() as usize;
+        for column in 0..3 {
+            let left = (PADDING as f32 + column as f32 * metrics.cell_width).round() as usize;
+            let right =
+                (PADDING as f32 + (column + 1) as f32 * metrics.cell_width).round() as usize;
+            let sample = pixels[((height / 2) * width + left) * 4];
+            for y in 0..bottom {
+                for x in left..right {
+                    assert_eq!(pixels[(y * width + x) * 4], sample);
+                }
+            }
+            shades.push(sample);
+        }
+        assert!(shades[0] > shades[1]);
+        assert!(shades[1] > shades[2]);
     }
 }
