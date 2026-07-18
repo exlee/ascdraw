@@ -10,6 +10,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 #[cfg(test)]
 use winit::keyboard::Key;
 use winit::keyboard::ModifiersState;
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::WindowId;
 
 mod app;
@@ -306,11 +307,16 @@ fn try_main() -> Result<ExitCode> {
                             editor.cancel_scroll_pan();
                             let keypress_at = Instant::now();
                             editor.note_keypress(keypress_at);
+                            let key_without_modifiers = event.key_without_modifiers();
+                            let command_key = input::direction_key_for_event(
+                                &event.logical_key,
+                                &key_without_modifiers,
+                            );
                             let key_type = classify_key(
                                 editor.state.state(),
                                 editor.state.cursor_mode.accepts_text(),
                                 KeyInput {
-                                    key: &event.logical_key,
+                                    key: command_key,
                                     text: event.text.as_deref(),
                                     repeat: event.repeat,
                                     modifiers: editor.modifiers,

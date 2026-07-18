@@ -491,6 +491,14 @@ pub fn cursor_direction_for_key(key: &Key, mode: CursorMode) -> Option<Direction
     }
 }
 
+pub fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
+    if direction_for_key(key_without_modifiers).is_some() {
+        key_without_modifiers
+    } else {
+        key
+    }
+}
+
 pub fn edit_direction_command(
     direction: Direction,
     modifiers: ModifiersState,
@@ -1639,6 +1647,30 @@ mod tests {
             None,
             "Shift-first Alt remains available to ordered long movement"
         );
+    }
+
+    #[test]
+    fn modifier_transformed_hjkl_still_resolve_clone_move_directions() {
+        let modifiers = ModifiersState::ALT | ModifiersState::SHIFT;
+        for (key, direction) in [
+            ("h", Direction::Left),
+            ("j", Direction::Down),
+            ("k", Direction::Up),
+            ("l", Direction::Right),
+        ] {
+            let logical_key = Key::Character(format!("modified-{key}").into());
+            let unmodified_key = Key::Character(key.into());
+            assert_eq!(
+                move_selection_command(
+                    direction_key_for_event(&logical_key, &unmodified_key),
+                    modifiers,
+                    false,
+                    true,
+                    Some(7),
+                ),
+                Some(MoveSelectionCommand::BeginCloneAndStep(direction, 7))
+            );
+        }
     }
 
     #[test]
