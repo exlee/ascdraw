@@ -308,6 +308,9 @@ impl Editor {
     }
 
     pub fn new(theme: &ThemeConfig, window_title: impl Into<String>) -> Self {
+        let layers = LayerStack::default();
+        let mut toolbar = ToolbarState::default();
+        toolbar.sync_layer_count(layers.layers().len());
         Self {
             grid: GridState {
                 lines: vec![Vec::new()],
@@ -318,12 +321,12 @@ impl Editor {
             theme: theme.clone(),
             window_title: window_title.into(),
             cursor_mode: CursorMode::Stamp,
-            toolbar: ToolbarState::default(),
+            toolbar,
             selection: CanvasSelection::collapsed_at(Coord::default()),
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
-            layers: LayerStack::default(),
+            layers,
             line_preview: None,
             shape_preview: None,
             move_lift: None,
@@ -388,11 +391,18 @@ impl Editor {
         }
     }
 
+    #[cfg(test)]
     pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        let mut spans = self
-            .toolbar
-            .toolbar_spans_with_layers(row, &self.layer_summaries());
-        if row + 1 == self.toolbar.content_rows() {
+        self.toolbar_spans_for_width(row, usize::MAX)
+    }
+
+    pub fn toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
+        let mut spans = self.toolbar.toolbar_spans_with_layers_for_width(
+            row,
+            box_width,
+            &self.layer_summaries(),
+        );
+        if row + 1 == self.toolbar.content_rows_for_width(box_width) {
             let (x, y) = self.cursor_coordinates();
             let contents = format!("  ({x},{y})");
             let mut coordinates = ToolbarSpan {

@@ -628,8 +628,8 @@ fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
             &editor.state.toolbar,
         );
         editor.mouse_cell = pointer_position_to_coord(
-            x,
-            y,
+            (x, y),
+            viewport_width,
             &editor.renderer,
             scale_factor,
             config,

@@ -148,7 +148,7 @@ pub fn render(
                 width,
                 height,
                 &metrics,
-                title_metrics.cell_height,
+                (title_metrics.cell_width, title_metrics.cell_height),
                 &state.toolbar,
                 config.transparent_menubar,
                 window.scale_factor(),
@@ -472,16 +472,19 @@ fn render_toolbar(
 ) {
     let max_columns = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let mut rows = vec![(0, crate::toolbar::toolbar_border_spans(max_columns, true))];
-    for row in 0..state.toolbar.content_rows() {
+    for row in 0..state.toolbar.content_rows_for_width(max_columns) {
         let physical_row = crate::toolbar::toolbar_content_row(row);
         rows.push((
             physical_row,
-            crate::toolbar::boxed_toolbar_spans(&state.toolbar_spans(row), max_columns),
+            crate::toolbar::boxed_toolbar_spans(
+                &state.toolbar_spans_for_width(row, max_columns),
+                max_columns,
+            ),
         ));
     }
 
     rows.push((
-        state.toolbar.rows() - 1,
+        state.toolbar.rows_for_width(max_columns) - 1,
         crate::toolbar::toolbar_border_spans(max_columns, false),
     ));
 
@@ -2231,13 +2234,13 @@ mod tests {
             font_mgr: FontMgr::new(),
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
-        let width = PADDING * 2 + 12 * metrics.cell_width;
+        let width = PADDING * 2 + 120 * metrics.cell_width;
         let height = 320;
         let layout = layout_metrics(
             width,
             height,
             &metrics,
-            metrics.cell_height,
+            (metrics.cell_width, metrics.cell_height),
             &state.toolbar,
             false,
             1.0,

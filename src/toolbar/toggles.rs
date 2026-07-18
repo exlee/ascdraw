@@ -139,7 +139,10 @@ mod tests {
         expected: ToolbarAction,
     ) -> usize {
         let mut column = 0;
-        for span in boxed_toolbar_spans(&toolbar.toolbar_spans(row), width) {
+        for span in boxed_toolbar_spans(
+            &toolbar.toolbar_spans_with_layers_for_width(row, width, &[]),
+            width,
+        ) {
             let span_width = UnicodeWidthStr::width(span.contents.as_str());
             if span.action == Some(expected) {
                 return column;
@@ -156,7 +159,10 @@ mod tests {
         expected: ToolbarAction,
     ) -> Range<usize> {
         let mut column = 0;
-        let spans = boxed_toolbar_spans(&toolbar.toolbar_spans(row), width);
+        let spans = boxed_toolbar_spans(
+            &toolbar.toolbar_spans_with_layers_for_width(row, width, &[]),
+            width,
+        );
         let mut range = None;
         for span in spans {
             let start = column;
@@ -264,7 +270,7 @@ mod tests {
 
     #[test]
     fn top_level_feature_cells_stack_and_right_align_in_every_enabled_combination() {
-        let width = 80;
+        let width = 120;
         for (layers, colors, top, bottom, actions) in [
             (
                 false,

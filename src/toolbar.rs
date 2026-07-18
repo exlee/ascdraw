@@ -32,8 +32,18 @@ const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
 pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
+#[cfg(test)]
 pub fn toolbar_height(toolbar: &ToolbarState, cell_height: usize) -> usize {
     let rows = toolbar.rows();
+    rows * cell_height + rows.saturating_sub(1) * TOOLBAR_ROW_GAP
+}
+
+pub fn toolbar_height_for_width(
+    toolbar: &ToolbarState,
+    box_width: usize,
+    cell_height: usize,
+) -> usize {
+    let rows = toolbar.rows_for_width(box_width);
     rows * cell_height + rows.saturating_sub(1) * TOOLBAR_ROW_GAP
 }
 
@@ -103,6 +113,13 @@ pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSp
     }
     boxed.push(plain_span("│".to_string()));
     boxed
+}
+
+fn toolbar_content_width(box_width: usize) -> usize {
+    let interior_width = box_width.saturating_sub(2);
+    interior_width
+        .saturating_sub(usize::from(interior_width > 0))
+        .saturating_sub(usize::from(interior_width > 1))
 }
 
 pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
@@ -657,34 +674,44 @@ impl ToolbarState {
         self.shortcut_prefix
     }
 
+    #[cfg(test)]
     pub fn menu_row_count(&self) -> usize {
-        self.left_menu_row_count()
-            .max(self.auxiliary_panel_row_count())
+        self.menu_row_count_for_width(usize::MAX)
     }
 
-    fn left_menu_row_count(&self) -> usize {
+    pub fn menu_row_count_for_width(&self, box_width: usize) -> usize {
+        self.left_menu_row_count_for_width(box_width)
+            .max(self.auxiliary_panel_row_count_for_width(box_width))
+    }
+
+    fn left_menu_row_count_for_width(&self, box_width: usize) -> usize {
         if self.export_open {
             2
         } else if self.main_mode == MainMode::Utilities {
             1
         } else {
-            self.layout().map_or(2, |layout| {
-                1 + layout
-                    .options
-                    .iter()
-                    .map(|options| options.len().div_ceil(OPTIONS_PER_PAGE))
-                    .max()
-                    .unwrap_or(0)
-            })
+            menu_layout::hierarchical_menu_row_count(self, box_width)
         }
     }
 
+    #[cfg(test)]
     pub fn content_rows(&self) -> usize {
-        MENU_FIRST_ROW + self.menu_row_count() + usize::from(self.auxiliary_panels_visible())
+        self.content_rows_for_width(usize::MAX)
     }
 
+    pub fn content_rows_for_width(&self, box_width: usize) -> usize {
+        MENU_FIRST_ROW
+            + self.menu_row_count_for_width(box_width)
+            + usize::from(self.auxiliary_panels_visible())
+    }
+
+    #[cfg(test)]
     pub fn rows(&self) -> usize {
-        self.content_rows() + 2
+        self.rows_for_width(usize::MAX)
+    }
+
+    pub fn rows_for_width(&self, box_width: usize) -> usize {
+        self.content_rows_for_width(box_width) + 2
     }
 
     #[cfg(test)]
@@ -692,31 +719,62 @@ impl ToolbarState {
         self.toolbar_spans_with_layers(row, &[])
     }
 
+    #[cfg(test)]
     pub fn toolbar_spans_with_layers(
         &self,
         row: usize,
         layers: &[LayerSummary],
     ) -> Vec<ToolbarSpan> {
+        self.toolbar_spans_with_layers_for_width(row, usize::MAX, layers)
+    }
+
+    pub fn toolbar_spans_with_layers_for_width(
+        &self,
+        row: usize,
+        box_width: usize,
+        layers: &[LayerSummary],
+    ) -> Vec<ToolbarSpan> {
+        let menu_row_count = self.menu_row_count_for_width(box_width);
+        let left_menu_row_count = self.left_menu_row_count_for_width(box_width);
         let mut spans = match row {
-            MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => self.main_spans(row),
-            MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + self.menu_row_count() => {
+            MAIN_LABEL_ROW | MAIN_SHORTCUT_ROW => {
+                let mut spans = self.main_spans(row);
+                if self.top_level_headers_wrap(box_width)
+                    && let Some(start) = spans.iter().position(|span| span.right_aligned)
+                {
+                    spans.truncate(start);
+                }
+                spans
+            }
+            MENU_FIRST_ROW.. if row < MENU_FIRST_ROW + menu_row_count => {
                 let panel_row = row - MENU_FIRST_ROW;
-                if panel_row >= self.left_menu_row_count() {
+                if panel_row >= left_menu_row_count {
                     Vec::new()
                 } else if self.export_open {
                     self.export_menu_spans(row)
                 } else if self.main_mode == MainMode::Utilities {
                     self.utilities_menu_spans(row)
                 } else {
-                    self.menu_spans(row)
+                    self.menu_spans(row, box_width)
                 }
             }
             _ => Vec::new(),
         };
-        if row >= MENU_FIRST_ROW && row < MENU_FIRST_ROW + self.menu_row_count() {
-            self.append_auxiliary_panel_spans(&mut spans, row - MENU_FIRST_ROW, layers);
+        if row >= MENU_FIRST_ROW && row < MENU_FIRST_ROW + menu_row_count {
+            self.append_auxiliary_panel_spans_for_width(
+                &mut spans,
+                row - MENU_FIRST_ROW,
+                box_width,
+                layers,
+            );
         }
         spans
+    }
+
+    fn top_level_headers_wrap(&self, box_width: usize) -> bool {
+        [MAIN_LABEL_ROW, MAIN_SHORTCUT_ROW]
+            .into_iter()
+            .any(|row| spans_width(&self.main_spans(row)) > toolbar_content_width(box_width))
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
@@ -842,8 +900,8 @@ impl ToolbarState {
         spans
     }
 
-    fn menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        menu_layout::hierarchical_menu_spans(self, row)
+    fn menu_spans(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
+        menu_layout::hierarchical_menu_spans(self, row, box_width)
     }
 
     fn utilities_menu_spans(&self, _row: usize) -> Vec<ToolbarSpan> {
@@ -962,7 +1020,10 @@ impl ToolbarState {
         layers: &[LayerSummary],
     ) -> Option<ToolbarAction> {
         let mut start = 0;
-        for span in boxed_toolbar_spans(&self.toolbar_spans_with_layers(row, layers), box_width) {
+        for span in boxed_toolbar_spans(
+            &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
+            box_width,
+        ) {
             let end = start + UnicodeWidthStr::width(span.contents.as_str());
             if (start..end).contains(&column) {
                 return span.action;
@@ -1896,6 +1957,71 @@ mod tests {
             category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 3).trim_end(),
             "   5.2. ▜ ▄ ▙ ▟ █"
         );
+    }
+
+    #[test]
+    fn narrow_width_wraps_complete_hierarchical_submenus_and_keeps_hit_testing() {
+        let toolbar = ToolbarState::default();
+        let layout = toolbar.layout().unwrap();
+        let widest_category = layout
+            .labels
+            .iter()
+            .enumerate()
+            .map(|(category, label)| {
+                let options = layout.options[category];
+                submenu_cell_width(
+                    submenu_prefix_width(label, category, options.len()),
+                    options,
+                )
+            })
+            .max()
+            .unwrap();
+        let width = widest_category + 4;
+        let content_width = toolbar_content_width(width);
+        assert!(toolbar.rows_for_width(width) > toolbar.rows());
+
+        let rows = (0..toolbar.menu_row_count_for_width(width))
+            .map(|panel_row| {
+                toolbar.toolbar_spans_with_layers_for_width(MENU_FIRST_ROW + panel_row, width, &[])
+            })
+            .collect::<Vec<_>>();
+        assert!(rows.iter().all(|row| {
+            let left_width = row
+                .iter()
+                .take_while(|span| !span.right_aligned)
+                .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
+                .sum::<usize>();
+            let right_width = row
+                .iter()
+                .skip_while(|span| !span.right_aligned)
+                .map(|span| UnicodeWidthStr::width(span.contents.as_str()))
+                .sum::<usize>();
+            left_width + right_width + usize::from(right_width > 0) <= content_width
+        }));
+        for label in layout.labels {
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| spans_text(row).contains(&format!("{label}:")))
+                    .count(),
+                1
+            );
+        }
+
+        let expected = ToolbarAction::SelectSubmenu {
+            submenu: layout.labels.len() - 1,
+            option: 0,
+        };
+        let (row, column) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(panel_row, spans)| {
+                let boxed = boxed_toolbar_spans(spans, width);
+                span_starts(&boxed).into_iter().find_map(|(column, span)| {
+                    (span.action == Some(expected)).then_some((MENU_FIRST_ROW + panel_row, column))
+                })
+            })
+            .unwrap();
+        assert_eq!(toolbar.action_at(row, column, width), Some(expected));
     }
 
     #[test]

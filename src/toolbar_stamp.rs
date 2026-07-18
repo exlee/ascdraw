@@ -86,10 +86,13 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
     if box_width == 0 {
         return None;
     }
-    let mut span_rows = Vec::with_capacity(state.toolbar.rows());
+    let mut span_rows = Vec::with_capacity(state.toolbar.rows_for_width(box_width));
     span_rows.push(toolbar_border_spans(box_width, true));
-    for row in 0..state.toolbar.content_rows() {
-        span_rows.push(boxed_toolbar_spans(&state.toolbar_spans(row), box_width));
+    for row in 0..state.toolbar.content_rows_for_width(box_width) {
+        span_rows.push(boxed_toolbar_spans(
+            &state.toolbar_spans_for_width(row, box_width),
+            box_width,
+        ));
     }
     span_rows.push(toolbar_border_spans(box_width, false));
 
@@ -323,7 +326,7 @@ mod tests {
         let snapshot = styled_toolbar_snapshot(&state, 64).unwrap();
 
         assert_eq!(snapshot.width, 64);
-        assert_eq!(snapshot.rows.len(), state.toolbar.rows());
+        assert_eq!(snapshot.rows.len(), state.toolbar.rows_for_width(64));
         assert_eq!(row_text(&snapshot.rows[0]), format!("┌{}┐", "─".repeat(62)));
         assert_eq!(
             row_text(snapshot.rows.last().unwrap()),
@@ -343,13 +346,15 @@ mod tests {
             .join("\n");
         assert!(text.contains("Lyrs"));
         assert!(text.contains("Clrs"));
-        assert!(text.contains("8.1. α × ▪"));
+        assert!(text.contains("8.1. α × ▪"), "{text}");
         assert!(text.contains("9.1. ■"));
         let structural = snapshot
             .rows
             .iter()
             .flatten()
-            .find(|atom| atom.contents == "1")
+            .find(|atom| {
+                atom.contents == "L" && atom.face.attributes.iter().any(|name| name == "bold")
+            })
             .unwrap();
         let expected = resolve_derived_face(
             &theme.default,
@@ -394,13 +399,12 @@ mod tests {
         let palette = snapshot
             .rows
             .iter()
+            .filter(|row| {
+                let text = row_text(row);
+                text.contains("9.1.") || text.contains("9.2.")
+            })
             .flatten()
             .filter(|atom| atom.contents.contains('■'))
-            .rev()
-            .take(ColorId::COUNT)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
             .collect::<Vec<_>>();
         assert_eq!(palette.len(), ColorId::COUNT);
         for (index, atom) in palette.into_iter().enumerate() {

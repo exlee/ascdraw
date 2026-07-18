@@ -531,8 +531,8 @@ fn arrow_direction_for_key(key: &Key) -> Option<Direction> {
 }
 
 pub fn pointer_position_to_coord(
-    x: f64,
-    y: f64,
+    position: (f64, f64),
+    viewport_width: usize,
     renderer: &Renderer,
     scale_factor: f64,
     config: &AppConfig,
@@ -541,11 +541,12 @@ pub fn pointer_position_to_coord(
 ) -> Option<Coord> {
     let metrics = renderer.metrics(scale_factor);
     let toolbar_metrics = renderer.title_metrics(scale_factor);
+    let box_width = viewport_width.saturating_sub(PADDING * 2) / toolbar_metrics.cell_width.max(1);
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
-        + crate::toolbar::toolbar_height(toolbar, toolbar_metrics.cell_height);
+        + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_metrics.cell_height);
     pointer_position_to_coord_with_metrics(
-        x,
-        y,
+        position.0,
+        position.1,
         grid_top,
         metrics.cell_width,
         metrics.cell_height,
@@ -581,6 +582,7 @@ pub fn pointer_position_to_toolbar_position(
     toolbar: &ToolbarState,
 ) -> Option<(usize, usize, usize)> {
     let metrics = renderer.title_metrics(scale_factor);
+    let box_width = viewport_width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     toolbar_position(
         x,
         y,
@@ -588,7 +590,7 @@ pub fn pointer_position_to_toolbar_position(
         metrics.cell_width,
         metrics.cell_height,
         content_top_padding(scale_factor, config.transparent_menubar),
-        toolbar.rows(),
+        toolbar.rows_for_width(box_width),
     )
 }
 
@@ -658,7 +660,9 @@ mod tests {
         );
         assert_eq!(
             crate::toolbar::ToolbarState::default().action_at(0, 8, 20),
-            Some(crate::toolbar::ToolbarAction::ToggleExportMenu)
+            Some(crate::toolbar::ToolbarAction::SelectMain(
+                crate::toolbar::MainMode::Stamp
+            ))
         );
         for border_column in [0, 1, 18, 19] {
             assert_eq!(

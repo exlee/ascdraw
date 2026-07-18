@@ -132,7 +132,7 @@ impl MetalRenderer {
                     width,
                     height,
                     &metrics,
-                    title_metrics.cell_height,
+                    (title_metrics.cell_width, title_metrics.cell_height),
                     &state.toolbar,
                     config.transparent_menubar,
                     window.scale_factor(),

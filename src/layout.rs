@@ -332,16 +332,18 @@ pub fn layout_metrics(
     width: usize,
     height: usize,
     metrics: &CellMetrics,
-    toolbar_cell_height: usize,
+    toolbar_cell_size: (usize, usize),
     toolbar: &ToolbarState,
     transparent_menubar: bool,
     scale_factor: f64,
 ) -> LayoutMetrics {
     let top_padding = content_top_padding(scale_factor, transparent_menubar);
-    let grid_top = top_padding + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height);
+    let toolbar_box_width = width.saturating_sub(PADDING * 2) / toolbar_cell_size.0.max(1);
+    let grid_top = top_padding
+        + crate::toolbar::toolbar_height_for_width(toolbar, toolbar_box_width, toolbar_cell_size.1);
     let cols = width.saturating_sub(PADDING * 2) / metrics.cell_width.max(1);
     let (rows, grid_bottom, tooltip_top, tooltip_visible) =
-        vertical_geometry(height, grid_top, metrics.cell_height, toolbar_cell_height);
+        vertical_geometry(height, grid_top, metrics.cell_height, toolbar_cell_size.1);
     LayoutMetrics {
         top_padding,
         grid_top,

@@ -523,19 +523,28 @@ impl EditorWindow {
         let scale_factor = self.window.scale_factor();
         let old_metrics = self.renderer.metrics(scale_factor);
         let old_toolbar_metrics = self.renderer.title_metrics(scale_factor);
-        let old_grid_top = grid_top(
+        let viewport_width = self.window.inner_size().width as usize;
+        let old_grid_top = grid_top_for_width(
             scale_factor,
             self.transparent_menubar,
-            old_toolbar_metrics.cell_height,
+            viewport_width,
+            (
+                old_toolbar_metrics.cell_width,
+                old_toolbar_metrics.cell_height,
+            ),
             &self.state.toolbar,
         );
         self.renderer.apply_config(config);
         let new_metrics = self.renderer.metrics(scale_factor);
         let new_toolbar_metrics = self.renderer.title_metrics(scale_factor);
-        let new_grid_top = grid_top(
+        let new_grid_top = grid_top_for_width(
             scale_factor,
             config.transparent_menubar,
-            new_toolbar_metrics.cell_height,
+            viewport_width,
+            (
+                new_toolbar_metrics.cell_width,
+                new_toolbar_metrics.cell_height,
+            ),
             &self.state.toolbar,
         );
         self.viewport.reanchor_cursor(
@@ -748,7 +757,8 @@ impl EditorWindow {
             &mut self.viewport,
             scale_factor,
             self.transparent_menubar,
-            toolbar_metrics.cell_height,
+            self.window.inner_size().width as usize,
+            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
             &previous_state.toolbar,
             &self.state.toolbar,
         );
@@ -1074,7 +1084,7 @@ impl EditorWindow {
             size.width as usize,
             size.height as usize,
             &metrics,
-            toolbar_metrics.cell_height,
+            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
             &self.state.toolbar,
             self.transparent_menubar,
             scale_factor,
@@ -1590,10 +1600,11 @@ fn adjust_font_size(
     let scale_factor = editor.window.scale_factor();
     let old_metrics = editor.renderer.metrics(scale_factor);
     let toolbar_metrics = editor.renderer.title_metrics(scale_factor);
-    let grid_top = grid_top(
+    let grid_top = grid_top_for_width(
         scale_factor,
         config.transparent_menubar,
-        toolbar_metrics.cell_height,
+        editor.window.inner_size().width as usize,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
         &editor.state.toolbar,
     );
     let changed = match action {
@@ -1615,6 +1626,7 @@ fn adjust_font_size(
     }
 }
 
+#[cfg(test)]
 fn grid_top(
     scale_factor: f64,
     transparent_menubar: bool,
@@ -1625,24 +1637,39 @@ fn grid_top(
         + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height)
 }
 
+fn grid_top_for_width(
+    scale_factor: f64,
+    transparent_menubar: bool,
+    viewport_width: usize,
+    toolbar_cell_size: (usize, usize),
+    toolbar: &crate::toolbar::ToolbarState,
+) -> usize {
+    let box_width = viewport_width.saturating_sub(PADDING * 2) / toolbar_cell_size.0.max(1);
+    content_top_padding(scale_factor, transparent_menubar)
+        + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_cell_size.1)
+}
+
 fn reanchor_toolbar_transition(
     viewport: &mut ViewportOffset,
     scale_factor: f64,
     transparent_menubar: bool,
-    toolbar_cell_height: usize,
+    viewport_width: usize,
+    toolbar_cell_size: (usize, usize),
     old_toolbar: &crate::toolbar::ToolbarState,
     new_toolbar: &crate::toolbar::ToolbarState,
 ) {
-    let old_grid_top = grid_top(
+    let old_grid_top = grid_top_for_width(
         scale_factor,
         transparent_menubar,
-        toolbar_cell_height,
+        viewport_width,
+        toolbar_cell_size,
         old_toolbar,
     );
-    let new_grid_top = grid_top(
+    let new_grid_top = grid_top_for_width(
         scale_factor,
         transparent_menubar,
-        toolbar_cell_height,
+        viewport_width,
+        toolbar_cell_size,
         new_toolbar,
     );
     viewport.reanchor_grid_top(old_grid_top, new_grid_top);
@@ -2364,7 +2391,8 @@ mod tests {
             viewport,
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1, toolbar_cell_height),
             old_toolbar,
             new_toolbar,
         );
