@@ -57,6 +57,10 @@ impl DocumentSession {
         matches!(self, Self::Stdin(_))
     }
 
+    pub(crate) fn allows_document_history(&self) -> bool {
+        !self.is_stdin()
+    }
+
     fn path(&self) -> Option<&Path> {
         match self {
             Self::Scratchpad(path) | Self::File(path) => Some(path),
@@ -74,6 +78,13 @@ impl DocumentSession {
                     .to_string_lossy()
             ),
             Self::Stdin(_) => "ascdraw - stdin".to_owned(),
+        }
+    }
+
+    pub(crate) fn explicit_file_path(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Scratchpad(_) | Self::Stdin(_) => None,
         }
     }
 }
@@ -1185,6 +1196,44 @@ impl EditorWindow {
             document::save,
         )
     }
+
+    pub fn set_recent_documents(&mut self, files: &[PathBuf]) {
+        self.state.toolbar.set_recent_documents(files);
+    }
+
+    pub fn set_document_history_enabled(&mut self, enabled: bool) {
+        self.state.toolbar.set_document_history_enabled(enabled);
+    }
+
+    pub fn open_document(&mut self, path: PathBuf, scratchpad: bool) -> Result<()> {
+        self.save_document()?;
+        let session = if scratchpad {
+            DocumentSession::scratchpad(path.clone())
+        } else {
+            DocumentSession::file(path.clone())
+        };
+        let title = session.window_title();
+        let mut state = Editor::new(&self.state.theme, title.clone());
+        if let Some(document) = document::load(&path)? {
+            let active_layer = document
+                .active_layer
+                .context("saved document has no active layer")?;
+            state.restore_layers(document.layers, active_layer)?;
+            if let Some(selections) = document.menu_selections {
+                state.restore_menu_selections(&selections);
+            }
+        }
+        self.window.set_title(&title);
+        self.state = state;
+        self.document_session = session;
+        self.document_dirty = false;
+        self.menu_selections_dirty = false;
+        self.history = EditHistory::default();
+        self.viewport = ViewportOffset::default();
+        self.ensure_cursor_in_viewport();
+        self.request_redraw();
+        Ok(())
+    }
 }
 
 fn durable_menu_selections_changed(
@@ -1642,6 +1691,7 @@ pub fn handle_command(
     elwt: &ActiveEventLoop,
     config: &AppConfig,
     document_session: &DocumentSession,
+    recent_documents: &[PathBuf],
 ) {
     let target = source_window_id
         .filter(|window_id| windows.contains_key(window_id))
@@ -1650,7 +1700,9 @@ pub fn handle_command(
     match command {
         AppCommand::WindowNew if document_session.is_stdin() => {}
         AppCommand::WindowNew => match create_editor_window(elwt, config, document_session) {
-            Ok(editor) => {
+            Ok(mut editor) => {
+                editor.set_document_history_enabled(document_session.allows_document_history());
+                editor.set_recent_documents(recent_documents);
                 windows.insert(editor.window_id(), editor);
             }
             Err(error) => log_error(format!("new window creation failed: {error:#}")),

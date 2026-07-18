@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -293,6 +294,7 @@ pub enum PendingShortcut {
     ExportOption(usize),
     ExportFlat(usize),
     ToggleOptions,
+    HistoryOptions,
     Layers,
     Layer(LayerId),
     Colors,
@@ -322,6 +324,9 @@ pub struct ToolbarState {
     pending_layer_action: Option<(LayerId, LayerOperation)>,
     layer_count: usize,
     active_color: ColorId,
+    recent_documents: Vec<PathBuf>,
+    pending_document_target: Option<DocumentTarget>,
+    document_history_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -356,6 +361,14 @@ pub enum ToolbarAction {
     SelectColor(ColorId),
     SelectExportCategory(usize),
     RunExport(ExportAction),
+    SelectRecentDocument(usize),
+    SelectScratchpad,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentTarget {
+    Recent(usize),
+    Scratchpad,
 }
 
 const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
@@ -365,6 +378,8 @@ const FILES_TOGGLE_DIGIT: usize = 5;
 const LAYERS_DIGIT: usize = 8;
 const COLORS_DIGIT: usize = 9;
 pub(crate) const FILES_TOGGLE_CATEGORY: usize = EXPORT_LABELS.len();
+const HISTORY_CATEGORY: usize = FILES_TOGGLE_CATEGORY + 1;
+const HISTORY_DIGIT: usize = 6;
 const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
         ("TXT", ExportAction::ClipboardTxt),
@@ -419,7 +434,10 @@ impl ToolbarState {
             return self.cancel_pending_shortcut();
         };
 
-        if digit == 0 && self.export_open {
+        if digit == 0
+            && self.export_open
+            && self.shortcut_prefix != Some(PendingShortcut::HistoryOptions)
+        {
             self.close_export_menu();
             return true;
         }
@@ -508,6 +526,19 @@ impl ToolbarState {
                 self.select_export_mode_digit(digit);
             }
             Some(PendingShortcut::ToggleOptions) => self.select_toggle_digit(digit),
+            Some(PendingShortcut::HistoryOptions) => {
+                self.pending_document_target = if digit == 0 {
+                    Some(DocumentTarget::Scratchpad)
+                } else {
+                    digit
+                        .checked_sub(1)
+                        .filter(|index| *index < self.recent_documents.len())
+                        .map(DocumentTarget::Recent)
+                };
+                if self.pending_document_target.is_none() {
+                    self.shortcut_prefix = Some(PendingShortcut::HistoryOptions);
+                }
+            }
             Some(PendingShortcut::Layers) => {
                 self.shortcut_prefix = digit
                     .checked_sub(1)
@@ -555,6 +586,24 @@ impl ToolbarState {
 
     pub fn take_layer_action(&mut self) -> Option<(LayerId, LayerOperation)> {
         self.pending_layer_action.take()
+    }
+
+    pub fn set_recent_documents(&mut self, files: &[PathBuf]) {
+        self.recent_documents = files.iter().take(3).cloned().collect();
+    }
+
+    pub fn set_document_history_enabled(&mut self, enabled: bool) {
+        self.document_history_enabled = enabled;
+        if !enabled {
+            self.pending_document_target = None;
+            if self.shortcut_prefix == Some(PendingShortcut::HistoryOptions) {
+                self.shortcut_prefix = None;
+            }
+        }
+    }
+
+    pub fn take_document_target(&mut self) -> Option<DocumentTarget> {
+        self.pending_document_target.take()
     }
 
     pub fn available_modes(&self) -> Vec<MainMode> {
@@ -622,6 +671,8 @@ impl ToolbarState {
         }
         let category = if digit == FILES_TOGGLE_DIGIT {
             FILES_TOGGLE_CATEGORY
+        } else if digit == HISTORY_DIGIT && self.document_history_enabled {
+            HISTORY_CATEGORY
         } else if digit == EXPORT_CLEAR_DIGIT {
             EXPORT_LABELS.len() - 1
         } else if let Some(category) = digit
@@ -642,6 +693,15 @@ impl ToolbarState {
             self.shortcut_prefix = Some(PendingShortcut::ToggleOptions);
             return true;
         }
+        if category == HISTORY_CATEGORY {
+            if !self.document_history_enabled {
+                return false;
+            }
+            self.export_open = true;
+            self.active_export_category = Some(category);
+            self.shortcut_prefix = Some(PendingShortcut::HistoryOptions);
+            return true;
+        }
         let Some(options) = EXPORT_OPTIONS.get(category) else {
             return false;
         };
@@ -659,7 +719,11 @@ impl ToolbarState {
         let pending = self.shortcut_prefix.take();
         if matches!(
             pending,
-            Some(PendingShortcut::ExportOption(_) | PendingShortcut::ToggleOptions)
+            Some(
+                PendingShortcut::ExportOption(_)
+                    | PendingShortcut::ToggleOptions
+                    | PendingShortcut::HistoryOptions
+            )
         ) {
             self.active_export_category = None;
         }
@@ -686,7 +750,7 @@ impl ToolbarState {
 
     fn left_menu_row_count_for_width(&self, box_width: usize) -> usize {
         if self.export_open {
-            4
+            4 + usize::from(self.document_history_enabled) * 2
         } else if self.main_mode == MainMode::Utilities {
             1
         } else {
@@ -778,6 +842,10 @@ impl ToolbarState {
     }
 
     fn export_menu_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+        let history_row = row >= MENU_FIRST_ROW + 4;
+        if history_row {
+            return self.history_menu_spans(row == MENU_FIRST_ROW + 4);
+        }
         let toggles_row = row >= MENU_FIRST_ROW + 2;
         let header_row = row == MENU_FIRST_ROW || row == MENU_FIRST_ROW + 2;
         let mut spans = Vec::new();
@@ -901,6 +969,49 @@ impl ToolbarState {
                 tooltip: false,
                 action: Some(ToolbarAction::RunExport(ExportAction::Clear)),
                 right_aligned: true,
+                foreground: None,
+            });
+        }
+        spans
+    }
+
+    fn history_menu_spans(&self, header_row: bool) -> Vec<ToolbarSpan> {
+        let prefix = if header_row { "Hist: " } else { "6. " };
+        let mut spans = vec![bold_prefix_span(prefix.to_owned(), prefix.trim_end())];
+        let mut entries = self
+            .recent_documents
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                (
+                    (index + 1).to_string(),
+                    path.file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned(),
+                    ToolbarAction::SelectRecentDocument(index),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.push((
+            "0".to_owned(),
+            "SCRATCH".to_owned(),
+            ToolbarAction::SelectScratchpad,
+        ));
+        for (position, (key, label, action)) in entries.into_iter().enumerate() {
+            if position > 0 {
+                spans.push(plain_span(" ".to_owned()));
+            }
+            let width =
+                UnicodeWidthStr::width(label.as_str()).max(UnicodeWidthStr::width(key.as_str()));
+            spans.push(ToolbarSpan {
+                contents: pad_right_to_width(if header_row { key } else { label }, width),
+                bold_prefix: 0,
+                selected: false,
+                highlighted: false,
+                tooltip: false,
+                action: Some(action),
+                right_aligned: false,
                 foreground: None,
             });
         }
@@ -1128,6 +1239,20 @@ impl ToolbarState {
             ToolbarAction::SelectExportCategory(category) => self.select_export_category(category),
             ToolbarAction::RunExport(action) => {
                 self.queue_export(action);
+                true
+            }
+            ToolbarAction::SelectRecentDocument(index) => {
+                if !self.document_history_enabled || index >= self.recent_documents.len() {
+                    return false;
+                }
+                self.pending_document_target = Some(DocumentTarget::Recent(index));
+                true
+            }
+            ToolbarAction::SelectScratchpad => {
+                if !self.document_history_enabled {
+                    return false;
+                }
+                self.pending_document_target = Some(DocumentTarget::Scratchpad);
                 true
             }
         }
@@ -1491,6 +1616,43 @@ mod tests {
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 3)),
             ["5."]
+        );
+    }
+
+    #[test]
+    fn history_rows_show_exact_keys_names_and_select_file_or_scratch_targets() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.set_document_history_enabled(true);
+        toolbar.set_recent_documents(&[
+            PathBuf::from("/tmp/file.txt"),
+            PathBuf::from("/tmp/other.txt"),
+            PathBuf::from("/tmp/yet_another.txt"),
+        ]);
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+
+        assert_eq!(
+            row(&toolbar, MENU_FIRST_ROW + 4).trim_end(),
+            "Hist: 1        2         3               0"
+        );
+        assert_eq!(
+            row(&toolbar, MENU_FIRST_ROW + 5).trim_end(),
+            "6. file.txt other.txt yet_another.txt SCRATCH"
+        );
+
+        press(&mut toolbar, "6");
+        press(&mut toolbar, "2");
+        assert_eq!(
+            toolbar.take_document_target(),
+            Some(DocumentTarget::Recent(1))
+        );
+
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        press(&mut toolbar, "6");
+        press(&mut toolbar, "0");
+        assert_eq!(
+            toolbar.take_document_target(),
+            Some(DocumentTarget::Scratchpad)
         );
     }
 

@@ -100,6 +100,18 @@ fn try_main() -> Result<ExitCode> {
         std::io::stdin().lock(),
         document::default_path,
     )?;
+    let scratchpad_path = document::default_path();
+    let recent_path = document::recent_path();
+    let history_enabled = document_session.allows_document_history();
+    let mut recent_documents = if history_enabled {
+        document::load_recent(&recent_path)?
+    } else {
+        document::RecentDocuments::default()
+    };
+    if history_enabled && let Some(path) = document_session.explicit_file_path() {
+        recent_documents.record(path.to_path_buf());
+        document::save_recent(&recent_path, &recent_documents)?;
+    }
 
     let mut user_keys = UserKeys::from_config(&config.keys)?;
     let mut user_config_watch = user_config_path().map(UserConfigWatch::new);
@@ -132,7 +144,9 @@ fn try_main() -> Result<ExitCode> {
 
                 if windows.is_empty() {
                     match create_editor_window(elwt, &config, &document_session) {
-                        Ok(editor) => {
+                        Ok(mut editor) => {
+                            editor.set_document_history_enabled(history_enabled);
+                            editor.set_recent_documents(recent_documents.files());
                             windows.insert(editor.window_id(), editor);
                         }
                         Err(error) => {
@@ -154,6 +168,7 @@ fn try_main() -> Result<ExitCode> {
                     elwt,
                     &config,
                     &document_session,
+                    recent_documents.files(),
                 );
             }
             Event::AboutToWait => {
@@ -422,6 +437,12 @@ fn try_main() -> Result<ExitCode> {
                                         editor.finish_navigation(origin);
                                         editor.request_redraw();
                                         perform_pending_export(editor, &config);
+                                        perform_pending_document_switch(
+                                            editor,
+                                            &mut recent_documents,
+                                            &recent_path,
+                                            &scratchpad_path,
+                                        );
                                         true
                                     } else {
                                         false
@@ -496,6 +517,12 @@ fn try_main() -> Result<ExitCode> {
                                         editor.request_redraw();
                                     }
                                     perform_pending_export(editor, &config);
+                                    perform_pending_document_switch(
+                                        editor,
+                                        &mut recent_documents,
+                                        &recent_path,
+                                        &scratchpad_path,
+                                    );
                                 }
                                 editor.record_state_history_time(state_history_started);
                             }
@@ -568,6 +595,12 @@ fn try_main() -> Result<ExitCode> {
                                         document_changed,
                                     );
                                     perform_pending_export(editor, &config);
+                                    perform_pending_document_switch(
+                                        editor,
+                                        &mut recent_documents,
+                                        &recent_path,
+                                        &scratchpad_path,
+                                    );
                                     editor.request_redraw();
                                 } else if let Some(coord) = editor.mouse_cell {
                                     editor.begin_mouse_drag(coord);
@@ -603,6 +636,7 @@ fn try_main() -> Result<ExitCode> {
                         elwt,
                         &config,
                         &document_session,
+                        recent_documents.files(),
                     );
                 } else if should_close {
                     close_window(&mut windows, window_id, elwt);
@@ -758,6 +792,44 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
         Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
     }
     editor.show_export_success(action, Instant::now());
+}
+
+fn perform_pending_document_switch(
+    editor: &mut EditorWindow,
+    recent: &mut document::RecentDocuments,
+    recent_path: &std::path::Path,
+    scratchpad_path: &std::path::Path,
+) {
+    let Some(target) = editor.state.toolbar.take_document_target() else {
+        return;
+    };
+    let Some((path, scratchpad)) = resolve_document_target(target, recent, scratchpad_path) else {
+        return;
+    };
+    if let Err(error) = editor.open_document(path.clone(), scratchpad) {
+        log_error(format!("document history load failed: {error:#}"));
+        return;
+    }
+    if !scratchpad {
+        recent.record(path);
+        if let Err(error) = document::save_recent(recent_path, recent) {
+            log_error(format!("document history save failed: {error:#}"));
+        }
+    }
+    editor.set_recent_documents(recent.files());
+}
+
+fn resolve_document_target(
+    target: toolbar::DocumentTarget,
+    recent: &document::RecentDocuments,
+    scratchpad_path: &std::path::Path,
+) -> Option<(std::path::PathBuf, bool)> {
+    match target {
+        toolbar::DocumentTarget::Recent(index) => {
+            recent.files().get(index).cloned().map(|path| (path, false))
+        }
+        toolbar::DocumentTarget::Scratchpad => Some((scratchpad_path.to_path_buf(), true)),
+    }
 }
 
 fn perform_export_action(
@@ -1115,6 +1187,17 @@ mod tests {
                 panic!("unexpected file session: {}", path.display())
             }
         }
+        let mut toolbar = toolbar::ToolbarState::default();
+        toolbar.set_document_history_enabled(false);
+        toolbar.set_recent_documents(&[std::path::PathBuf::from("must-not-open.toml")]);
+        toolbar.apply_action(ToolbarAction::ToggleExportMenu);
+        for key in ["6", "1", "0"] {
+            toolbar.handle_shortcut(
+                &winit::keyboard::Key::Character(key.into()),
+                ModifiersState::empty(),
+            );
+        }
+        assert_eq!(toolbar.take_document_target(), None);
     }
 
     #[test]
@@ -1134,6 +1217,27 @@ mod tests {
         .unwrap();
         assert!(matches!(file_session, DocumentSession::File(ref path) if path == &file));
         assert_eq!(file_session.window_title(), "ascdraw - diagram.toml");
+    }
+
+    #[test]
+    fn history_targets_resolve_recent_indices_and_exact_scratchpad_path() {
+        let mut recent = document::RecentDocuments::default();
+        recent.record(std::path::PathBuf::from("first.toml"));
+        recent.record(std::path::PathBuf::from("second.toml"));
+        let scratch = std::path::Path::new("scratch/document.toml");
+
+        assert_eq!(
+            resolve_document_target(toolbar::DocumentTarget::Recent(1), &recent, scratch),
+            Some((std::path::PathBuf::from("first.toml"), false))
+        );
+        assert_eq!(
+            resolve_document_target(toolbar::DocumentTarget::Scratchpad, &recent, scratch),
+            Some((scratch.to_path_buf(), true))
+        );
+        assert_eq!(
+            resolve_document_target(toolbar::DocumentTarget::Recent(3), &recent, scratch),
+            None
+        );
     }
 
     #[derive(Default)]

@@ -11,6 +11,25 @@ use crate::model::{Atom, LayerId};
 use crate::toolbar::DurableMenuSelections;
 
 const DOCUMENT_VERSION: u32 = 2;
+const RECENT_DOCUMENT_LIMIT: usize = 3;
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RecentDocuments {
+    #[serde(default)]
+    files: Vec<PathBuf>,
+}
+
+impl RecentDocuments {
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
+    pub fn record(&mut self, path: PathBuf) {
+        self.files.retain(|candidate| candidate != &path);
+        self.files.insert(0, path);
+        self.files.truncate(RECENT_DOCUMENT_LIMIT);
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Document {
@@ -119,6 +138,34 @@ pub fn default_path() -> PathBuf {
     default_path_with_env(|name| std::env::var_os(name), std::env::temp_dir())
 }
 
+pub fn recent_path() -> PathBuf {
+    default_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("recent-documents.toml")
+}
+
+pub fn load_recent(path: &Path) -> Result<RecentDocuments> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(RecentDocuments::default()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    toml::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+pub fn save_recent(path: &Path, recent: &RecentDocuments) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let contents =
+        toml::to_string_pretty(recent).context("failed to serialize recent documents")?;
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
 fn default_path_with_env(env_var: impl Fn(&str) -> Option<OsString>, temp_dir: PathBuf) -> PathBuf {
     #[cfg(target_os = "macos")]
     if let Some(home) = env_var("HOME") {
@@ -155,6 +202,39 @@ fn default_path_with_env(env_var: impl Fn(&str) -> Option<OsString>, temp_dir: P
 mod tests {
     use super::*;
     use crate::model::Face;
+
+    #[test]
+    fn recent_documents_are_most_recent_first_deduplicated_capped_and_persistent() {
+        let mut recent = RecentDocuments::default();
+        for path in [
+            "one.toml",
+            "two.toml",
+            "three.toml",
+            "four.toml",
+            "two.toml",
+        ] {
+            recent.record(PathBuf::from(path));
+        }
+        assert_eq!(
+            recent.files(),
+            [
+                PathBuf::from("two.toml"),
+                PathBuf::from("four.toml"),
+                PathBuf::from("three.toml"),
+            ]
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "ascdraw-recent-{}-{}.toml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        save_recent(&path, &recent).unwrap();
+        assert_eq!(load_recent(&path).unwrap(), recent);
+        let serialized = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(path);
+        assert!(serialized.contains("files = ["));
+    }
 
     #[test]
     fn document_round_trips_atoms() {

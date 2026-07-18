@@ -60,6 +60,10 @@ Pass a native ascdraw document when you want a separate document instead of the 
 
 With no path, the window is titled `ascdraw - scratchpad`. An explicit file uses
 `ascdraw - <filename>`, loads and saves that file directly, and leaves the scratchpad untouched.
+File/Togls → Hist lists the three most recently opened explicit documents under `1`, `2`, and
+`3`; `6 0` switches to `SCRATCH`. Selecting a history target saves the current document first and
+makes the selected target the new default read/write document. Stdin sessions do not expose
+document history.
 
 Use `-` to edit piped plain text interactively. Closing ascdraw writes the final text to stdout
 exactly once, so it can continue through the pipeline; this mode never reads or writes the normal
