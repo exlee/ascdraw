@@ -58,6 +58,14 @@ Pass a native ascdraw document when you want a separate document instead of the 
 ./target/release/ascdraw ./drawing.toml
 ```
 
+Use `-` to edit piped plain text interactively. Closing ascdraw writes the final text to stdout
+exactly once, so it can continue through the pipeline; this mode never reads or writes the normal
+scratchpad:
+
+```sh
+printf 'box\n' | ./target/release/ascdraw - > edited.txt
+```
+
 Run `ascdraw --show-config` to print the merged configuration and every checked config path.
 
 ## Quick start
@@ -249,7 +257,8 @@ durable menu choices.
 ## Autosave and configuration
 
 The canvas and durable menu choices are saved after five idle seconds, when a window closes, and
-when the app exits. Without an explicit document path, the autosave lives at:
+when the app exits. Stdin (`-`) sessions instead write plain text to stdout only when closing.
+Without an explicit document path, the autosave lives at:
 
 - macOS: `~/Library/Application Support/ascdraw/document.toml`
 - Windows: `%APPDATA%/ascdraw/document.toml`

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ use crate::app::{AppCommand, AppConfig, DEFAULT_WINDOW_TITLE};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
+use crate::export::{lines_from_text, plain_text};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -34,6 +36,22 @@ use crate::toolbar_stamp::toolbar_hotspot_at;
 use crate::user_keys::FontSizeAction;
 
 const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
+
+#[derive(Clone, Debug)]
+pub enum DocumentSession {
+    File(PathBuf),
+    Stdin(String),
+}
+
+impl DocumentSession {
+    pub fn file(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+
+    fn is_stdin(&self) -> bool {
+        matches!(self, Self::Stdin(_))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ViewCursorAnchor {
@@ -137,7 +155,7 @@ pub struct EditorWindow {
     history: EditHistory,
     perf: PerfDiagnostics,
     transparent_menubar: bool,
-    document_path: PathBuf,
+    document_session: DocumentSession,
     document_dirty: bool,
     menu_selections_dirty: bool,
     last_keypress: Instant,
@@ -1102,6 +1120,9 @@ impl EditorWindow {
     }
 
     pub fn autosave_if_idle(&mut self, now: Instant) -> Result<bool> {
+        if self.document_session.is_stdin() {
+            return Ok(false);
+        }
         if !should_autosave(
             self.document_dirty || self.menu_selections_dirty,
             self.last_keypress,
@@ -1114,11 +1135,24 @@ impl EditorWindow {
     }
 
     pub fn save_document(&mut self) -> Result<bool> {
+        if self.document_session.is_stdin() {
+            let text = plain_text(&self.state);
+            let stdout = std::io::stdout();
+            return write_plain_text_if_dirty(
+                &mut self.document_dirty,
+                &mut self.menu_selections_dirty,
+                &text,
+                &mut stdout.lock(),
+            );
+        }
         let layers = self.state.persisted_layers();
+        let DocumentSession::File(path) = &self.document_session else {
+            unreachable!("stdin sessions returned before path persistence")
+        };
         save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
-            &self.document_path,
+            path,
             &layers,
             self.state.active_layer_id(),
             &self.state.toolbar.durable_selections(),
@@ -1399,6 +1433,22 @@ fn save_document_if_dirty(
     Ok(true)
 }
 
+fn write_plain_text_if_dirty(
+    document_dirty: &mut bool,
+    menu_selections_dirty: &mut bool,
+    text: &str,
+    output: &mut impl Write,
+) -> Result<bool> {
+    if !*document_dirty && !*menu_selections_dirty {
+        return Ok(false);
+    }
+    output.write_all(text.as_bytes())?;
+    output.flush()?;
+    *document_dirty = false;
+    *menu_selections_dirty = false;
+    Ok(true)
+}
+
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ShutdownSaveSummary {
     saved: usize,
@@ -1463,7 +1513,7 @@ fn resolve_state_change_origin(
 pub fn create_editor_window(
     elwt: &ActiveEventLoop,
     config: &AppConfig,
-    document_path: &Path,
+    document_session: &DocumentSession,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
     let surface = WindowSurface::new(&window, config)?;
@@ -1476,15 +1526,24 @@ pub fn create_editor_window(
         window.focus_window();
     }
 
-    let mut state = Editor::new(&config.theme, DEFAULT_WINDOW_TITLE);
-    if let Some(document) = document::load(document_path)? {
-        let active_layer = document
-            .active_layer
-            .context("saved document has no active layer")?;
-        state.restore_layers(document.layers, active_layer)?;
-        if let Some(menu_selections) = document.menu_selections {
-            state.restore_menu_selections(&menu_selections);
+    let title = match document_session {
+        DocumentSession::File(_) => DEFAULT_WINDOW_TITLE,
+        DocumentSession::Stdin(_) => "ascdraw - stdin",
+    };
+    let mut state = Editor::new(&config.theme, title);
+    match document_session {
+        DocumentSession::File(document_path) => {
+            if let Some(document) = document::load(document_path)? {
+                let active_layer = document
+                    .active_layer
+                    .context("saved document has no active layer")?;
+                state.restore_layers(document.layers, active_layer)?;
+                if let Some(menu_selections) = document.menu_selections {
+                    state.restore_menu_selections(&menu_selections);
+                }
+            }
         }
+        DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
     }
     let mut editor = EditorWindow {
         window,
@@ -1507,8 +1566,8 @@ pub fn create_editor_window(
         history: EditHistory::default(),
         perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
-        document_path: document_path.to_path_buf(),
-        document_dirty: false,
+        document_session: document_session.clone(),
+        document_dirty: document_session.is_stdin(),
         menu_selections_dirty: false,
         last_keypress: Instant::now(),
         export_success_deadline: None,
@@ -1558,14 +1617,15 @@ pub fn handle_command(
     windows: &mut HashMap<WindowId, EditorWindow>,
     elwt: &ActiveEventLoop,
     config: &AppConfig,
-    document_path: &Path,
+    document_session: &DocumentSession,
 ) {
     let target = source_window_id
         .filter(|window_id| windows.contains_key(window_id))
         .or_else(|| focused_window_id(windows));
 
     match command {
-        AppCommand::WindowNew => match create_editor_window(elwt, config, document_path) {
+        AppCommand::WindowNew if document_session.is_stdin() => {}
+        AppCommand::WindowNew => match create_editor_window(elwt, config, document_session) {
             Ok(editor) => {
                 windows.insert(editor.window_id(), editor);
             }
@@ -2594,6 +2654,33 @@ mod tests {
         assert_eq!(writes, 1);
         assert!(!document_dirty);
         assert!(!menu_dirty);
+    }
+
+    #[test]
+    fn stdin_shutdown_emits_unchanged_or_modified_text_exactly_once() {
+        for text in ["unchanged\n", "modified text"] {
+            let mut document_dirty = true;
+            let mut menu_dirty = false;
+            let mut output = Vec::new();
+
+            assert!(
+                write_plain_text_if_dirty(&mut document_dirty, &mut menu_dirty, text, &mut output,)
+                    .unwrap()
+            );
+            assert_eq!(output, text.as_bytes());
+            assert!(!document_dirty);
+            assert!(!menu_dirty);
+            assert!(
+                !write_plain_text_if_dirty(
+                    &mut document_dirty,
+                    &mut menu_dirty,
+                    text,
+                    &mut output,
+                )
+                .unwrap()
+            );
+            assert_eq!(output, text.as_bytes());
+        }
     }
 
     #[test]

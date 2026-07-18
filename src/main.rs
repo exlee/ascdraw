@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -61,8 +62,8 @@ use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 #[cfg(target_os = "macos")]
 use runtime::window::{
-    EditorWindow, close_window, create_editor_window, handle_command, modified_wheel_zooms,
-    save_windows_on_exit,
+    DocumentSession, EditorWindow, close_window, create_editor_window, handle_command,
+    modified_wheel_zooms, save_windows_on_exit,
 };
 use toolbar_stamp::{HotspotClick, hotspot_click, styled_toolbar_snapshot, toolbar_hotspot_at};
 use user_keys::{FontSizeAction, UserAction, UserKeys};
@@ -85,7 +86,6 @@ fn main() -> ExitCode {
 #[allow(deprecated)]
 fn try_main() -> Result<ExitCode> {
     let args = Args::parse();
-    let document_path = args.document.unwrap_or_else(document::default_path);
     let mut config = load_config()?;
     if args.show_config {
         println!("Checked configuration paths:");
@@ -95,6 +95,11 @@ fn try_main() -> Result<ExitCode> {
         println!("\nCurrent configuration:\n{}", show_config_toml(&config)?);
         return Ok(ExitCode::SUCCESS);
     }
+    let document_session = document_session_from_arg(
+        args.document,
+        std::io::stdin().lock(),
+        document::default_path,
+    )?;
 
     let mut user_keys = UserKeys::from_config(&config.keys)?;
     let mut user_config_watch = user_config_path().map(UserConfigWatch::new);
@@ -126,7 +131,7 @@ fn try_main() -> Result<ExitCode> {
                 }
 
                 if windows.is_empty() {
-                    match create_editor_window(elwt, &config, &document_path) {
+                    match create_editor_window(elwt, &config, &document_session) {
                         Ok(editor) => {
                             windows.insert(editor.window_id(), editor);
                         }
@@ -142,7 +147,14 @@ fn try_main() -> Result<ExitCode> {
                 }
             }
             Event::UserEvent(AppEvent::Command(command)) => {
-                handle_command(command, None, &mut windows, elwt, &config, &document_path);
+                handle_command(
+                    command,
+                    None,
+                    &mut windows,
+                    elwt,
+                    &config,
+                    &document_session,
+                );
             }
             Event::AboutToWait => {
                 if let Some(watch) = user_config_watch.as_mut() {
@@ -590,7 +602,7 @@ fn try_main() -> Result<ExitCode> {
                         &mut windows,
                         elwt,
                         &config,
-                        &document_path,
+                        &document_session,
                     );
                 } else if should_close {
                     close_window(&mut windows, window_id, elwt);
@@ -612,6 +624,20 @@ fn try_main() -> Result<ExitCode> {
     })?;
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn document_session_from_arg(
+    document: Option<std::path::PathBuf>,
+    mut input: impl Read,
+    default_path: impl FnOnce() -> std::path::PathBuf,
+) -> Result<DocumentSession> {
+    if document.as_deref() == Some(std::path::Path::new("-")) {
+        let mut text = String::new();
+        input.read_to_string(&mut text)?;
+        Ok(DocumentSession::Stdin(text))
+    } else {
+        Ok(DocumentSession::file(document.unwrap_or_else(default_path)))
+    }
 }
 
 fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
@@ -1070,6 +1096,21 @@ mod tests {
     use crate::model::{Coord, Direction};
     use crate::toolbar::{MainMode, PendingShortcut, ToggleKind, ToolbarAction};
     use winit::keyboard::NamedKey;
+
+    #[test]
+    fn dash_document_uses_stdin_without_resolving_the_scratchpad() {
+        let session = document_session_from_arg(
+            Some(std::path::PathBuf::from("-")),
+            std::io::Cursor::new("one\ntwo\n"),
+            || panic!("stdin mode must not resolve the scratchpad path"),
+        )
+        .unwrap();
+
+        match session {
+            DocumentSession::Stdin(text) => assert_eq!(text, "one\ntwo\n"),
+            DocumentSession::File(path) => panic!("unexpected file session: {}", path.display()),
+        }
+    }
 
     #[derive(Default)]
     struct ClipboardPlatform {

@@ -318,6 +318,40 @@ fn atoms_text(lines: &[Vec<Atom>]) -> String {
         .join("\n")
 }
 
+pub fn plain_text(state: &Editor) -> String {
+    let views = state.layer_views();
+    let height = views
+        .iter()
+        .map(|layer| layer.lines.len())
+        .max()
+        .unwrap_or(1);
+    let width = views
+        .iter()
+        .flat_map(|layer| layer.lines.iter())
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0);
+    let rows = flatten_visible_layers(&visible_layer_atoms(
+        state,
+        CanvasRegion {
+            left: 0,
+            top: 0,
+            width,
+            height,
+        },
+    ));
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>()
+                .trim_end_matches(' ')
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn canvas_region_for_export(
     state: &Editor,
     visible_canvas: VisibleCanvasCells,
@@ -756,6 +790,14 @@ mod tests {
     use crate::app::{CursorMode, ThemeConfig};
     use crate::model::Coord;
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
+
+    #[test]
+    fn plain_text_preserves_ragged_rows_and_a_trailing_newline_without_padding() {
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
+        state.replace_canvas(lines_from_text("one\nlonger\n"));
+
+        assert_eq!(plain_text(&state), "one\nlonger\n");
+    }
 
     #[derive(Default)]
     struct MockPlatform {
