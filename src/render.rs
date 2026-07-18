@@ -28,6 +28,7 @@ mod export_png;
 mod jump;
 #[cfg(target_os = "macos")]
 mod metal;
+mod minimap;
 mod window_surface;
 pub use export_png::{CanvasImage, render_canvas_image, render_canvas_layers_image};
 pub use window_surface::WindowSurface;
@@ -284,6 +285,15 @@ fn render_canvas(canvas: &Canvas, state: &Editor, config: &AppConfig, frame: Ren
         );
     }
     canvas.restore();
+    minimap::render(
+        canvas,
+        state,
+        visible_cells,
+        toolbar_metrics,
+        layout.grid_top,
+        width,
+        &default_face,
+    );
     render_bottom_tooltip(canvas, state, toolbar_metrics, layout, width);
 }
 

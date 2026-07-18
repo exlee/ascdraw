@@ -8,6 +8,8 @@ pub const PADDING: usize = 20;
 pub const SCROLL_MARGIN_CELLS: i64 = 3;
 pub const TOOLTIP_GRID_GAP: usize = PADDING;
 pub const TOOLTIP_BOTTOM_PAD: usize = 15;
+const MINIMAP_COLUMNS: usize = 20;
+const MINIMAP_ROWS: usize = 7;
 const TRANSPARENT_MENUBAR_TOP_INSET_PT: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +21,51 @@ pub struct LayoutMetrics {
     pub grid_bottom: usize,
     pub tooltip_top: usize,
     pub tooltip_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub left: usize,
+    pub top: usize,
+    pub right: usize,
+    pub bottom: usize,
+}
+
+impl ScreenRect {
+    pub fn width(self) -> usize {
+        self.right.saturating_sub(self.left)
+    }
+
+    pub fn height(self) -> usize {
+        self.bottom.saturating_sub(self.top)
+    }
+
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.left as f64
+            && x < self.right as f64
+            && y >= self.top as f64
+            && y < self.bottom as f64
+    }
+}
+
+pub fn minimap_rect(
+    viewport_width: usize,
+    grid_top: usize,
+    toolbar_cell_size: (usize, usize),
+) -> ScreenRect {
+    let available_width = viewport_width.saturating_sub(PADDING * 2);
+    let width = MINIMAP_COLUMNS
+        .saturating_mul(toolbar_cell_size.0.max(1))
+        .min(available_width);
+    let right = viewport_width.saturating_sub(PADDING);
+    ScreenRect {
+        left: right.saturating_sub(width),
+        top: grid_top.saturating_sub(1),
+        right,
+        bottom: grid_top
+            .saturating_sub(1)
+            .saturating_add(MINIMAP_ROWS.saturating_mul(toolbar_cell_size.1.max(1))),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -528,6 +575,24 @@ mod tests {
                 + toolbar.rows().saturating_sub(1) * crate::toolbar::TOOLBAR_ROW_GAP
         );
         assert_eq!(grid_top, 198);
+    }
+
+    #[test]
+    fn minimap_attaches_below_the_toolbar_and_has_an_inert_screen_region() {
+        let rect = minimap_rect(1000, 200, (8, 16));
+
+        assert_eq!(
+            rect,
+            ScreenRect {
+                left: 820,
+                top: 199,
+                right: 980,
+                bottom: 311,
+            }
+        );
+        assert!(rect.contains(900.0, 250.0));
+        assert!(!rect.contains(819.0, 250.0));
+        assert!(!rect.contains(900.0, 311.0));
     }
 
     #[test]

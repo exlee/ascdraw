@@ -544,6 +544,15 @@ pub fn pointer_position_to_coord(
     let box_width = viewport_width.saturating_sub(PADDING * 2) / toolbar_metrics.cell_width.max(1);
     let grid_top = content_top_padding(scale_factor, config.transparent_menubar)
         + crate::toolbar::toolbar_height_for_width(toolbar, box_width, toolbar_metrics.cell_height);
+    if crate::layout::minimap_rect(
+        viewport_width,
+        grid_top,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+    )
+    .contains(position.0, position.1)
+    {
+        return None;
+    }
     pointer_position_to_coord_with_metrics(
         position.0,
         position.1,

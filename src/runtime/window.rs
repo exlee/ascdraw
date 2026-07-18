@@ -956,13 +956,7 @@ impl EditorWindow {
             )
         });
         let changed = match command {
-            ViewCommand::Pan(direction) => pan_viewport(
-                &mut self.viewport,
-                direction,
-                cell_size,
-                viewport_cells,
-                &content,
-            ),
+            ViewCommand::Pan(direction) => pan_viewport(&mut self.viewport, direction, cell_size),
             ViewCommand::Center => {
                 center_viewport(&mut self.viewport, cell_size, viewport_cells, &content)
             }
@@ -996,8 +990,6 @@ impl EditorWindow {
             return false;
         }
         let layout = self.current_layout();
-        let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        let content = self.state.content_cells();
         self.view_cursor_anchor.get_or_insert_with(|| {
             ViewCursorAnchor::capture(
                 self.state.grid.cursor_pos,
@@ -1007,24 +999,9 @@ impl EditorWindow {
             )
         });
 
-        let horizontal = pan_viewport_by_pixels_clamped(
-            &mut self.viewport,
-            pixel_delta.0,
-            true,
-            cell_size,
-            viewport_cells,
-            &content,
-        );
-        let vertical = pan_viewport_by_pixels_clamped(
-            &mut self.viewport,
-            pixel_delta.1,
-            false,
-            cell_size,
-            viewport_cells,
-            &content,
-        );
-        self.scroll_pan.consume(pixel_delta, (horizontal, vertical));
-        horizontal != 0 || vertical != 0
+        let changed = pan_viewport_by_pixels(&mut self.viewport, pixel_delta);
+        self.scroll_pan.consume(pixel_delta, pixel_delta);
+        changed
     }
 
     pub fn scroll_pan_active(&self) -> bool {
@@ -1281,8 +1258,6 @@ fn pan_viewport(
     viewport: &mut ViewportOffset,
     direction: Direction,
     cell_size: (usize, usize),
-    viewport_cells: (usize, usize),
-    content: &[Coord],
 ) -> bool {
     let cell_width = i64::try_from(cell_size.0.max(1)).unwrap_or(i64::MAX);
     let cell_height = i64::try_from(cell_size.1.max(1)).unwrap_or(i64::MAX);
@@ -1292,7 +1267,7 @@ fn pan_viewport(
         Direction::Up => (0, cell_height),
         Direction::Down => (0, -cell_height),
     };
-    pan_viewport_by_pixels(viewport, delta, cell_size, viewport_cells, content)
+    pan_viewport_by_pixels(viewport, delta)
 }
 
 fn scroll_delta_in_pixels(delta: MouseScrollDelta, cell_size: (usize, usize)) -> (f64, f64) {
@@ -1381,44 +1356,14 @@ fn consume_scroll_axis(pending: &mut f64, requested: i64, applied: i64) {
     }
 }
 
-fn pan_viewport_by_pixels(
-    viewport: &mut ViewportOffset,
-    delta: (i64, i64),
-    cell_size: (usize, usize),
-    viewport_cells: (usize, usize),
-    content: &[Coord],
-) -> bool {
+fn pan_viewport_by_pixels(viewport: &mut ViewportOffset, delta: (i64, i64)) -> bool {
     let candidate = ViewportOffset {
         x: viewport.x.saturating_add(delta.0),
         y: viewport.y.saturating_add(delta.1),
     };
-    let origin = candidate.origin(cell_size);
-    if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, content) {
-        return false;
-    }
     let changed = candidate != *viewport;
     *viewport = candidate;
     changed
-}
-
-fn pan_viewport_by_pixels_clamped(
-    viewport: &mut ViewportOffset,
-    delta: i64,
-    horizontal: bool,
-    cell_size: (usize, usize),
-    viewport_cells: (usize, usize),
-    content: &[Coord],
-) -> i64 {
-    let unit = delta.signum();
-    let mut applied = 0_i64;
-    while applied != delta {
-        let pixel_delta = if horizontal { (unit, 0) } else { (0, unit) };
-        if !pan_viewport_by_pixels(viewport, pixel_delta, cell_size, viewport_cells, content) {
-            break;
-        }
-        applied = applied.saturating_add(unit);
-    }
-    applied
 }
 
 fn pan_viewport_by_cells(
@@ -2102,7 +2047,6 @@ mod tests {
     fn view_pan_uses_camera_directions_exact_cells_and_preserves_pixel_residuals() {
         let cell_size = (9, 13);
         let original = ViewportOffset { x: 7, y: -3 };
-        let content = [Coord { line: 5, column: 5 }];
         for (direction, expected) in [
             (Direction::Left, ViewportOffset { x: 16, y: -3 }),
             (Direction::Right, ViewportOffset { x: -2, y: -3 }),
@@ -2110,32 +2054,14 @@ mod tests {
             (Direction::Down, ViewportOffset { x: 7, y: -16 }),
         ] {
             let mut viewport = original;
-            assert!(pan_viewport(
-                &mut viewport,
-                direction,
-                cell_size,
-                (10, 10),
-                &content,
-            ));
+            assert!(pan_viewport(&mut viewport, direction, cell_size));
             assert_eq!(viewport, expected);
         }
 
         let mut viewport = original;
         for _ in 0..20 {
-            assert!(pan_viewport(
-                &mut viewport,
-                Direction::Left,
-                cell_size,
-                (10, 10),
-                &content,
-            ));
-            assert!(pan_viewport(
-                &mut viewport,
-                Direction::Right,
-                cell_size,
-                (10, 10),
-                &content,
-            ));
+            assert!(pan_viewport(&mut viewport, Direction::Left, cell_size));
+            assert!(pan_viewport(&mut viewport, Direction::Right, cell_size));
         }
         assert_eq!(viewport, original);
     }
@@ -2223,40 +2149,13 @@ mod tests {
     }
 
     #[test]
-    fn scroll_pan_moves_by_pixels_and_keeps_content_inside_the_viewport() {
-        let cell_size = (8, 12);
-        let viewport_cells = (10, 10);
-        let content = [Coord { line: 3, column: 3 }];
+    fn scroll_pan_moves_by_pixels_without_content_constraints() {
         let mut viewport = ViewportOffset::default();
 
-        assert!(pan_viewport_by_pixels(
-            &mut viewport,
-            (5, 7),
-            cell_size,
-            viewport_cells,
-            &content,
-        ));
+        assert!(pan_viewport_by_pixels(&mut viewport, (5, 7)));
         assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
-        assert_eq!(
-            pan_viewport_by_pixels_clamped(
-                &mut viewport,
-                -80,
-                true,
-                cell_size,
-                viewport_cells,
-                &content,
-            ),
-            -12,
-        );
-        assert_eq!(viewport, ViewportOffset { x: -7, y: 7 });
-        assert!(!pan_viewport_by_pixels(
-            &mut viewport,
-            (-80, 0),
-            cell_size,
-            viewport_cells,
-            &content,
-        ));
-        assert_eq!(viewport, ViewportOffset { x: -7, y: 7 });
+        assert!(pan_viewport_by_pixels(&mut viewport, (-80, 0)));
+        assert_eq!(viewport, ViewportOffset { x: -75, y: 7 });
     }
 
     #[test]
@@ -2280,36 +2179,25 @@ mod tests {
     }
 
     #[test]
-    fn view_pan_allows_cursor_escape_but_rejects_actual_inner_content_escape() {
+    fn view_pan_is_unconstrained_by_cursor_or_content() {
         let mut cursor_boundary = ViewportOffset::default();
         assert!(pan_viewport(
             &mut cursor_boundary,
             Direction::Right,
-            (8, 12),
-            (10, 10),
-            &[],
+            (8, 12)
         ));
         assert_eq!(cursor_boundary, ViewportOffset { x: -8, y: 0 });
 
         let mut content_boundary = ViewportOffset::default();
-        let content = [Coord { line: 3, column: 3 }];
-        assert!(!pan_viewport(
+        assert!(pan_viewport(
             &mut content_boundary,
             Direction::Right,
-            (8, 12),
-            (10, 10),
-            &content,
+            (8, 12)
         ));
-        assert_eq!(content_boundary, ViewportOffset::default());
+        assert_eq!(content_boundary, ViewportOffset { x: -8, y: 0 });
 
         let mut empty = ViewportOffset::default();
-        assert!(pan_viewport(
-            &mut empty,
-            Direction::Left,
-            (8, 12),
-            (10, 10),
-            &[],
-        ));
+        assert!(pan_viewport(&mut empty, Direction::Left, (8, 12)));
     }
 
     #[test]
