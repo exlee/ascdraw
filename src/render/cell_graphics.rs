@@ -104,9 +104,13 @@ pub(super) fn draw(
     canvas.clip_rect(Rect::new(left, top, right, bottom), None, false);
     if diagonals.0 {
         canvas.draw_line((left, bottom), (right, top), &paint);
+        canvas.draw_circle((left, bottom), stroke_width / 2.0, &paint);
+        canvas.draw_circle((right, top), stroke_width / 2.0, &paint);
     }
     if diagonals.1 {
         canvas.draw_line((left, top), (right, bottom), &paint);
+        canvas.draw_circle((left, top), stroke_width / 2.0, &paint);
+        canvas.draw_circle((right, bottom), stroke_width / 2.0, &paint);
     }
     canvas.restore();
     true
@@ -181,5 +185,53 @@ mod tests {
             let offset = (y * width + x) * 4;
             assert_eq!(&pixels[offset..offset + 4], &[0, 0, 0, 0xff]);
         }
+    }
+
+    #[test]
+    fn adjacent_diagonals_overlap_at_the_shared_corner() {
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8.25,
+            cell_height: 16.375,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let width = PADDING + (metrics.cell_width * 2.0).ceil() as usize;
+        let height = (metrics.cell_height * 2.0).ceil() as usize;
+        let mut pixels = vec![0xff; width * height * 4];
+        let image_info = ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::BGRA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface =
+            surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                .expect("test surface");
+        let mut paint = Paint::default();
+        paint.set_color(Rgba::rgb(0, 0, 0).to_color());
+        assert!(draw(surface.canvas(), 1, 0.0, "╱", &metrics, &paint));
+        assert!(draw(
+            surface.canvas(),
+            0,
+            metrics.cell_height,
+            "╱",
+            &metrics,
+            &paint,
+        ));
+        drop(surface);
+
+        let seam_x = (PADDING as f32 + metrics.cell_width).round() as usize;
+        let seam_y = metrics.cell_height.round() as usize;
+        let foreground_near_seam = (seam_y - 2..=seam_y + 1)
+            .flat_map(|y| (seam_x - 2..=seam_x + 1).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixels[(y * width + x) * 4] < 0x40)
+            .count();
+        assert!(
+            foreground_near_seam >= 3,
+            "diagonal leaves a raster gap at the shared corner"
+        );
     }
 }
