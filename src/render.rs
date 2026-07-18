@@ -1569,10 +1569,8 @@ impl Renderer {
             .set_linear_metrics(false);
 
         let (_, metrics) = font.metrics();
-        let cell_width = font.measure_str("M", None).0.ceil().max(1.0) as usize;
-        let cell_height = (metrics.descent - metrics.ascent + metrics.leading)
-            .ceil()
-            .max(1.0) as usize;
+        let cell_width = font.measure_str("M", None).0.max(1.0) as usize;
+        let cell_height = (metrics.descent - metrics.ascent + metrics.leading).max(1.0) as usize;
         let baseline_offset = (-metrics.ascent).ceil();
 
         let metrics = CellMetrics {
