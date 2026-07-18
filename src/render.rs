@@ -39,7 +39,6 @@ pub use window_surface::WindowSurface;
 pub(crate) const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
 const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
-const DRAWING_CURSOR_INSET_RATIO: f32 = 0.12;
 const OUTLINE_STROKE_WIDTH_RATIO: f32 = 0.06;
 const MARCHING_ANTS_MILLIS_PER_PIXEL: f32 = 40.0;
 
@@ -936,13 +935,11 @@ fn drawing_cursor_outline(
     top: f32,
     metrics: &CellMetrics,
 ) -> CanvasSelectionOutline {
-    let inset =
-        (metrics.cell_width.min(metrics.cell_height) * DRAWING_CURSOR_INSET_RATIO).clamp(1.0, 4.0);
     CanvasSelectionOutline {
-        left: PADDING as f32 + column as f32 * metrics.cell_width + inset,
-        top: top + inset,
-        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width - 1.0 - inset,
-        bottom: top + metrics.cell_height - 1.0 - inset,
+        left: PADDING as f32 + column as f32 * metrics.cell_width,
+        top,
+        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width - 1.0,
+        bottom: top + metrics.cell_height - 1.0,
     }
 }
 
@@ -1897,12 +1894,10 @@ mod tests {
 
         let cell_left = PADDING as f32 + 2.0 * metrics.cell_width;
         let cell_top = row_top(2, &metrics, 50.0);
-        let inset = (metrics.cell_width.min(metrics.cell_height) * DRAWING_CURSOR_INSET_RATIO)
-            .clamp(1.0, 4.0);
-        assert_eq!(cursor.left - cell_left, inset);
-        assert_eq!(cursor.top - cell_top, inset);
-        assert_eq!(selection.right - cursor.right, inset);
-        assert_eq!(selection.bottom - cursor.bottom, inset);
+        assert_eq!(cursor.left, cell_left);
+        assert_eq!(cursor.top, cell_top);
+        assert_eq!(cursor.right, selection.right);
+        assert_eq!(cursor.bottom, selection.bottom);
     }
 
     #[test]
