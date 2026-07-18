@@ -34,7 +34,7 @@ pub use window_surface::WindowSurface;
 
 pub(crate) const FALLBACK_BG: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(crate) const FALLBACK_FG: Rgba = Rgba::rgb(0x00, 0x00, 0x00);
-const TOOLBAR_SELECTION_PADDING: f32 = 2.0;
+const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
 const TOOLBAR_SELECTION_STROKE_WIDTH: f32 = 2.0;
 const DRAWING_CURSOR_STROKE_WIDTH: f32 = 2.0;
 const CANVAS_SELECTION_STROKE_WIDTH: f32 = 1.0;
@@ -2313,10 +2313,9 @@ mod tests {
             .next()
             .expect("expected toolbar outline");
 
-        assert!(
-            outline.bottom > row_top(physical_row + 1, &metrics, 0) as f32,
-            "test outline must extend into the following row"
-        );
+        let next_row_top = row_top(physical_row + 1, &metrics, 0)
+            + crate::toolbar::toolbar_row_offset(physical_row + 1, metrics.cell_height);
+        assert!(outline.bottom < next_row_top as f32);
         assert!(outline.bottom < height as f32);
     }
 

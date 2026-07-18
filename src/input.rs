@@ -630,6 +630,7 @@ mod tests {
         let top = 30;
         let cell_width = 10;
         let cell_height = 16;
+        let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
         let viewport_width = PADDING * 2 + 20 * cell_width;
         let toolbar_rows = ToolbarState::default().rows();
 
@@ -649,7 +650,20 @@ mod tests {
         assert_eq!(
             toolbar_position(
                 (PADDING + 8 * cell_width + 1) as f64,
-                (top + cell_height + 1) as f64,
+                (top + cell_height) as f64,
+                viewport_width,
+                cell_width,
+                cell_height,
+                top,
+                toolbar_rows,
+            ),
+            None,
+            "inter-row gap is inert"
+        );
+        assert_eq!(
+            toolbar_position(
+                (PADDING + 8 * cell_width + 1) as f64,
+                (top + stride + 1) as f64,
                 viewport_width,
                 cell_width,
                 cell_height,
@@ -668,7 +682,7 @@ mod tests {
             assert_eq!(
                 toolbar_position(
                     (PADDING + border_column * cell_width + 1) as f64,
-                    (top + cell_height + 1) as f64,
+                    (top + stride + 1) as f64,
                     viewport_width,
                     cell_width,
                     cell_height,
@@ -682,7 +696,7 @@ mod tests {
         assert_eq!(
             toolbar_position(
                 (PADDING + 2 * cell_width) as f64,
-                (top + (toolbar_rows - 1) * cell_height) as f64,
+                (top + (toolbar_rows - 1) * stride) as f64,
                 viewport_width,
                 cell_width,
                 cell_height,
@@ -715,6 +729,7 @@ mod tests {
         let top = 20;
         let cell_width = 8;
         let cell_height = 16;
+        let stride = cell_height + crate::toolbar::TOOLBAR_ROW_GAP;
         let viewport_width = PADDING * 2 + 40 * cell_width;
         let mut toolbar = ToolbarState::default();
         toolbar.apply_action(crate::toolbar::ToolbarAction::SelectMain(
@@ -724,7 +739,7 @@ mod tests {
         assert_eq!(
             toolbar_position(
                 (PADDING + 4 * cell_width) as f64,
-                (top + (line_rows - 1) * cell_height) as f64,
+                (top + (line_rows - 1) * stride) as f64,
                 viewport_width,
                 cell_width,
                 cell_height,
@@ -742,8 +757,7 @@ mod tests {
         assert_eq!(
             toolbar_position(
                 (PADDING + 4 * cell_width) as f64,
-                (top + crate::toolbar::toolbar_content_row(last_content_row) * cell_height + 1)
-                    as f64,
+                (top + crate::toolbar::toolbar_content_row(last_content_row) * stride + 1) as f64,
                 viewport_width,
                 cell_width,
                 cell_height,

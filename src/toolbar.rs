@@ -24,7 +24,7 @@ pub use modes::{MainMode, ShapeKind, Tooltip, UtilityKind};
 pub use selections::DurableMenuSelections;
 pub use toggles::ToggleKind;
 
-pub const TOOLBAR_ROW_GAP: usize = 0;
+pub const TOOLBAR_ROW_GAP: usize = 2;
 
 const MAIN_LABEL_ROW: usize = 0;
 const MAIN_SHORTCUT_ROW: usize = 1;
@@ -1750,7 +1750,10 @@ mod tests {
         assert_eq!(toolbar.menu_row_count(), 4);
         assert_eq!(toolbar.content_rows(), 7);
         assert_eq!(toolbar.rows(), 9);
-        assert_eq!(toolbar_height(&toolbar, 18), toolbar.rows() * 18);
+        assert_eq!(
+            toolbar_height(&toolbar, 18),
+            toolbar.rows() * 18 + toolbar.rows().saturating_sub(1) * TOOLBAR_ROW_GAP
+        );
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert_eq!(toolbar.menu_row_count(), 4);

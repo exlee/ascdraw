@@ -521,8 +521,13 @@ mod tests {
         let toolbar = ToolbarState::default();
         let grid_top = top_padding + crate::toolbar::toolbar_height(&toolbar, cell_height);
 
-        assert_eq!(grid_top, PADDING + toolbar.rows() * cell_height);
-        assert_eq!(grid_top, 182);
+        assert_eq!(
+            grid_top,
+            PADDING
+                + toolbar.rows() * cell_height
+                + toolbar.rows().saturating_sub(1) * crate::toolbar::TOOLBAR_ROW_GAP
+        );
+        assert_eq!(grid_top, 198);
     }
 
     #[test]
