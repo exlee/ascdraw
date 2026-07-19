@@ -274,6 +274,17 @@ fn try_main() -> Result<ExitCode> {
                 }
             }
             Event::WindowEvent { window_id, event } => {
+                let input_started = Instant::now();
+                let is_input_event = matches!(
+                    &event,
+                    WindowEvent::KeyboardInput { .. }
+                        | WindowEvent::ModifiersChanged(_)
+                        | WindowEvent::CursorMoved { .. }
+                        | WindowEvent::CursorLeft { .. }
+                        | WindowEvent::MouseWheel { .. }
+                        | WindowEvent::PinchGesture { .. }
+                        | WindowEvent::MouseInput { .. }
+                );
                 let mut should_close = false;
                 let mut pending_command = None;
                 if let Some(editor) = windows.get_mut(&window_id) {
@@ -763,6 +774,9 @@ fn try_main() -> Result<ExitCode> {
                             editor.request_redraw();
                         }
                         _ => {}
+                    }
+                    if is_input_event {
+                        editor.note_input_event(input_started.elapsed());
                     }
                 }
 

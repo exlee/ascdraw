@@ -244,7 +244,9 @@ impl ContentIndex {
 struct ScrollStats {
     enabled: bool,
     scroll_events: u64,
+    input_events: u64,
     redraws: u64,
+    input_time: Duration,
     buffer_time: Duration,
     raster_time: Duration,
     presentation_time: Duration,
@@ -257,7 +259,9 @@ struct ScrollStats {
 #[derive(Clone, Copy, Debug)]
 struct ScrollStatsReport {
     scroll_events: u64,
+    input_events: u64,
     redraws: u64,
+    input_time: Duration,
     buffer_time: Duration,
     raster_time: Duration,
     presentation_time: Duration,
@@ -271,7 +275,9 @@ impl ScrollStats {
         Self {
             enabled,
             scroll_events: 0,
+            input_events: 0,
             redraws: 0,
+            input_time: Duration::ZERO,
             buffer_time: Duration::ZERO,
             raster_time: Duration::ZERO,
             presentation_time: Duration::ZERO,
@@ -298,6 +304,13 @@ impl ScrollStats {
         report
     }
 
+    fn note_input_event(&mut self, duration: Duration) {
+        if self.enabled {
+            self.input_events = self.input_events.saturating_add(1);
+            self.input_time += duration;
+        }
+    }
+
     fn note_frame(&mut self, timing: FrameTiming, now: Instant) -> Option<ScrollStatsReport> {
         if self.enabled {
             self.buffer_time += timing.buffer_acquisition;
@@ -316,7 +329,9 @@ impl ScrollStats {
         }
         let report = ScrollStatsReport {
             scroll_events: std::mem::take(&mut self.scroll_events),
+            input_events: std::mem::take(&mut self.input_events),
             redraws: std::mem::take(&mut self.redraws),
+            input_time: std::mem::take(&mut self.input_time),
             buffer_time: std::mem::take(&mut self.buffer_time),
             raster_time: std::mem::take(&mut self.raster_time),
             presentation_time: std::mem::take(&mut self.presentation_time),
@@ -332,11 +347,15 @@ impl ScrollStats {
 fn format_scroll_stats(report: ScrollStatsReport) -> String {
     let frames = report.redraws as f64;
     let milliseconds = |duration: Duration| duration.as_secs_f64() * 1_000.0 / frames;
+    let input_milliseconds =
+        report.input_time.as_secs_f64() * 1_000.0 / report.input_events.max(1) as f64;
     let measured = report.toolbar_time + report.grid_time + report.minimap_time;
     let other = report.raster_time.saturating_sub(measured);
     format!(
-        "debug: scroll={}/s redraw={}/s frame={:.2}ms [buffer={:.2} raster={:.2} present={:.2}] raster=[toolbar={:.2} grid={:.2} minimap={:.2} other={:.2}]",
+        "debug: scroll={}/s input={}/s input_handler={:.2}ms redraw={}/s frame={:.2}ms [buffer={:.2} raster={:.2} present={:.2}] raster=[toolbar={:.2} grid={:.2} minimap={:.2} other={:.2}]",
         report.scroll_events,
+        report.input_events,
+        input_milliseconds,
         report.redraws,
         milliseconds(report.buffer_time + report.raster_time + report.presentation_time),
         milliseconds(report.buffer_time),
@@ -830,6 +849,10 @@ impl EditorWindow {
     pub fn note_keypress(&mut self, now: Instant) {
         self.last_keypress = now;
         self.perf.begin_keypress(now);
+    }
+
+    pub fn note_input_event(&mut self, duration: Duration) {
+        self.scroll_stats.note_input_event(duration);
     }
 
     pub fn record_state_history_time(&mut self, started: Instant) {
