@@ -5,7 +5,7 @@ use crate::drawing::{
 };
 use crate::model::{Coord, Direction};
 
-use super::{Editor, adjacent_coord, atom_width, grid, index_and_column_for_coord, replace_cell};
+use super::{Editor, adjacent_coord};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ActiveStroke {
@@ -129,38 +129,32 @@ impl Editor {
         if let Some(marker) = self.take_line_marker(coord) {
             self.set_cell_contents(coord, marker.base_glyph);
         }
-        let Some(line) = self.grid.lines.get_mut(coord.line) else {
+        let Some(data) = self.canvas.active_cell(coord) else {
             return;
         };
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        if column != coord.column {
+        let mut atom = data.atom.as_ref().clone();
+        let Some(glyph) = crate::drawing::glyph_without_connection(&atom.contents, direction)
+        else {
             return;
+        };
+        atom.contents = glyph.to_string();
+        let mut face = data.face.as_ref().clone();
+        if atom.contents.chars().all(char::is_whitespace) {
+            face = crate::model::Face::default();
+        } else {
+            face.fg = foreground;
         }
-        if let Some(atom) = line.get_mut(index)
-            && atom_width(atom) == 1
-            && let Some(glyph) = crate::drawing::glyph_without_connection(&atom.contents, direction)
-        {
-            atom.contents = glyph.to_string();
-            if atom.contents.chars().all(char::is_whitespace) {
-                atom.face = crate::model::Face::default();
-            } else {
-                atom.face.fg = foreground;
-            }
-            self.sync_sparse_cell_from_dense(coord);
-        }
+        atom.face = face.clone();
+        self.canvas
+            .set_at(coord, atom, &face)
+            .expect("line glyphs occupy one sparse cell");
+        self.refresh_active_dense_view();
     }
 
     pub(super) fn cell_contents(&self, coord: Coord) -> Option<&str> {
-        let line = self.grid.lines.get(coord.line)?;
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        let atom = line.get(index)?;
-        if column == coord.column {
-            Some(atom.contents.as_str())
-        } else if grid::is_blank_run(atom) {
-            Some(" ")
-        } else {
-            None
-        }
+        self.canvas
+            .active_cell(coord)
+            .map(|data| data.atom.contents.as_str())
     }
 
     fn take_line_marker(&mut self, coord: Coord) -> Option<LineData> {
@@ -180,47 +174,25 @@ impl Editor {
     ) -> Option<String> {
         let foreground = self.write_face().fg;
         self.remove_line_marker(coord);
-        let (index, column) =
-            index_and_column_for_coord(&self.grid.lines[coord.line], coord.column);
-
-        if column < coord.column && index == self.grid.lines[coord.line].len() {
-            self.grid.lines[coord.line].extend(grid::blank_run(coord.column - column));
-        }
-
-        if let Some(atom) = self.grid.lines[coord.line].get_mut(index) {
-            if atom_width(atom) == 1
-                && let Some(glyph) = glyph_with_connection_and_corner(
-                    &atom.contents,
-                    direction,
-                    line_style,
-                    corner_style,
-                )
-            {
-                atom.contents = glyph.to_string();
-                atom.face.fg = foreground;
-                let contents = atom.contents.clone();
-                self.sync_sparse_cell_from_dense(coord);
-                return Some(contents);
-            }
-            if grid::is_blank_run(atom) {
-                let contents =
-                    glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
-                        .expect("blank cells accept line connections")
-                        .to_string();
-                replace_cell(&mut self.grid.lines, coord, contents.clone());
-                self.color_written_cell(coord);
-                return Some(contents);
-            }
-            None
-        } else {
-            let contents =
-                glyph_with_connection_and_corner(" ", direction, line_style, corner_style)
-                    .expect("blank cells accept line connections")
-                    .to_string();
-            replace_cell(&mut self.grid.lines, coord, contents.clone());
-            self.color_written_cell(coord);
-            Some(contents)
-        }
+        let existing = self
+            .canvas
+            .active_cell(coord)
+            .map(|data| (data.atom.contents.clone(), data.face.as_ref().clone()))
+            .unwrap_or_else(|| (" ".to_owned(), crate::model::Face::default()));
+        let glyph =
+            glyph_with_connection_and_corner(&existing.0, direction, line_style, corner_style)?;
+        let contents = glyph.to_string();
+        let mut face = existing.1;
+        face.fg = foreground;
+        let atom = crate::model::Atom {
+            face: face.clone(),
+            contents: contents.clone(),
+        };
+        self.canvas
+            .set_at(coord, atom, &face)
+            .expect("line glyphs occupy one sparse cell");
+        self.refresh_active_dense_view();
+        Some(contents)
     }
 
     pub(super) fn apply_line_ending(
@@ -250,20 +222,21 @@ impl Editor {
 
     fn set_cell_contents(&mut self, coord: Coord, contents: String) {
         let foreground = self.write_face().fg;
-        let line = &self.grid.lines[coord.line];
-        let (index, column) = index_and_column_for_coord(line, coord.column);
-        let blank_run = line.get(index).is_some_and(grid::is_blank_run);
-        if column == coord.column
-            && let Some(atom) = self.grid.lines[coord.line].get_mut(index)
-            && atom_width(atom) == 1
-        {
-            atom.contents = contents;
-            atom.face.fg = foreground;
-        } else if blank_run {
-            replace_cell(&mut self.grid.lines, coord, contents);
-            self.color_written_cell(coord);
-        }
-        self.sync_sparse_cell_from_dense(coord);
+        let mut face = self
+            .canvas
+            .active_cell(coord)
+            .map_or_else(crate::model::Face::default, |data| {
+                data.face.as_ref().clone()
+            });
+        face.fg = foreground;
+        let atom = crate::model::Atom {
+            face: face.clone(),
+            contents,
+        };
+        self.canvas
+            .set_at(coord, atom, &face)
+            .expect("line glyphs occupy one sparse cell");
+        self.refresh_active_dense_view();
     }
 
     pub(super) fn write_diagonal_cell(
@@ -273,15 +246,6 @@ impl Editor {
         overwrite_active_endpoint: bool,
         consume_marker: bool,
     ) -> bool {
-        let cell_boundary_is_writable = self.grid.lines.get(coord.line).is_none_or(|line| {
-            let (index, column) = index_and_column_for_coord(line, coord.column);
-            column == coord.column
-                || index == line.len()
-                || line.get(index).is_some_and(grid::is_blank_run)
-        });
-        if !cell_boundary_is_writable {
-            return false;
-        }
         if consume_marker && let Some(marker) = self.take_line_marker(coord) {
             self.set_cell_contents(coord, marker.base_glyph);
         }
@@ -293,8 +257,15 @@ impl Editor {
         if !writable {
             return false;
         }
-        replace_cell(&mut self.grid.lines, coord, glyph.to_owned());
-        self.color_written_cell(coord);
+        let face = self.write_face();
+        let atom = crate::model::Atom {
+            face: face.clone(),
+            contents: glyph.to_owned(),
+        };
+        self.canvas
+            .set_at(coord, atom, &face)
+            .expect("diagonal glyphs occupy one sparse cell");
+        self.refresh_active_dense_view();
         true
     }
 

@@ -660,6 +660,11 @@ impl LayerStack {
         Ok(())
     }
 
+    pub(crate) fn active_cell(&self, coord: Coord) -> Option<&CoordData> {
+        let (line, column) = coord_i16(coord)?;
+        self.layers[self.active].get(line, column)
+    }
+
     pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
         self.layers[self.active].set_face_at(coord, face)
     }
