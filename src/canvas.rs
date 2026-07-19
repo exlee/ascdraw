@@ -120,6 +120,27 @@ impl LayerMap {
         self.dense_widths.get(line).copied().unwrap_or(0)
     }
 
+    pub(crate) fn selected_atoms(&self, bounds: SelectionBounds) -> Vec<Vec<Atom>> {
+        (bounds.top..=bounds.bottom)
+            .map(|line| {
+                (bounds.left..=bounds.right)
+                    .map(|column| {
+                        let Some((line, column)) =
+                            i16::try_from(line).ok().zip(i16::try_from(column).ok())
+                        else {
+                            return default_blank();
+                        };
+                        self.get(line, column).map_or_else(default_blank, |data| {
+                            let mut atom = data.atom.as_ref().clone();
+                            atom.face = data.face.as_ref().clone();
+                            atom
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     pub(crate) fn ensure_row_width(&mut self, line: usize, width: usize) {
         if self.dense_widths.len() <= line {
             self.dense_widths.resize(line + 1, 0);

@@ -4,7 +4,6 @@ use crate::canvas::{LayerMap, LayerStack, LineData};
 use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
-    selected_atoms,
 };
 
 use super::{EditSnapshot, Editor, PlacedLineMarker, index_for_column};
@@ -67,40 +66,46 @@ impl Editor {
             line: source_bounds.top,
             column: source_bounds.left,
         };
-        let visible_layers = self
-            .canvas
-            .summaries()
-            .into_iter()
-            .filter(|layer| layer.visible)
-            .map(|layer| layer.id)
-            .collect::<Vec<_>>();
-        let layers = self
-            .layer_contents()
-            .into_iter()
-            .filter(|(id, _, _)| visible_layers.contains(id))
-            .map(|(id, lines, markers)| {
-                let rectangle = TextRectangle {
-                    rows: selected_atoms(&lines, source_bounds),
-                    width: source_bounds.width(),
-                };
-                let edited_atoms = lifted_edited_atoms(&rectangle);
-                let markers = markers
-                    .into_iter()
-                    .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
-                    .map(|mut marker| {
-                        marker.coord.line -= source_bounds.top;
-                        marker.coord.column -= source_bounds.left;
-                        marker
-                    })
-                    .collect();
-                LiftedLayer {
-                    id,
-                    edited_atoms,
-                    markers,
-                    rendered_lines: lines,
-                }
-            })
-            .collect();
+        let layers = if source_snapshot.canvas.has_legacy_wide_atoms() {
+            self.layer_contents()
+                .into_iter()
+                .filter(|(id, _, _)| {
+                    source_snapshot
+                        .canvas
+                        .layers()
+                        .iter()
+                        .any(|layer| layer.id == *id && layer.visible)
+                })
+                .map(|(id, lines, markers)| {
+                    lifted_layer(
+                        id,
+                        crate::selection::selected_atoms(&lines, source_bounds),
+                        markers,
+                        lines,
+                        source_origin,
+                        source_bounds,
+                    )
+                })
+                .collect()
+        } else {
+            source_snapshot
+                .canvas
+                .layers()
+                .iter()
+                .filter(|layer| layer.visible)
+                .map(|layer| {
+                    let lines = layer.to_dense();
+                    lifted_layer(
+                        layer.id,
+                        layer.selected_atoms(source_bounds),
+                        layer.line_markers(),
+                        lines,
+                        source_origin,
+                        source_bounds,
+                    )
+                })
+                .collect()
+        };
         self.move_lift = Some(MoveLift {
             source_snapshot,
             source_selection,
@@ -383,6 +388,36 @@ impl Editor {
         );
         self.restore_edit_snapshot(lift.source_snapshot);
         self.pending_prepend = prefix_shift;
+    }
+}
+
+fn lifted_layer(
+    id: LayerId,
+    rows: Vec<Vec<Atom>>,
+    markers: Vec<PlacedLineMarker>,
+    rendered_lines: Vec<Vec<Atom>>,
+    source_origin: Coord,
+    source_bounds: SelectionBounds,
+) -> LiftedLayer {
+    let rectangle = TextRectangle {
+        rows,
+        width: source_bounds.width(),
+    };
+    let edited_atoms = lifted_edited_atoms(&rectangle);
+    let markers = markers
+        .into_iter()
+        .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
+        .map(|mut marker| {
+            marker.coord.line -= source_bounds.top;
+            marker.coord.column -= source_bounds.left;
+            marker
+        })
+        .collect();
+    LiftedLayer {
+        id,
+        edited_atoms,
+        markers,
+        rendered_lines,
     }
 }
 

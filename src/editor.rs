@@ -1315,6 +1315,18 @@ impl Editor {
 
     #[allow(dead_code)] // Public extraction hook for the queued export implementation.
     pub fn selected_text(&self) -> String {
+        if self.canvas_is_current() {
+            return self.canvas.layers()[self.canvas.active_index()]
+                .selected_atoms(self.selection.bounds())
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|atom| atom.contents)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         selected_text(&self.grid.lines, self.selection.bounds())
     }
 

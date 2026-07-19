@@ -327,10 +327,14 @@ fn render_canvas(
     let active_lines = line_preview
         .or(preview_lines.as_deref())
         .unwrap_or(&state.grid.lines);
-    if preview_lines.is_none() && (sparse_preview_canvas.is_some() || state.canvas_is_current()) {
+    let sparse_render_canvas = preview_lines.is_none().then(|| {
+        sparse_preview_canvas.or_else(|| state.canvas_is_current().then(|| state.canvas()))
+    });
+    let sparse_render_canvas = sparse_render_canvas.flatten();
+    if let Some(render_canvas) = sparse_render_canvas {
         render_cached_sparse_grid_atoms(
             canvas,
-            sparse_preview_canvas.unwrap_or_else(|| state.canvas()),
+            render_canvas,
             state,
             metrics,
             layout,
@@ -395,6 +399,7 @@ fn render_canvas(
             canvas,
             state,
             active_lines,
+            sparse_render_canvas,
             &config.display.cursor_shape,
             grid_layout,
             metrics,
@@ -1344,6 +1349,7 @@ fn render_grid_cursor(
     canvas: &Canvas,
     state: &Editor,
     rendered_lines: &[Vec<Atom>],
+    rendered_canvas: Option<&crate::canvas::LayerStack>,
     cursor_shape_config: &CursorShapeConfig,
     layout: LayoutMetrics,
     metrics: &CellMetrics,
@@ -1361,14 +1367,19 @@ fn render_grid_cursor(
         return;
     }
 
-    let cell = cursor_cell(
-        rendered_lines.get(cursor.line).map(Vec::as_slice),
-        cursor.column,
-    )
-    .unwrap_or_else(|| CursorCell {
+    let default_cell = || CursorCell {
         face: grid.default_face.clone(),
         text: Some(" ".to_string()),
-    });
+    };
+    let cell = if let Some(rendered_canvas) = rendered_canvas {
+        sparse_cursor_cell(rendered_canvas, cursor).unwrap_or_else(default_cell)
+    } else {
+        cursor_cell(
+            rendered_lines.get(cursor.line).map(Vec::as_slice),
+            cursor.column,
+        )
+        .unwrap_or_else(default_cell)
+    };
 
     let cell_resolved =
         resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
@@ -1698,6 +1709,17 @@ fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell
     }
 
     None
+}
+
+fn sparse_cursor_cell(
+    canvas: &crate::canvas::LayerStack,
+    coord: crate::model::Coord,
+) -> Option<CursorCell> {
+    let data = canvas.active_cell(coord)?;
+    Some(CursorCell {
+        face: data.face.as_ref().clone(),
+        text: Some(data.atom.contents.clone()),
+    })
 }
 
 pub fn atom_display_width(contents: &str) -> usize {
@@ -2190,6 +2212,7 @@ pub fn resize_surface(
 #[cfg(test)]
 mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
+    use crate::canvas::{LayerMap, LayerStack};
     use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
     use crate::model::{Atom, ColorId, Coord, Direction, LayerId};
@@ -2554,6 +2577,33 @@ mod tests {
         let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
         assert_eq!(cursor.text, Some("c".to_string()));
         assert_eq!(cursor.face.bg, "#ffffff");
+    }
+
+    #[test]
+    fn sparse_cursor_cell_reads_active_coordinate_data() {
+        let face = Face {
+            bg: "#ffffff".into(),
+            ..Face::default()
+        };
+        let mut layer = LayerMap::new(LayerId(0), true);
+        layer
+            .set_at(
+                4,
+                2,
+                Atom {
+                    face: Face::default(),
+                    contents: "x".into(),
+                },
+                &face,
+            )
+            .unwrap();
+        let canvas = LayerStack::new(vec![layer], true).unwrap();
+
+        let cell =
+            sparse_cursor_cell(&canvas, Coord { line: 2, column: 4 }).expect("sparse cursor cell");
+        assert_eq!(cell.face, face);
+        assert_eq!(cell.text.as_deref(), Some("x"));
+        assert!(sparse_cursor_cell(&canvas, Coord::default()).is_none());
     }
 
     #[test]
