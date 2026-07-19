@@ -54,8 +54,11 @@ module FpsBenchmark
     Dir.mktmpdir("ascdraw-fps") do |temporary_dir|
       socket_path = File.join(temporary_dir, "control.sock")
       document_path = File.join(temporary_dir, "workspace.json")
-      FileUtils.cp(fixture, "#{document_path}.bz2")
-      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
+      saved_document_path = File.join(temporary_dir, "saved-workspace.json")
+      [document_path, saved_document_path].each do |path|
+        FileUtils.cp(fixture, "#{path}.bz2")
+        system("bzip2", "-d", "#{path}.bz2", exception: true)
+      end
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|
@@ -63,7 +66,7 @@ module FpsBenchmark
           run_scenarios(client, warmup, operations)
         end
         reports.concat(
-          run_editor(socket_path, document_path, log) do |client|
+          run_editor(socket_path, saved_document_path, log) do |client|
             run_scenarios(client, warmup, operations, "saved-file-")
           end,
         )
