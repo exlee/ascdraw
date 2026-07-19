@@ -29,8 +29,8 @@ use crate::layout::{
 #[cfg(target_os = "macos")]
 use crate::macos;
 use crate::model::{Coord, Direction};
-use crate::perf::{FrameTiming, PerfDiagnostics};
-use crate::render::{Renderer, WindowSurface, load_renderer};
+use crate::perf::{FrameTiming, PerfDiagnostics, PerfSnapshot};
+use crate::render::{Renderer, WindowSurface, load_renderer, render_canvas_layers_image};
 use crate::title_policy::window_attributes;
 use crate::toolbar_stamp::toolbar_hotspot_at;
 use crate::user_keys::FontSizeAction;
@@ -798,6 +798,62 @@ impl EditorWindow {
             print_scroll_stats(report);
         }
         self.perf.record_present(timing, now);
+    }
+
+    pub fn enable_automation_metrics(&mut self) {
+        self.perf.enable();
+    }
+
+    pub fn perf_snapshot(&mut self, reset: bool) -> PerfSnapshot {
+        let snapshot = self.perf.snapshot();
+        if reset {
+            self.perf.reset();
+        }
+        snapshot
+    }
+
+    pub fn automation_state(&self) -> serde_json::Value {
+        let size = self.window.inner_size();
+        let selection = self.state.selection.bounds();
+        serde_json::json!({
+            "window_id": format!("{:?}", self.window_id()),
+            "window": {
+                "width": size.width,
+                "height": size.height,
+                "scale_factor": self.window.scale_factor(),
+                "renderer": self.surface.backend_name(),
+            },
+            "cursor": self.state.grid.cursor_pos,
+            "selection": selection,
+            "selection_collapsed": self.state.selection.is_collapsed(),
+            "viewport": { "x": self.viewport.x, "y": self.viewport.y },
+            "cursor_mode": format!("{:?}", self.state.cursor_mode),
+            "editor_state": format!("{:?}", self.state.state()),
+            "active_layer": self.state.active_layer_id().0,
+            "layers": self.state.layer_summaries().len(),
+            "content_cells": self.state.content_cells().len(),
+            "document_dirty": self.document_dirty,
+        })
+    }
+
+    pub fn capture_canvas(&self, path: &Path, config: &AppConfig) -> Result<(usize, usize)> {
+        let layers = self
+            .state
+            .layer_views()
+            .into_iter()
+            .filter(|layer| layer.visible)
+            .map(|layer| layer.lines.to_vec())
+            .collect::<Vec<_>>();
+        let image = render_canvas_layers_image(
+            &self.renderer,
+            &layers,
+            &self.state.grid.default_face,
+            self.window.scale_factor(),
+            config.macos.color_space,
+        )?;
+        std::fs::write(path, &image.png)
+            .with_context(|| format!("failed to write screenshot {}", path.display()))?;
+        Ok((image.width, image.height))
     }
 
     pub fn show_export_success(&mut self, action: crate::export::ExportAction, now: Instant) {

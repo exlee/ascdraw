@@ -297,6 +297,48 @@ fg = "#800080"
 Colors are hexadecimal `#RRGGBB` or `#RRGGBBAA`. The value `"default"` inherits from the default
 face. macOS builds also support configurable P3 or sRGB rendering.
 
+## Automation and performance
+
+On Unix platforms, ascdraw can expose an opt-in local control socket. The normal application does
+not create a socket or enable frame collection.
+
+```sh
+./target/release/ascdraw --automation-socket /tmp/ascdraw.sock ./drawing.toml
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock ping
+```
+
+`ascdrawctl` sends normalized input through the editor's normal classification, history, viewport,
+and redraw path. Mutating commands return only after their frame has been submitted to the window
+backend, with command handling, rasterization, submission, and end-to-end timing. Metal submission
+timing does not claim to measure GPU completion or physical display latency.
+
+```sh
+# Send keys or committed text.
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock key right --control --count 100
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock key i
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock text "benchmark text"
+
+# Queue repeated scroll input, inspect state, and capture the rendered canvas.
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock scroll 0 -1 --steps 120
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock state
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock screenshot /tmp/ascdraw-canvas.png
+```
+
+Metrics contain frame-rate, frame-time and input-to-submission percentiles, renderer phase
+percentiles, and the percentage of frames over 8.33 ms and 16.67 ms. Reset immediately before a
+workload so idle time is not included in its frame-rate window:
+
+```sh
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock metrics --reset >/dev/null
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock scroll 0 -1 --steps 120
+sleep 2
+./target/release/ascdrawctl --socket /tmp/ascdraw.sock metrics >metrics.json
+```
+
+The screenshot command currently captures the complete layered canvas without window chrome,
+toolbar, cursor, or selection overlays. `shutdown` performs the normal application save-and-exit
+path. The socket is created with owner-only permissions and removed during normal shutdown.
+
 ## Development
 
 Run the full local checks through mise:

@@ -160,6 +160,7 @@ impl MetalRenderer {
         command_buffer.commit();
 
         Ok(FrameTiming {
+            submitted: true,
             buffer_acquisition,
             rasterization,
             presentation: presentation_started.elapsed(),

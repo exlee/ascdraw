@@ -8,6 +8,8 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use toml::Value;
 
+use ascdraw::automation_protocol::{AutomationRequest, AutomationResponse};
+
 use crate::model::Face;
 use crate::user_keys::UserKeysConfig;
 
@@ -19,6 +21,8 @@ pub struct Args {
     pub show_config: bool,
     #[arg(long)]
     pub debug: bool,
+    #[arg(long, value_name = "PATH")]
+    pub automation_socket: Option<PathBuf>,
     pub document: Option<PathBuf>,
 }
 
@@ -169,6 +173,13 @@ pub enum MacosColorSpace {
 #[derive(Debug)]
 pub enum AppEvent {
     Command(AppCommand),
+    Automation(AutomationEnvelope),
+}
+
+#[derive(Debug)]
+pub struct AutomationEnvelope {
+    pub request: AutomationRequest,
+    pub response: std::sync::mpsc::Sender<AutomationResponse>,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -57,11 +57,14 @@ use input::{
 };
 #[cfg(test)]
 use input::{clipboard_command, history_command};
+use runtime::automation_dispatch::{
+    PendingAutomationMap, complete_present, fail_all_pending, fail_pending_for_window,
+    handle_automation,
+};
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 #[cfg(test)]
 use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
-#[cfg(target_os = "macos")]
 use runtime::window::{
     DocumentSession, EditorWindow, close_window, create_editor_window, handle_command,
     modified_wheel_zooms, save_windows_on_exit,
@@ -88,6 +91,8 @@ fn main() -> ExitCode {
 fn try_main() -> Result<ExitCode> {
     let args = Args::parse();
     let debug = args.debug;
+    let automation_socket = args.automation_socket;
+    let automation_enabled = automation_socket.is_some();
     let mut config = load_config()?;
     if args.show_config {
         println!("Checked configuration paths:");
@@ -121,11 +126,24 @@ fn try_main() -> Result<ExitCode> {
     let proxy = event_loop.create_proxy();
 
     #[cfg(target_os = "macos")]
-    if let Err(error) = macos::install(proxy) {
+    if let Err(error) = macos::install(proxy.clone()) {
         log_error(format!("macOS integration setup failed: {error:#}"));
     }
 
+    #[cfg(unix)]
+    let automation_server = automation_socket
+        .map(|path| runtime::automation::AutomationServer::start(path, proxy.clone()))
+        .transpose()?;
+    #[cfg(not(unix))]
+    let automation_server: Option<()> = if automation_socket.is_some() {
+        anyhow::bail!("--automation-socket requires Unix domain socket support");
+    } else {
+        None
+    };
+
     let mut windows: HashMap<WindowId, EditorWindow> = HashMap::new();
+    let mut pending_automation = PendingAutomationMap::new();
+    let mut frame_sequences = HashMap::<WindowId, u64>::new();
     let mut last_autosave_check = Instant::now();
     let mut last_tooltip_redraw = Instant::now();
     #[cfg(target_os = "macos")]
@@ -147,6 +165,9 @@ fn try_main() -> Result<ExitCode> {
                 if windows.is_empty() {
                     match create_editor_window(elwt, &config, &document_session, debug) {
                         Ok(mut editor) => {
+                            if automation_enabled {
+                                editor.enable_automation_metrics();
+                            }
                             editor.set_document_history_enabled(history_enabled);
                             editor.set_recent_documents(recent_documents.files());
                             windows.insert(editor.window_id(), editor);
@@ -173,6 +194,17 @@ fn try_main() -> Result<ExitCode> {
                     recent_documents.files(),
                     debug,
                 );
+            }
+            Event::UserEvent(AppEvent::Automation(envelope)) => {
+                if handle_automation(
+                    envelope,
+                    &mut windows,
+                    &config,
+                    &frame_sequences,
+                    &mut pending_automation,
+                ) {
+                    elwt.exit();
+                }
             }
             Event::AboutToWait => {
                 if let Some(watch) = user_config_watch.as_mut() {
@@ -239,10 +271,29 @@ fn try_main() -> Result<ExitCode> {
                             match editor.render(&config) {
                                 Err(error) => {
                                     log_error(format!("render failed: {error:#}"));
+                                    fail_pending_for_window(
+                                        &mut pending_automation,
+                                        window_id,
+                                        "render failed before frame submission",
+                                    );
                                     should_close = true;
                                 }
-                                Ok(timing) => {
-                                    editor.record_present(timing, Instant::now());
+                                Ok(timing) if timing.submitted => {
+                                    let presented = Instant::now();
+                                    editor.record_present(timing, presented);
+                                    let frame_sequence = frame_sequences
+                                        .entry(window_id)
+                                        .and_modify(|sequence| {
+                                            *sequence = sequence.saturating_add(1)
+                                        })
+                                        .or_insert(1);
+                                    complete_present(
+                                        &mut pending_automation,
+                                        window_id,
+                                        *frame_sequence,
+                                        timing,
+                                        presented,
+                                    );
                                     if editor.scroll_pan_active() {
                                         editor.request_redraw();
                                     }
@@ -254,6 +305,7 @@ fn try_main() -> Result<ExitCode> {
                                         }
                                     }
                                 }
+                                Ok(_) => editor.request_redraw(),
                             }
                         }
                         WindowEvent::ModifiersChanged(modifiers) => {
@@ -644,10 +696,25 @@ fn try_main() -> Result<ExitCode> {
                         debug,
                     );
                 } else if should_close {
+                    fail_pending_for_window(
+                        &mut pending_automation,
+                        window_id,
+                        "window closed before frame submission",
+                    );
                     close_window(&mut windows, window_id, elwt);
                 }
             }
-            Event::LoopExiting => save_windows_on_exit(&mut windows),
+            Event::LoopExiting => {
+                fail_all_pending(
+                    &mut pending_automation,
+                    "application exited before frame submission",
+                );
+                save_windows_on_exit(&mut windows);
+                #[cfg(unix)]
+                if let Some(server) = automation_server.as_ref() {
+                    server.cleanup();
+                }
+            }
             _ => {}
         }
 

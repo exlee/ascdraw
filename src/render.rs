@@ -210,6 +210,7 @@ pub fn render(
         .present()
         .map_err(|error| anyhow!(error.to_string()))?;
     Ok(FrameTiming {
+        submitted: true,
         buffer_acquisition,
         rasterization,
         presentation: presentation_started.elapsed(),

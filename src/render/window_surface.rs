@@ -25,6 +25,14 @@ enum Backend {
 }
 
 impl WindowSurface {
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            #[cfg(target_os = "macos")]
+            Backend::Metal(_) => "metal",
+            Backend::Softbuffer(_) => "softbuffer",
+        }
+    }
+
     pub fn new(window: &Rc<Window>, _config: &AppConfig) -> Result<Self> {
         #[cfg(target_os = "macos")]
         match super::metal::MetalRenderer::new(window, _config.macos.color_space) {
