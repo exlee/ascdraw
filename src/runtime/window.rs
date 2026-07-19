@@ -16,7 +16,10 @@ use crate::app::{AppCommand, AppConfig};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
-use crate::export::{FileKind, lines_from_text, load_project_json, plain_text, save_project_json};
+use crate::export::{
+    FileKind, lines_from_text, load_project_json, plain_text, project_json_contents,
+    save_project_json,
+};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -31,6 +34,7 @@ use crate::macos;
 use crate::model::{Coord, Direction};
 use crate::perf::{FrameTiming, PerfDiagnostics, PerfSnapshot};
 use crate::render::{Renderer, WindowSurface, load_renderer, render_canvas_layers_image};
+use crate::runtime::background::{BackgroundSender, BackgroundWorker};
 use crate::title_policy::window_attributes;
 use crate::toolbar_stamp::toolbar_hotspot_at;
 use crate::user_keys::FontSizeAction;
@@ -162,6 +166,7 @@ pub struct EditorWindow {
     scroll_pan: ScrollPan,
     wheel_zoom_remainder: f64,
     scroll_stats: ScrollStats,
+    background: BackgroundSender,
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
@@ -176,6 +181,13 @@ pub struct EditorWindow {
     saved_canvas_position: document::CanvasPosition,
     last_keypress: Instant,
     export_success_deadline: Option<Instant>,
+    autosave_in_flight: Option<PendingAutosave>,
+}
+
+struct PendingAutosave {
+    position: document::CanvasPosition,
+    document_dirty: bool,
+    menu_selections_dirty: bool,
 }
 
 #[derive(Debug)]
@@ -317,12 +329,12 @@ impl ScrollStats {
     }
 }
 
-fn print_scroll_stats(report: ScrollStatsReport) {
+fn format_scroll_stats(report: ScrollStatsReport) -> String {
     let frames = report.redraws as f64;
     let milliseconds = |duration: Duration| duration.as_secs_f64() * 1_000.0 / frames;
     let measured = report.toolbar_time + report.grid_time + report.minimap_time;
     let other = report.raster_time.saturating_sub(measured);
-    println!(
+    format!(
         "debug: scroll={}/s redraw={}/s frame={:.2}ms [buffer={:.2} raster={:.2} present={:.2}] raster=[toolbar={:.2} grid={:.2} minimap={:.2} other={:.2}]",
         report.scroll_events,
         report.redraws,
@@ -334,7 +346,7 @@ fn print_scroll_stats(report: ScrollStatsReport) {
         milliseconds(report.grid_time),
         milliseconds(report.minimap_time),
         milliseconds(other),
-    );
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -718,19 +730,19 @@ impl EditorWindow {
 
     pub fn note_scroll_event(&mut self) {
         if let Some(report) = self.scroll_stats.note_scroll_event(Instant::now()) {
-            print_scroll_stats(report);
+            self.background.debug_output(format_scroll_stats(report));
         }
     }
 
     pub fn note_redraw(&mut self) {
         if let Some(report) = self.scroll_stats.note_redraw(Instant::now()) {
-            print_scroll_stats(report);
+            self.background.debug_output(format_scroll_stats(report));
         }
     }
 
     pub fn report_scroll_event_stats(&mut self, now: Instant) {
         if let Some(report) = self.scroll_stats.advance(now) {
-            print_scroll_stats(report);
+            self.background.debug_output(format_scroll_stats(report));
         }
     }
 
@@ -823,7 +835,7 @@ impl EditorWindow {
 
     pub fn record_present(&mut self, timing: FrameTiming, now: Instant) {
         if let Some(report) = self.scroll_stats.note_frame(timing, now) {
-            print_scroll_stats(report);
+            self.background.debug_output(format_scroll_stats(report));
         }
         self.perf.record_present(timing, now);
     }
@@ -1417,6 +1429,9 @@ impl EditorWindow {
         if self.document_session.is_stdin() {
             return Ok(false);
         }
+        if self.autosave_in_flight.is_some() {
+            return Ok(false);
+        }
         if !should_autosave(
             self.document_dirty
                 || self.menu_selections_dirty
@@ -1426,11 +1441,70 @@ impl EditorWindow {
         ) {
             return Ok(false);
         }
-        self.save_document()?;
+        let path = self
+            .document_session
+            .path()
+            .expect("stdin sessions returned before path persistence")
+            .to_path_buf();
+        let format = match self.document_session {
+            DocumentSession::TextFile(_) => Some(FileKind::Txt),
+            DocumentSession::JsonFile(_) => Some(FileKind::Json),
+            DocumentSession::Scratchpad(_) | DocumentSession::File(_) => None,
+            DocumentSession::Stdin(_) => {
+                unreachable!("stdin sessions returned before path persistence")
+            }
+        };
+        let position = self.canvas_position();
+        let contents = match format {
+            Some(FileKind::Txt) => plain_text(&self.state),
+            Some(FileKind::Json) => project_json_contents(&self.state, self.viewport)?,
+            Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
+            None => document::contents(
+                &self.state.persisted_layers(),
+                self.state.active_layer_id(),
+                &self.state.toolbar.durable_selections(),
+                position,
+            )?,
+        };
+        let pending = PendingAutosave {
+            position,
+            document_dirty: self.document_dirty,
+            menu_selections_dirty: self.menu_selections_dirty,
+        };
+        self.document_dirty = false;
+        self.menu_selections_dirty = false;
+        if let Err(error) = self
+            .background
+            .write_autosave(self.window_id(), path, contents)
+        {
+            self.document_dirty |= pending.document_dirty;
+            self.menu_selections_dirty |= pending.menu_selections_dirty;
+            return Err(error);
+        }
+        self.autosave_in_flight = Some(pending);
         Ok(true)
     }
 
+    pub fn finish_autosave(&mut self, result: std::result::Result<(), String>) {
+        let Some(pending) = self.autosave_in_flight.take() else {
+            return;
+        };
+        match result {
+            Ok(()) => self.saved_canvas_position = pending.position,
+            Err(error) => {
+                self.document_dirty |= pending.document_dirty;
+                self.menu_selections_dirty |= pending.menu_selections_dirty;
+                log_error(format!("document autosave failed: {error}"));
+            }
+        }
+    }
+
     pub fn save_document(&mut self) -> Result<bool> {
+        self.background.flush();
+        if let Some(pending) = self.autosave_in_flight.take() {
+            self.document_dirty |= pending.document_dirty;
+            self.menu_selections_dirty |= pending.menu_selections_dirty;
+        }
         if self.document_session.is_stdin() {
             let text = plain_text(&self.state);
             let stdout = std::io::stdout();
@@ -1882,6 +1956,7 @@ pub fn create_editor_window(
     config: &AppConfig,
     document_session: &DocumentSession,
     debug: bool,
+    background: BackgroundSender,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
     let surface = WindowSurface::new(&window, config)?;
@@ -1946,6 +2021,7 @@ pub fn create_editor_window(
         scroll_pan: ScrollPan::default(),
         wheel_zoom_remainder: 0.0,
         scroll_stats: ScrollStats::new(debug, Instant::now()),
+        background,
         state,
         renderer,
         viewport,
@@ -1965,6 +2041,7 @@ pub fn create_editor_window(
         },
         last_keypress: Instant::now(),
         export_success_deadline: None,
+        autosave_in_flight: None,
     };
     if !restored_position {
         editor.ensure_cursor_in_viewport();
@@ -1985,7 +2062,9 @@ pub fn close_window(
     windows: &mut HashMap<WindowId, EditorWindow>,
     window_id: WindowId,
     elwt: &ActiveEventLoop,
+    background: &BackgroundWorker,
 ) {
+    background.flush();
     if let Some(mut editor) = windows.remove(&window_id) {
         editor.state.end_stroke();
         editor.finish_history_transaction();
@@ -2010,6 +2089,7 @@ pub struct CommandContext<'a> {
     pub document_session: &'a DocumentSession,
     pub recent_documents: &'a [PathBuf],
     pub debug: bool,
+    pub background: &'a BackgroundWorker,
 }
 
 fn should_autosave(dirty: bool, last_keypress: Instant, now: Instant) -> bool {
@@ -2034,6 +2114,7 @@ pub fn handle_command(
                 context.config,
                 context.document_session,
                 context.debug,
+                context.background.sender(),
             ) {
                 Ok(mut editor) => {
                     editor.set_document_history_enabled(
@@ -2047,7 +2128,7 @@ pub fn handle_command(
         }
         AppCommand::WindowClose => {
             if let Some(window_id) = target {
-                close_window(windows, window_id, context.elwt);
+                close_window(windows, window_id, context.elwt, context.background);
             }
         }
         AppCommand::FontScaleUp => {

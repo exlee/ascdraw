@@ -133,6 +133,16 @@ pub fn save(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    let contents = contents(layers, active_layer, menu_selections, position)?;
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+pub fn contents(
+    layers: &[PersistedLayer],
+    active_layer: LayerId,
+    menu_selections: &DurableMenuSelections,
+    position: CanvasPosition,
+) -> Result<String> {
     let layers = layers
         .iter()
         .map(|layer| PersistedLayer {
@@ -140,15 +150,14 @@ pub fn save(
             visible: layer.visible,
             lines: compacted_blank_runs(&layer.lines),
         })
-        .collect();
-    let contents = toml::to_string_pretty(&Document::new(
+        .collect::<Vec<_>>();
+    toml::to_string_pretty(&Document::new(
         layers,
         active_layer,
         Some(menu_selections.clone()),
         Some(position),
     ))
-    .context("failed to serialize document")?;
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+    .context("failed to serialize document")
 }
 
 pub fn default_path() -> PathBuf {

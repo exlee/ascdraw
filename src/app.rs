@@ -174,6 +174,15 @@ pub enum MacosColorSpace {
 pub enum AppEvent {
     Command(AppCommand),
     Automation(AutomationEnvelope),
+    Background(BackgroundEvent),
+}
+
+#[derive(Debug)]
+pub enum BackgroundEvent {
+    AutosaveFinished {
+        window_id: winit::window::WindowId,
+        result: std::result::Result<(), String>,
+    },
 }
 
 #[derive(Debug)]

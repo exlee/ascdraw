@@ -39,8 +39,8 @@ mod toolbar_stamp;
 mod user_keys;
 
 use app::{
-    AppCommand, AppEvent, Args, checked_config_paths, load_config, show_config_toml,
-    user_config_path,
+    AppCommand, AppEvent, Args, BackgroundEvent, checked_config_paths, load_config,
+    show_config_toml, user_config_path,
 };
 use diagnostics::log_error;
 use editor::Editor;
@@ -61,6 +61,7 @@ use runtime::automation_dispatch::{
     PendingAutomationMap, complete_present, fail_all_pending, fail_pending_for_window,
     handle_automation,
 };
+use runtime::background::BackgroundWorker;
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 #[cfg(test)]
 use runtime::input_dispatch::history_group_for_key;
@@ -124,6 +125,7 @@ fn try_main() -> Result<ExitCode> {
     let mut user_config_watch = user_config_path().map(UserConfigWatch::new);
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
+    let background = BackgroundWorker::start(proxy.clone());
 
     #[cfg(target_os = "macos")]
     if let Err(error) = macos::install(proxy.clone()) {
@@ -163,7 +165,13 @@ fn try_main() -> Result<ExitCode> {
                 }
 
                 if windows.is_empty() {
-                    match create_editor_window(elwt, &config, &document_session, debug) {
+                    match create_editor_window(
+                        elwt,
+                        &config,
+                        &document_session,
+                        debug,
+                        background.sender(),
+                    ) {
                         Ok(mut editor) => {
                             if automation_enabled {
                                 editor.enable_automation_metrics();
@@ -194,6 +202,7 @@ fn try_main() -> Result<ExitCode> {
                         document_session: &document_session,
                         recent_documents: recent_documents.files(),
                         debug,
+                        background: &background,
                     },
                 );
             }
@@ -206,6 +215,14 @@ fn try_main() -> Result<ExitCode> {
                     &mut pending_automation,
                 ) {
                     elwt.exit();
+                }
+            }
+            Event::UserEvent(AppEvent::Background(BackgroundEvent::AutosaveFinished {
+                window_id,
+                result,
+            })) => {
+                if let Some(editor) = windows.get_mut(&window_id) {
+                    editor.finish_autosave(result);
                 }
             }
             Event::AboutToWait => {
@@ -753,6 +770,7 @@ fn try_main() -> Result<ExitCode> {
                             document_session: &document_session,
                             recent_documents: recent_documents.files(),
                             debug,
+                            background: &background,
                         },
                     );
                 } else if should_close {
@@ -761,7 +779,7 @@ fn try_main() -> Result<ExitCode> {
                         window_id,
                         "window closed before frame submission",
                     );
-                    close_window(&mut windows, window_id, elwt);
+                    close_window(&mut windows, window_id, elwt, &background);
                 }
             }
             Event::LoopExiting => {
@@ -769,6 +787,7 @@ fn try_main() -> Result<ExitCode> {
                     &mut pending_automation,
                     "application exited before frame submission",
                 );
+                background.flush();
                 save_windows_on_exit(&mut windows);
                 #[cfg(unix)]
                 if let Some(server) = automation_server.as_ref() {

@@ -601,9 +601,13 @@ pub(crate) fn save_project_json(
     state: &Editor,
     viewport: ViewportOffset,
 ) -> Result<()> {
-    let contents = serde_json::to_string_pretty(&project_document(state, viewport))
-        .context("failed to serialize ascdraw project")?;
+    let contents = project_json_contents(state, viewport)?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+pub(crate) fn project_json_contents(state: &Editor, viewport: ViewportOffset) -> Result<String> {
+    serde_json::to_string_pretty(&project_document(state, viewport))
+        .context("failed to serialize ascdraw project")
 }
 
 pub(crate) fn load_project_json(
