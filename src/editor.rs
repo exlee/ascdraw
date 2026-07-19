@@ -1177,6 +1177,17 @@ impl Editor {
         cells
     }
 
+    pub fn content_cells_including_hidden(&self) -> Vec<Coord> {
+        let mut cells = self
+            .layer_views()
+            .into_iter()
+            .flat_map(|layer| grid::content_cells(layer.lines))
+            .collect::<Vec<_>>();
+        cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
+        cells.dedup();
+        cells
+    }
+
     pub fn compact_blank_runs_preserving_cursor(&mut self) {
         grid::compact_blank_runs(&mut self.grid.lines);
         self.expose_cursor_cells();
@@ -1621,6 +1632,23 @@ mod tests {
         let active = state.active_layer_id();
         assert!(state.delete_layer(active));
         assert_eq!(state.active_layer_id(), base);
+    }
+
+    #[test]
+    fn minimap_projection_content_includes_hidden_layers() {
+        let mut state = state();
+        state.grid.lines = lines_from_text("x");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.grid.lines = lines_from_text("   y");
+        assert!(state.toggle_layer_visibility(upper));
+
+        assert_eq!(state.content_cells(), vec![Coord::default()]);
+        assert_eq!(
+            state.content_cells_including_hidden(),
+            vec![Coord::default(), Coord { line: 0, column: 3 }]
+        );
     }
 
     #[test]

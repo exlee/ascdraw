@@ -176,6 +176,7 @@ pub struct EditorWindow {
 #[derive(Debug)]
 struct ContentIndex {
     cells: Vec<Coord>,
+    cells_including_hidden: Vec<Coord>,
     dirty: bool,
     #[cfg(test)]
     rebuilds: usize,
@@ -185,6 +186,7 @@ impl ContentIndex {
     fn new(state: &Editor) -> Self {
         Self {
             cells: state.content_cells(),
+            cells_including_hidden: state.content_cells_including_hidden(),
             dirty: false,
             #[cfg(test)]
             rebuilds: 1,
@@ -198,6 +200,7 @@ impl ContentIndex {
     fn refresh(&mut self, state: &Editor) {
         if self.dirty {
             self.cells = state.content_cells();
+            self.cells_including_hidden = state.content_cells_including_hidden();
             self.dirty = false;
             #[cfg(test)]
             {
@@ -208,6 +211,10 @@ impl ContentIndex {
 
     fn cells(&self) -> &[Coord] {
         &self.cells
+    }
+
+    fn cells_including_hidden(&self) -> &[Coord] {
+        &self.cells_including_hidden
     }
 
     #[cfg(test)]
@@ -887,7 +894,10 @@ impl EditorWindow {
         self.surface.render(
             &self.window,
             &self.state,
-            self.content_index.cells(),
+            crate::render::CanvasContent {
+                visible: self.content_index.cells(),
+                including_hidden: self.content_index.cells_including_hidden(),
+            },
             &self.renderer,
             config,
             self.viewport,

@@ -17,12 +17,11 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 use super::export_png::skia_color_space;
-use super::{RenderFrame, Renderer, render_canvas};
+use super::{CanvasContent, RenderFrame, Renderer, render_canvas};
 use crate::app::{AppConfig, MacosColorSpace};
 use crate::editor::Editor;
 use crate::layout::{ViewportOffset, layout_metrics};
 use crate::macos::color_space_for_config;
-use crate::model::Coord;
 use crate::perf::FrameTiming;
 
 pub(super) struct MetalRenderer {
@@ -91,7 +90,7 @@ impl MetalRenderer {
         &mut self,
         window: &Window,
         state: &Editor,
-        content: &[Coord],
+        content: CanvasContent<'_>,
         renderer: &Renderer,
         config: &AppConfig,
         viewport: ViewportOffset,

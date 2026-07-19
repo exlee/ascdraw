@@ -5,7 +5,9 @@ use crate::face_resolution::{ResolvedFace, resolve_derived_face};
 use crate::layout::{ScreenRect, VisibleCanvasCells};
 use crate::model::Coord;
 
-use super::{CellMetrics, FALLBACK_BG, FALLBACK_FG, draw_text_cluster, is_drawing_mode};
+use super::{
+    CanvasContent, CellMetrics, FALLBACK_BG, FALLBACK_FG, draw_text_cluster, is_drawing_mode,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MinimapBounds {
@@ -67,10 +69,11 @@ impl MinimapBounds {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MinimapGeometry {
-    world: MinimapBounds,
     columns: i64,
     rows: i64,
-    canvas_cells_per_cell: i64,
+    world_left: f64,
+    world_top: f64,
+    canvas_cells_per_cell: f64,
     cell_width: f32,
     cell_height: f32,
     left: f32,
@@ -94,48 +97,32 @@ impl MinimapGeometry {
 
         let columns = (inner_width / cell_width).floor().max(1.0) as i64;
         let rows = (inner_height / cell_height).floor().max(1.0) as i64;
-        let mut canvas_cells_per_cell = 1_i64;
-        while required_bounds.width() > columns.saturating_mul(canvas_cells_per_cell)
-            || required_bounds.height() > rows.saturating_mul(canvas_cells_per_cell)
-        {
-            let doubled = canvas_cells_per_cell.saturating_mul(2);
-            if doubled == canvas_cells_per_cell {
-                break;
-            }
-            canvas_cells_per_cell = doubled;
-        }
-
-        let world_width = columns.saturating_mul(canvas_cells_per_cell);
-        let world_height = rows.saturating_mul(canvas_cells_per_cell);
-        let world = MinimapBounds {
-            left: centered_origin(
-                canvas_bounds.left,
-                canvas_bounds.right,
-                required_bounds.left,
-                required_bounds.right,
-                world_width,
-            ),
-            top: centered_origin(
-                canvas_bounds.top,
-                canvas_bounds.bottom,
-                required_bounds.top,
-                required_bounds.bottom,
-                world_height,
-            ),
-            right: 0,
-            bottom: 0,
-        };
-        let world = MinimapBounds {
-            right: world.left.saturating_add(world_width),
-            bottom: world.top.saturating_add(world_height),
-            ..world
-        };
+        let canvas_cells_per_cell = (required_bounds.width() as f64 / columns as f64)
+            .max(required_bounds.height() as f64 / rows as f64)
+            .max(1.0);
+        let world_width = columns as f64 * canvas_cells_per_cell;
+        let world_height = rows as f64 * canvas_cells_per_cell;
+        let world_left = centered_origin(
+            canvas_bounds.left,
+            canvas_bounds.right,
+            required_bounds.left,
+            required_bounds.right,
+            world_width,
+        );
+        let world_top = centered_origin(
+            canvas_bounds.top,
+            canvas_bounds.bottom,
+            required_bounds.top,
+            required_bounds.bottom,
+            world_height,
+        );
         let map_width = columns as f32 * cell_width;
         let map_height = rows as f32 * cell_height;
         Some(Self {
-            world,
             columns,
             rows,
+            world_left,
+            world_top,
             canvas_cells_per_cell,
             cell_width,
             cell_height,
@@ -147,10 +134,10 @@ impl MinimapGeometry {
     fn point(self, column: i64, line: i64) -> (f32, f32) {
         (
             self.left
-                + column.saturating_sub(self.world.left) as f32 / self.canvas_cells_per_cell as f32
+                + ((column as f64 - self.world_left) / self.canvas_cells_per_cell) as f32
                     * self.cell_width,
             self.top
-                + line.saturating_sub(self.world.top) as f32 / self.canvas_cells_per_cell as f32
+                + ((line as f64 - self.world_top) / self.canvas_cells_per_cell) as f32
                     * self.cell_height,
         )
     }
@@ -159,17 +146,6 @@ impl MinimapGeometry {
         let (x, y) = self.point(left, top);
         let (right, bottom) = self.point(right, bottom);
         Rect::from_xywh(x, y, (right - x).max(1.0), (bottom - y).max(1.0))
-    }
-
-    fn content_cell(self, column: i64, line: i64) -> Option<(i64, i64)> {
-        let column = column
-            .saturating_sub(self.world.left)
-            .div_euclid(self.canvas_cells_per_cell);
-        let row = line
-            .saturating_sub(self.world.top)
-            .div_euclid(self.canvas_cells_per_cell);
-        (column >= 0 && column < self.columns && row >= 0 && row < self.rows)
-            .then_some((column, row))
     }
 
     fn cell_rect(self, column: i64, row: i64) -> Rect {
@@ -187,44 +163,55 @@ fn centered_origin(
     canvas_end: i64,
     required_start: i64,
     required_end: i64,
-    capacity: i64,
-) -> i64 {
-    let centered = canvas_start
-        .saturating_add(canvas_end)
-        .saturating_sub(capacity)
-        .div_euclid(2);
-    centered.clamp(required_end.saturating_sub(capacity), required_start)
+    capacity: f64,
+) -> f64 {
+    let centered = (canvas_start as f64 + canvas_end as f64 - capacity) / 2.0;
+    centered.clamp(required_end as f64 - capacity, required_start as f64)
 }
 
-fn density_level(occupied: usize, canvas_cells_per_cell: i64) -> u8 {
-    if occupied == 0 {
+fn density_level(coverage: f64) -> u8 {
+    if coverage <= 0.0 {
         return 0;
     }
-    let side = canvas_cells_per_cell as u128;
-    let capacity = side.saturating_mul(side).max(1);
-    let occupied = occupied as u128;
-    occupied
-        .saturating_mul(4)
-        .saturating_add(capacity - 1)
-        .checked_div(capacity)
-        .unwrap_or(4)
-        .clamp(1, 4) as u8
+    ((coverage.clamp(0.0, 1.0) * 10.0 - 1e-9).ceil() as u8).clamp(1, 10)
 }
 
-fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<usize>> {
+fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<f64>> {
     let len = usize::try_from(geometry.columns).ok().and_then(|columns| {
         usize::try_from(geometry.rows)
             .ok()
             .and_then(|rows| columns.checked_mul(rows))
     })?;
-    let mut occupancy = vec![0usize; len];
+    let mut occupancy = vec![0.0; len];
+    let scale = geometry.canvas_cells_per_cell;
+    let tile_area = scale * scale;
     for coord in content {
-        let column = i64::try_from(coord.column).unwrap_or(i64::MAX);
-        let line = i64::try_from(coord.line).unwrap_or(i64::MAX);
-        if let Some((column, row)) = geometry.content_cell(column, line) {
-            let index = row.saturating_mul(geometry.columns).saturating_add(column);
-            if let Ok(index) = usize::try_from(index) {
-                occupancy[index] = occupancy[index].saturating_add(1);
+        let source_left = coord.column as f64;
+        let source_top = coord.line as f64;
+        let source_right = source_left + 1.0;
+        let source_bottom = source_top + 1.0;
+        let first_column = ((source_left - geometry.world_left) / scale).floor() as i64;
+        let last_column = ((source_right - geometry.world_left) / scale).ceil() as i64 - 1;
+        let first_row = ((source_top - geometry.world_top) / scale).floor() as i64;
+        let last_row = ((source_bottom - geometry.world_top) / scale).ceil() as i64 - 1;
+
+        for row in first_row.max(0)..=last_row.min(geometry.rows - 1) {
+            let tile_top = geometry.world_top + row as f64 * scale;
+            let overlap_height = source_bottom.min(tile_top + scale) - source_top.max(tile_top);
+            if overlap_height <= 0.0 {
+                continue;
+            }
+            for column in first_column.max(0)..=last_column.min(geometry.columns - 1) {
+                let tile_left = geometry.world_left + column as f64 * scale;
+                let overlap_width =
+                    source_right.min(tile_left + scale) - source_left.max(tile_left);
+                if overlap_width <= 0.0 {
+                    continue;
+                }
+                let index = row.saturating_mul(geometry.columns).saturating_add(column);
+                if let Ok(index) = usize::try_from(index) {
+                    occupancy[index] += overlap_width * overlap_height / tile_area;
+                }
             }
         }
     }
@@ -234,7 +221,7 @@ fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<usize>>
 pub(super) fn render(
     canvas: &Canvas,
     state: &Editor,
-    content: &[Coord],
+    content: CanvasContent<'_>,
     viewport: VisibleCanvasCells,
     panel: ScreenRect,
     border_metrics: &CellMetrics,
@@ -256,7 +243,7 @@ pub(super) fn render(
     } else {
         cursor_face.bg
     };
-    let canvas_bounds = MinimapBounds::canvas(content, viewport);
+    let canvas_bounds = MinimapBounds::canvas(content.including_hidden, viewport);
     let required_bounds = canvas_bounds.union(MinimapBounds::viewport(viewport));
     let content_panel = ScreenRect {
         left: panel.left + border_metrics.cell_width,
@@ -291,14 +278,14 @@ pub(super) fn render(
     foreground
         .set_anti_alias(false)
         .set_color(default_face.fg.to_color());
-    let Some(occupancy) = occupancy(content, geometry) else {
+    let Some(occupancy) = occupancy(content.visible, geometry) else {
         canvas.restore();
         return;
     };
     for (index, occupied) in occupancy
         .into_iter()
         .enumerate()
-        .filter(|(_, count)| *count > 0)
+        .filter(|(_, coverage)| *coverage > 0.0)
     {
         let index = i64::try_from(index).unwrap_or(i64::MAX);
         let cell = (
@@ -306,8 +293,7 @@ pub(super) fn render(
             index.div_euclid(geometry.columns),
         );
         let mut density = foreground.clone();
-        density
-            .set_alpha_f(f32::from(density_level(occupied, geometry.canvas_cells_per_cell)) / 4.0);
+        density.set_alpha_f(f32::from(density_level(occupied)) / 10.0);
         canvas.draw_rect(geometry.cell_rect(cell.0, cell.1), &density);
     }
 
@@ -392,7 +378,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_micro_cells_fixed_and_doubles_their_canvas_coverage() {
+    fn keeps_micro_cells_fixed_and_scales_canvas_coverage_fluidly() {
         let viewport = VisibleCanvasCells {
             origin: (0, 0),
             columns: 20,
@@ -410,7 +396,7 @@ mod tests {
             bottom: 48.0,
         };
         let nearby = MinimapGeometry::new(panel, canvas, canvas, 1.0, 2.0).unwrap();
-        assert_eq!(nearby.canvas_cells_per_cell, 1);
+        assert_eq!(nearby.canvas_cells_per_cell, 1.0);
         assert_eq!((nearby.cell_width, nearby.cell_height), (1.0, 2.0));
 
         let panned_viewport = VisibleCanvasCells {
@@ -425,7 +411,7 @@ mod tests {
             2.0,
         )
         .unwrap();
-        assert_eq!(panned.canvas_cells_per_cell, 1);
+        assert_eq!(panned.canvas_cells_per_cell, 1.0);
 
         let beyond_range = VisibleCanvasCells {
             origin: (61, 0),
@@ -439,17 +425,19 @@ mod tests {
             2.0,
         )
         .unwrap();
-        assert_eq!(zoomed.canvas_cells_per_cell, 2);
+        assert!((zoomed.canvas_cells_per_cell - 1.0125).abs() < f64::EPSILON);
         assert_eq!((zoomed.cell_width, zoomed.cell_height), (1.0, 2.0));
     }
 
     #[test]
-    fn uses_five_cumulative_density_levels() {
-        assert_eq!(density_level(0, 2), 0);
-        assert_eq!(density_level(1, 2), 1);
-        assert_eq!(density_level(2, 2), 2);
-        assert_eq!(density_level(3, 2), 3);
-        assert_eq!(density_level(4, 2), 4);
+    fn uses_ten_ceiling_based_density_levels() {
+        assert_eq!(density_level(0.0), 0);
+        assert_eq!(density_level(0.001), 1);
+        assert_eq!(density_level(0.1), 1);
+        assert_eq!(density_level(0.1001), 2);
+        assert_eq!(density_level(0.9), 9);
+        assert_eq!(density_level(0.9001), 10);
+        assert_eq!(density_level(1.0), 10);
     }
 
     #[test]
@@ -479,7 +467,39 @@ mod tests {
             occupancy.len(),
             geometry.columns as usize * geometry.rows as usize
         );
-        assert_eq!(occupancy.iter().sum::<usize>(), content.len());
-        assert_eq!(occupancy.iter().filter(|count| **count > 0).count(), 2);
+        assert!((occupancy.iter().sum::<f64>() - 3.0 / 16.0).abs() < f64::EPSILON);
+        assert_eq!(occupancy.iter().filter(|count| **count > 0.0).count(), 2);
+    }
+
+    #[test]
+    fn projects_source_area_into_fixed_minimap_cells() {
+        let panel = ScreenRect {
+            left: 0.0,
+            top: 0.0,
+            right: 12.0,
+            bottom: 12.0,
+        };
+        let bounds = MinimapBounds {
+            left: 0,
+            top: 0,
+            right: 32,
+            bottom: 32,
+        };
+        let geometry = MinimapGeometry::new(panel, bounds, bounds, 1.0, 1.0).unwrap();
+        let content = (0..4)
+            .flat_map(|line| (0..4).map(move |column| Coord { line, column }))
+            .collect::<Vec<_>>();
+
+        let occupancy = occupancy(&content, geometry).unwrap();
+
+        assert_eq!(geometry.columns, 4);
+        assert_eq!(geometry.rows, 4);
+        assert_eq!(geometry.canvas_cells_per_cell, 8.0);
+        assert!((occupancy[0] - 0.25).abs() < f64::EPSILON);
+        assert_eq!(density_level(occupancy[0]), 3);
+        assert_eq!(
+            occupancy.iter().filter(|coverage| **coverage > 0.0).count(),
+            1
+        );
     }
 }

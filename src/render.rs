@@ -44,6 +44,12 @@ const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
 const OUTLINE_STROKE_WIDTH_RATIO: f32 = 0.06;
 const MARCHING_ANTS_MILLIS_PER_PIXEL: f32 = 40.0;
 
+#[derive(Clone, Copy)]
+pub(crate) struct CanvasContent<'a> {
+    pub(crate) visible: &'a [Coord],
+    pub(crate) including_hidden: &'a [Coord],
+}
+
 #[derive(Clone)]
 pub struct Renderer {
     font_mgr: FontMgr,
@@ -104,7 +110,7 @@ struct RenderFrame<'a> {
     width: usize,
     viewport: ViewportOffset,
     toolbar_hotspot_hovered: bool,
-    content: &'a [Coord],
+    content: CanvasContent<'a>,
     toolbar_cache: &'a RefCell<Option<ToolbarCache>>,
 }
 
@@ -146,7 +152,7 @@ pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
     state: &Editor,
-    content: &[Coord],
+    content: CanvasContent<'_>,
     renderer: &Renderer,
     config: &AppConfig,
     viewport: ViewportOffset,
