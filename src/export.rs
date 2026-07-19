@@ -184,11 +184,9 @@ impl ExportPlatform for NativeExportPlatform<'_> {
     }
 }
 
-pub fn copy_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<()> {
+pub fn copy_selection(state: &Editor, platform: &mut impl ExportPlatform) -> Result<()> {
     let text = selected_visible_text(state);
-    platform.set_clipboard_text(&text)?;
-    state.select_custom_stamp(&text);
-    Ok(())
+    platform.set_clipboard_text(&text)
 }
 
 /// Copies the normalized selection before clearing it. Keeping the clipboard
@@ -1197,29 +1195,25 @@ mod tests {
     }
 
     #[test]
-    fn copying_one_display_cell_selects_it_as_a_custom_stamp() {
+    fn copying_does_not_change_the_active_tool_or_toolbar_height() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.grid.lines = lines_from_text("◇x");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
+        let toolbar_rows = state.toolbar.rows();
         let mut platform = MockPlatform::default();
 
         copy_selection(&mut state, &mut platform).unwrap();
 
         assert_eq!(platform.clipboard.as_deref(), Some("◇"));
-        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
-        assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
-        assert_eq!(state.toolbar.stamp(), "◇");
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.toolbar.custom_stamp(), None);
+        assert_eq!(state.toolbar.rows(), toolbar_rows);
 
         state.extend_selection(crate::model::Direction::Right);
         copy_selection(&mut state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("◇x"));
-        assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
-
-        let mut wide = Editor::new(&ThemeConfig::default(), "test");
-        wide.grid.lines = lines_from_text("😀");
-        wide.extend_selection(crate::model::Direction::Right);
-        copy_selection(&mut wide, &mut platform).unwrap();
-        assert_eq!(wide.toolbar.custom_stamp(), None);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
+        assert_eq!(state.toolbar.rows(), toolbar_rows);
     }
 
     #[test]
