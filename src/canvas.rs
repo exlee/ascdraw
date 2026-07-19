@@ -31,11 +31,10 @@ pub struct Rasterized {
     pub rgba: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LineData {
-    pub connections: u8,
-    pub ending: Option<String>,
-    pub base_glyph: Option<String>,
+    pub ending: LineEnding,
+    pub base_glyph: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +77,6 @@ pub struct LayerMap {
     pub visible: bool,
     rows: BTreeMap<i16, BTreeMap<i16, CoordData>>,
     bounds: Option<LayerBounds>,
-    line_markers: Vec<LineMarker>,
     dense_widths: Vec<usize>,
 }
 
@@ -97,7 +95,6 @@ impl LayerMap {
             visible,
             rows: BTreeMap::new(),
             bounds: None,
-            line_markers: Vec::new(),
             dense_widths: vec![0],
         }
     }
@@ -120,8 +117,87 @@ impl LayerMap {
         self.bounds
     }
 
-    pub(crate) fn line_markers(&self) -> &[LineMarker] {
-        &self.line_markers
+    pub(crate) fn line_markers(&self) -> Vec<LineMarker> {
+        self.rows
+            .iter()
+            .flat_map(|(&line, row)| {
+                row.iter().filter_map(move |(&column, data)| {
+                    let line_data = data.line.as_ref()?;
+                    Some(LineMarker {
+                        coord: Coord {
+                            line: usize::try_from(line).ok()?,
+                            column: usize::try_from(column).ok()?,
+                        },
+                        ending: line_data.ending,
+                        base_glyph: line_data.base_glyph.clone(),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn line_at(&self, coord: Coord) -> Option<&LineData> {
+        let (line, column) = coord_i16(coord)?;
+        self.get(line, column)?.line.as_ref()
+    }
+
+    pub(crate) fn take_line_at(&mut self, coord: Coord) -> Option<LineData> {
+        let (line, column) = coord_i16(coord)?;
+        self.rows.get_mut(&line)?.get_mut(&column)?.line.take()
+    }
+
+    pub(crate) fn set_line_at(&mut self, coord: Coord, line_data: LineData) -> bool {
+        let Some((line, column)) = coord_i16(coord) else {
+            return false;
+        };
+        let Some(data) = self
+            .rows
+            .get_mut(&line)
+            .and_then(|row| row.get_mut(&column))
+        else {
+            return false;
+        };
+        data.line = Some(line_data);
+        true
+    }
+
+    pub(crate) fn remove_line_at(&mut self, coord: Coord) -> bool {
+        self.take_line_at(coord).is_some()
+    }
+
+    pub(crate) fn remap_line_data(&mut self, mut map: impl FnMut(Coord) -> Option<Coord>) {
+        let markers = self
+            .line_markers()
+            .into_iter()
+            .filter_map(|marker| map(marker.coord).map(|coord| LineMarker { coord, ..marker }))
+            .collect::<Vec<_>>();
+        self.replace_line_markers(&markers);
+    }
+
+    fn replace_line_markers(&mut self, markers: &[LineMarker]) {
+        for row in self.rows.values_mut() {
+            for data in row.values_mut() {
+                data.line = None;
+            }
+        }
+        for marker in markers {
+            let (Ok(line), Ok(column)) = (
+                i16::try_from(marker.coord.line),
+                i16::try_from(marker.coord.column),
+            ) else {
+                continue;
+            };
+            if let Some(data) = self
+                .rows
+                .get_mut(&line)
+                .and_then(|row| row.get_mut(&column))
+            {
+                data.line = Some(LineData {
+                    ending: marker.ending,
+                    base_glyph: marker.base_glyph.clone(),
+                });
+            }
+        }
     }
 
     pub fn set_at(&mut self, x: i16, y: i16, atom: Atom, face: &Face) -> Result<()> {
@@ -251,7 +327,7 @@ impl LayerMap {
                 }
             }
         }
-        map.line_markers = line_markers.to_vec();
+        map.replace_line_markers(line_markers);
         Ok(map)
     }
 
@@ -260,9 +336,6 @@ impl LayerMap {
             .into_iter()
             .map(|(line, row)| (line.saturating_add(1), row))
             .collect();
-        for marker in &mut self.line_markers {
-            marker.coord.line = marker.coord.line.saturating_add(1);
-        }
         self.dense_widths.insert(0, 0);
         self.recalculate_bounds();
     }
@@ -273,9 +346,6 @@ impl LayerMap {
                 .into_iter()
                 .map(|(column, data)| (column.saturating_add(1), data))
                 .collect();
-        }
-        for marker in &mut self.line_markers {
-            marker.coord.column = marker.coord.column.saturating_add(1);
         }
         for width in &mut self.dense_widths {
             *width = width.saturating_add(1);
@@ -411,6 +481,30 @@ impl LayerStack {
         self.layers[self.active].id
     }
 
+    pub(crate) fn active_line_markers(&self) -> Vec<LineMarker> {
+        self.layers[self.active].line_markers()
+    }
+
+    pub(crate) fn line_at(&self, coord: Coord) -> Option<&LineData> {
+        self.layers[self.active].line_at(coord)
+    }
+
+    pub(crate) fn take_line_at(&mut self, coord: Coord) -> Option<LineData> {
+        self.layers[self.active].take_line_at(coord)
+    }
+
+    pub(crate) fn set_line_at(&mut self, coord: Coord, data: LineData) -> bool {
+        self.layers[self.active].set_line_at(coord, data)
+    }
+
+    pub(crate) fn remove_line_at(&mut self, coord: Coord) -> bool {
+        self.layers[self.active].remove_line_at(coord)
+    }
+
+    pub(crate) fn remap_active_line_data(&mut self, map: impl FnMut(Coord) -> Option<Coord>) {
+        self.layers[self.active].remap_line_data(map);
+    }
+
     pub fn summaries(&self) -> Vec<LayerSummary> {
         self.layers
             .iter()
@@ -468,7 +562,7 @@ impl LayerStack {
         self.commit_active(active_lines, active_markers)?;
         self.active = index;
         *active_lines = self.layers[index].to_dense();
-        *active_markers = self.layers[index].line_markers.clone();
+        *active_markers = self.layers[index].line_markers();
         Ok(true)
     }
 
@@ -550,18 +644,14 @@ impl LayerStack {
         let mut target_lines = target_layer.to_dense();
         let source_lines = source.to_dense();
         let covered = overlay_nonblank_atoms(&mut target_lines, &source_lines);
-        target_layer
-            .line_markers
-            .retain(|marker| !covered.iter().any(|bounds| bounds.contains(marker.coord)));
-        for marker in source.line_markers {
-            target_layer
-                .line_markers
-                .retain(|existing| existing.coord != marker.coord);
-            target_layer.line_markers.push(marker);
+        let mut markers = target_layer.line_markers();
+        markers.retain(|marker| !covered.iter().any(|bounds| bounds.contains(marker.coord)));
+        for marker in source.line_markers() {
+            markers.retain(|existing| existing.coord != marker.coord);
+            markers.push(marker);
         }
         let id = target_layer.id;
         let visible = target_layer.visible;
-        let markers = target_layer.line_markers.clone();
         self.layers[target] =
             LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
         self.active = target;
@@ -585,7 +675,7 @@ impl LayerStack {
         if index == self.active {
             self.active = index - 1;
             *active_lines = self.layers[self.active].to_dense();
-            *active_markers = self.layers[self.active].line_markers.clone();
+            *active_markers = self.layers[self.active].line_markers();
         } else if index < self.active {
             self.active -= 1;
         }
@@ -603,7 +693,7 @@ impl LayerStack {
         let active_id = self.active_id();
         for layer in &mut self.layers {
             let mut lines = layer.to_dense();
-            let mut markers = std::mem::take(&mut layer.line_markers);
+            let mut markers = layer.line_markers();
             apply(layer.id, &mut lines, &mut markers);
             *layer = LayerMap::from_dense_with_markers(layer.id, layer.visible, &lines, &markers)?;
             if layer.id == active_id {
@@ -729,6 +819,13 @@ fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
             max_x: left.max_x.max(right.max_x),
             max_y: left.max_y.max(right.max_y),
         })
+}
+
+fn coord_i16(coord: Coord) -> Option<(i16, i16)> {
+    Some((
+        i16::try_from(coord.line).ok()?,
+        i16::try_from(coord.column).ok()?,
+    ))
 }
 
 fn overlay_nonblank_atoms(
@@ -898,5 +995,30 @@ mod tests {
 
         assert!(cloned.raster_cache.borrow().is_none());
         assert_eq!(cloned, source);
+    }
+
+    #[test]
+    fn line_markers_are_stored_with_their_coordinate_data() {
+        let lines = vec![vec![Atom {
+            face: Face::default(),
+            contents: "◆".to_owned(),
+        }]];
+        let marker = LineMarker {
+            coord: Coord::default(),
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "╴".to_owned(),
+        };
+
+        let map =
+            LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[marker.clone()]).unwrap();
+
+        assert_eq!(
+            map.get(0, 0).and_then(|data| data.line.as_ref()),
+            Some(&LineData {
+                ending: marker.ending,
+                base_glyph: marker.base_glyph.clone(),
+            })
+        );
+        assert_eq!(map.line_markers(), vec![marker]);
     }
 }

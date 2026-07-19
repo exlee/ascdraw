@@ -1,4 +1,5 @@
 use crate::model::Direction;
+use serde::{Deserialize, Serialize};
 
 const UP: u8 = 1 << 0;
 const RIGHT: u8 = 1 << 1;
@@ -25,7 +26,7 @@ pub enum LineStyle {
     Dashed,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum LineEnding {
     #[default]
     None,
@@ -33,7 +34,7 @@ pub enum LineEnding {
     Fixed(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum DirectionalEnding {
     WhiteTriangle,
     BlackTriangle,
