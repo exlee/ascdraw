@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -66,7 +66,7 @@ pub struct Renderer {
     content_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
     fixed_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
     toolbar_cache: RefCell<Option<ToolbarCache>>,
-    grid_cache: RefCell<Option<GridCache>>,
+    rendered_atom_cache: RefCell<RenderedAtomCache>,
 }
 
 #[derive(Clone)]
@@ -119,7 +119,7 @@ struct RenderFrame<'a> {
     toolbar_hotspot_hovered: bool,
     content: CanvasContent<'a>,
     toolbar_cache: &'a RefCell<Option<ToolbarCache>>,
-    grid_cache: &'a RefCell<Option<GridCache>>,
+    rendered_atom_cache: &'a RefCell<RenderedAtomCache>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,25 +149,26 @@ struct ToolbarCache {
     image: skia_safe::Image,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct GridCacheKey {
-    layers: Vec<Vec<Vec<Atom>>>,
+const RENDERED_ATOM_CACHE_CAPACITY: usize = 512;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct RenderedAtomKey {
+    contents: String,
+    resolved_face: ResolvedFace,
+    root_face: ResolvedFace,
     default_face: Face,
     theme: ThemeConfig,
-    viewport: ViewportOffset,
-    width: usize,
-    grid_top_bits: u32,
-    grid_bottom_bits: u32,
+    paints_background: bool,
     cell_width_bits: u32,
     cell_height_bits: u32,
     baseline_offset_bits: u32,
     underline_offset_bits: u32,
 }
 
-#[derive(Clone)]
-struct GridCache {
-    key: GridCacheKey,
-    image: skia_safe::Image,
+#[derive(Clone, Default)]
+struct RenderedAtomCache {
+    images: HashMap<RenderedAtomKey, skia_safe::Image>,
+    insertion_order: VecDeque<RenderedAtomKey>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -239,7 +240,7 @@ pub fn render(
             toolbar_hotspot_hovered,
             content,
             toolbar_cache: &renderer.toolbar_cache,
-            grid_cache: &renderer.grid_cache,
+            rendered_atom_cache: &renderer.rendered_atom_cache,
         },
     );
     let rasterization = raster_started.elapsed();
@@ -275,7 +276,7 @@ fn render_canvas(
         toolbar_hotspot_hovered,
         content,
         toolbar_cache,
-        grid_cache,
+        rendered_atom_cache,
     } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
@@ -333,7 +334,7 @@ fn render_canvas(
                 })
         })
         .collect::<Vec<_>>();
-    render_cached_grid(
+    render_cached_grid_atoms(
         canvas,
         &layers,
         state,
@@ -345,7 +346,7 @@ fn render_canvas(
         max_row,
         first_column,
         max_column,
-        grid_cache,
+        rendered_atom_cache,
     );
 
     canvas.save();
@@ -553,7 +554,7 @@ fn render_cached_toolbar(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_cached_grid(
+fn render_cached_grid_atoms(
     canvas: &Canvas,
     layers: &[&[Vec<Atom>]],
     state: &Editor,
@@ -565,39 +566,10 @@ fn render_cached_grid(
     max_row: usize,
     first_column: usize,
     max_column: usize,
-    cache: &RefCell<Option<GridCache>>,
+    cache: &RefCell<RenderedAtomCache>,
 ) {
-    let key = GridCacheKey {
-        layers: layers.iter().map(|lines| lines.to_vec()).collect(),
-        default_face: state.grid.default_face.clone(),
-        theme: state.theme.clone(),
-        viewport,
-        width,
-        grid_top_bits: layout.grid_top.to_bits(),
-        grid_bottom_bits: layout.grid_bottom.to_bits(),
-        cell_width_bits: metrics.cell_width.to_bits(),
-        cell_height_bits: metrics.cell_height.to_bits(),
-        baseline_offset_bits: metrics.baseline_offset.to_bits(),
-        underline_offset_bits: metrics.underline_offset.to_bits(),
-    };
-    if let Some(image) = cache
-        .borrow()
-        .as_ref()
-        .filter(|cached| cached.key == key)
-        .map(|cached| &cached.image)
-    {
-        canvas.draw_image(image, (0.0, 0.0), None);
-        return;
-    }
-
-    let height = layout.grid_bottom.ceil().max(1.0) as i32;
-    let Some(mut surface) = surfaces::raster_n32_premul((width.max(1) as i32, height)) else {
-        return;
-    };
-    let grid_canvas = surface.canvas();
-    grid_canvas.clear(skia_safe::Color::TRANSPARENT);
-    grid_canvas.save();
-    grid_canvas.clip_rect(
+    canvas.save();
+    canvas.clip_rect(
         Rect::from_xywh(
             0.0,
             layout.grid_top,
@@ -607,7 +579,8 @@ fn render_cached_grid(
         None,
         false,
     );
-    grid_canvas.translate((viewport.x as f32, viewport.y as f32));
+    canvas.translate((viewport.x as f32, viewport.y as f32));
+    let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     for lines in layers {
         for (row_index, line) in lines
             .iter()
@@ -615,23 +588,175 @@ fn render_cached_grid(
             .skip(first_row)
             .take(max_row.saturating_sub(first_row))
         {
-            render_overlay_line(
-                grid_canvas,
+            render_cached_overlay_line(
+                canvas,
                 row_index,
                 line,
                 &state.grid.default_face,
+                &state.theme,
+                root_face,
                 first_column..max_column,
                 metrics,
                 DrawOrigin::Grid {
                     top_padding: layout.grid_top,
                 },
+                cache,
             );
         }
     }
-    grid_canvas.restore();
+    canvas.restore();
+}
+
+fn render_cached_overlay_line(
+    canvas: &Canvas,
+    row: usize,
+    line: &[Atom],
+    default_face: &Face,
+    theme: &ThemeConfig,
+    root_face: ResolvedFace,
+    columns: std::ops::Range<usize>,
+    metrics: &CellMetrics,
+    origin: DrawOrigin,
+    cache: &RefCell<RenderedAtomCache>,
+) {
+    let top = line_top(origin, row, metrics);
+    let mut column = 0usize;
+    for atom in line {
+        let width = atom_display_width(&atom.contents);
+        if width == 0 {
+            continue;
+        }
+        let atom_start = column;
+        let atom_end = atom_start.saturating_add(width);
+        column = atom_end;
+        if atom_end <= columns.start {
+            continue;
+        }
+        if atom_start >= columns.end {
+            return;
+        }
+
+        let resolved_face = if face_is_default(&atom.face) {
+            root_face
+        } else {
+            resolve_derived_face(default_face, &atom.face, FALLBACK_FG, FALLBACK_BG)
+        };
+        let paints_background = atom.face.bg != "default"
+            || atom.face.attributes.iter().any(|attribute| {
+                attribute
+                    .trim_start_matches("final:")
+                    .eq_ignore_ascii_case("reverse")
+            });
+        let is_plain_blank = atom.contents.bytes().all(|byte| byte == b' ')
+            && resolved_face.bg == root_face.bg
+            && resolved_face.underline_style.is_none()
+            && !resolved_face.strikethrough;
+        if is_plain_blank {
+            continue;
+        }
+
+        if let Some(image) = cached_atom_image(
+            cache,
+            atom,
+            resolved_face,
+            root_face,
+            paints_background,
+            default_face,
+            theme,
+            metrics,
+        ) {
+            canvas.draw_image(
+                &image,
+                (PADDING as f32 + atom_start as f32 * metrics.cell_width, top),
+                None,
+            );
+            continue;
+        }
+
+        let visible_start = atom_start.max(columns.start) - atom_start;
+        let visible_end = atom_end.min(columns.end) - atom_start;
+        canvas.save();
+        canvas.translate((atom_start as f32 * metrics.cell_width, 0.0));
+        render_line_at(
+            canvas,
+            LineRenderPosition {
+                row,
+                first_column: visible_start,
+                max_column: visible_end,
+            },
+            std::slice::from_ref(atom),
+            default_face,
+            metrics,
+            origin,
+            true,
+        );
+        canvas.restore();
+    }
+}
+
+fn cached_atom_image(
+    cache: &RefCell<RenderedAtomCache>,
+    atom: &Atom,
+    resolved_face: ResolvedFace,
+    root_face: ResolvedFace,
+    paints_background: bool,
+    default_face: &Face,
+    theme: &ThemeConfig,
+    metrics: &CellMetrics,
+) -> Option<skia_safe::Image> {
+    let width = atom_display_width(&atom.contents);
+    // Compact text runs can be arbitrarily long; do not let one run defeat the cache bound.
+    if width == 0 || width > 128 {
+        return None;
+    }
+    let key = RenderedAtomKey {
+        contents: atom.contents.clone(),
+        resolved_face,
+        root_face,
+        default_face: default_face.clone(),
+        theme: theme.clone(),
+        paints_background,
+        cell_width_bits: metrics.cell_width.to_bits(),
+        cell_height_bits: metrics.cell_height.to_bits(),
+        baseline_offset_bits: metrics.baseline_offset.to_bits(),
+        underline_offset_bits: metrics.underline_offset.to_bits(),
+    };
+    if let Some(image) = cache.borrow().images.get(&key) {
+        return Some(image.clone());
+    }
+
+    let image_width = (metrics.cell_width * width as f32).ceil().max(1.0) as i32;
+    let image_height = metrics.cell_height.ceil().max(1.0) as i32;
+    let mut surface = surfaces::raster_n32_premul((image_width, image_height))?;
+    let image_canvas = surface.canvas();
+    image_canvas.clear(skia_safe::Color::TRANSPARENT);
+    image_canvas.save();
+    image_canvas.translate((-(PADDING as f32), 0.0));
+    render_line_at(
+        image_canvas,
+        LineRenderPosition {
+            row: 0,
+            first_column: 0,
+            max_column: width,
+        },
+        std::slice::from_ref(atom),
+        default_face,
+        metrics,
+        DrawOrigin::Grid { top_padding: 0.0 },
+        true,
+    );
+    image_canvas.restore();
     let image = surface.image_snapshot();
-    canvas.draw_image(&image, (0.0, 0.0), None);
-    *cache.borrow_mut() = Some(GridCache { key, image });
+
+    let mut cache = cache.borrow_mut();
+    if cache.insertion_order.len() == RENDERED_ATOM_CACHE_CAPACITY
+        && let Some(oldest) = cache.insertion_order.pop_front()
+    {
+        cache.images.remove(&oldest);
+    }
+    cache.insertion_order.push_back(key.clone());
+    cache.images.insert(key, image.clone());
+    Some(image)
 }
 
 fn render_toolbar(
@@ -1689,7 +1814,7 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
         content_metrics_cache: RefCell::new(None),
         fixed_metrics_cache: RefCell::new(None),
         toolbar_cache: RefCell::new(None),
-        grid_cache: RefCell::new(None),
+        rendered_atom_cache: RefCell::new(RenderedAtomCache::default()),
     }
 }
 
@@ -1705,6 +1830,11 @@ impl Renderer {
             .set((self.default_logical_font_size + zoom as f32).max(MIN_FONT_SIZE));
         self.content_metrics_cache.borrow_mut().take();
         self.toolbar_cache.borrow_mut().take();
+        self.rendered_atom_cache.borrow_mut().images.clear();
+        self.rendered_atom_cache
+            .borrow_mut()
+            .insertion_order
+            .clear();
     }
 
     pub fn apply_config(&mut self, config: &AppConfig) {
@@ -1717,6 +1847,11 @@ impl Renderer {
         self.content_metrics_cache.borrow_mut().take();
         self.fixed_metrics_cache.borrow_mut().take();
         self.toolbar_cache.borrow_mut().take();
+        self.rendered_atom_cache.borrow_mut().images.clear();
+        self.rendered_atom_cache
+            .borrow_mut()
+            .insertion_order
+            .clear();
     }
 
     pub fn adjust_font_size(&self, delta: f32) -> bool {
@@ -1730,6 +1865,11 @@ impl Renderer {
         self.logical_font_size.set(next);
         self.content_metrics_cache.borrow_mut().take();
         self.toolbar_cache.borrow_mut().take();
+        self.rendered_atom_cache.borrow_mut().images.clear();
+        self.rendered_atom_cache
+            .borrow_mut()
+            .insertion_order
+            .clear();
         true
     }
 
@@ -1741,6 +1881,11 @@ impl Renderer {
         self.logical_font_size.set(self.default_logical_font_size);
         self.content_metrics_cache.borrow_mut().take();
         self.toolbar_cache.borrow_mut().take();
+        self.rendered_atom_cache.borrow_mut().images.clear();
+        self.rendered_atom_cache
+            .borrow_mut()
+            .insertion_order
+            .clear();
         true
     }
 
@@ -1957,72 +2102,75 @@ mod tests {
     }
 
     #[test]
-    fn grid_image_cache_reuses_and_invalidates_document_and_viewport() {
+    fn rendered_atom_cache_reuses_images_across_scroll_positions() {
         let config = AppConfig::default();
         let renderer = load_renderer(&config);
         let metrics = renderer.metrics(1.0);
-        let toolbar_metrics = renderer.title_metrics(1.0);
         let width = 800;
         let height = 600;
-        let layout = layout_metrics(
-            width,
-            height,
-            &metrics,
-            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
-            &ToolbarState::default(),
-            config.transparent_menubar,
-            1.0,
-        );
         let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
         let mut state = Editor::new(&config.theme, "test");
         state.grid.lines = vec![vec![Atom {
-            face: Face::default(),
-            contents: " ".to_owned(),
+            face: Face {
+                fg: "#102030".to_owned(),
+                bg: "#405060".to_owned(),
+                underline: "#708090".to_owned(),
+                attributes: vec!["double_underline".to_owned()],
+            },
+            contents: "界".to_owned(),
         }]];
-        let toolbar_cache = RefCell::new(None);
-        let grid_cache = RefCell::new(None);
-        let background = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG).bg;
-        render_cached_toolbar(
+        let cache = RefCell::new(RenderedAtomCache::default());
+        let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+
+        render_cached_overlay_line(
             surface.canvas(),
-            &state,
-            &toolbar_metrics,
-            layout,
-            width,
-            false,
-            config.transparent_menubar,
-            &toolbar_cache,
-            background,
+            0,
+            &state.grid.lines[0],
+            &state.grid.default_face,
+            &state.theme,
+            root_face,
+            0..10,
+            &metrics,
+            DrawOrigin::Grid { top_padding: 0.0 },
+            &cache,
+        );
+        let original = cache.borrow().images.values().next().unwrap().unique_id();
+        assert_eq!(cache.borrow().images.len(), 1);
+
+        surface.canvas().translate((-17.0, 0.0));
+        render_cached_overlay_line(
+            surface.canvas(),
+            0,
+            &state.grid.lines[0],
+            &state.grid.default_face,
+            &state.theme,
+            root_face,
+            0..10,
+            &metrics,
+            DrawOrigin::Grid { top_padding: 0.0 },
+            &cache,
+        );
+        assert_eq!(cache.borrow().images.len(), 1);
+        assert_eq!(
+            cache.borrow().images.values().next().unwrap().unique_id(),
+            original
         );
 
-        let mut render_grid = |state: &Editor, viewport| {
-            render_cached_grid(
-                surface.canvas(),
-                &[&state.grid.lines],
-                state,
-                &metrics,
-                layout,
-                viewport,
-                width,
-                0,
-                100,
-                0,
-                100,
-                &grid_cache,
-            );
-            grid_cache.borrow().as_ref().unwrap().image.unique_id()
-        };
-
-        let original = render_grid(&state, ViewportOffset::default());
-        assert_eq!(render_grid(&state, ViewportOffset::default()), original);
-
-        let mut changed = state.clone();
-        changed.grid.lines[0][0].contents = "x".to_owned();
-        let document_changed = render_grid(&changed, ViewportOffset::default());
-        assert_ne!(document_changed, original);
-        assert_ne!(
-            render_grid(&changed, ViewportOffset { x: -1, y: 0 }),
-            document_changed
+        state.grid.default_face.fg = "#ffffff".to_owned();
+        let changed_root = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+        render_cached_overlay_line(
+            surface.canvas(),
+            0,
+            &state.grid.lines[0],
+            &state.grid.default_face,
+            &state.theme,
+            changed_root,
+            0..10,
+            &metrics,
+            DrawOrigin::Grid { top_padding: 0.0 },
+            &cache,
         );
+        assert_eq!(cache.borrow().images.len(), 2);
     }
 
     #[test]

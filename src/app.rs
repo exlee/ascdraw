@@ -131,7 +131,7 @@ impl CursorMode {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub struct ThemeConfig {
     pub default: Face,

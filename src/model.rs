@@ -4,7 +4,7 @@ fn default_color() -> String {
     "default".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 pub struct Face {
     pub fg: String,

@@ -2,7 +2,7 @@ use skia_safe::Color;
 
 use crate::model::Face;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,
@@ -112,14 +112,14 @@ struct FaceSpec {
     attributes: FaceAttributes,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnderlineStyle {
     Straight,
     Curly,
     Double,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResolvedFace {
     pub fg: Rgba,
     pub bg: Rgba,
