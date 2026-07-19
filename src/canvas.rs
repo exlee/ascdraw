@@ -1246,6 +1246,19 @@ impl LayerStack {
         Ok(())
     }
 
+    pub(crate) fn for_each_layer_mut(
+        &mut self,
+        active_lines: &[Vec<Atom>],
+        mut apply: impl FnMut(LayerId, &mut LayerMap),
+    ) -> Result<()> {
+        self.commit_active(active_lines)?;
+        for layer in &mut self.layers {
+            apply(layer.id, layer);
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
     pub(crate) fn prepend_line_to_inactive(&mut self) {
         for (index, layer) in self.layers.iter_mut().enumerate() {
             if index != self.active {

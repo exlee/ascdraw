@@ -1,5 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
+use crate::canvas::LineData;
 use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
@@ -238,31 +239,79 @@ impl Editor {
             return false;
         }
         let mut changed = false;
-        self.canvas
-            .for_each_layer_dense_mut(&mut self.grid.lines, |id, lines, markers| {
-                let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
-                    return;
-                };
-                let before_lines = lines.clone();
-                let before_markers = markers.clone();
-                markers.retain(|marker| {
-                    !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
-                        && !destinations.iter().any(|origin| {
-                            lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
-                        })
-                });
-                compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
-                for origin in &destinations {
-                    for mut marker in layer.markers.iter().cloned() {
-                        marker.coord.line = marker.coord.line.saturating_add(origin.line);
-                        marker.coord.column = marker.coord.column.saturating_add(origin.column);
-                        markers.retain(|existing| existing.coord != marker.coord);
-                        markers.push(marker);
+        let legacy_wide = lift
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.edited_atoms)
+            .any(|atom| atom.width != 1);
+        if legacy_wide {
+            self.canvas
+                .for_each_layer_dense_mut(&mut self.grid.lines, |id, lines, markers| {
+                    let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
+                        return;
+                    };
+                    let before_lines = lines.clone();
+                    let before_markers = markers.clone();
+                    markers.retain(|marker| {
+                        !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
+                            && !destinations.iter().any(|origin| {
+                                lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
+                            })
+                    });
+                    compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
+                    for origin in &destinations {
+                        for mut marker in layer.markers.iter().cloned() {
+                            marker.coord.line = marker.coord.line.saturating_add(origin.line);
+                            marker.coord.column = marker.coord.column.saturating_add(origin.column);
+                            markers.retain(|existing| existing.coord != marker.coord);
+                            markers.push(marker);
+                        }
                     }
-                }
-                changed |= *lines != before_lines || *markers != before_markers;
-            })
-            .expect("editor layers contain valid sparse cells");
+                    changed |= *lines != before_lines || *markers != before_markers;
+                })
+                .expect("legacy move remains inside the canvas");
+        } else {
+            self.canvas
+                .for_each_layer_mut(&self.grid.lines, |id, map| {
+                    let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
+                        return;
+                    };
+                    let before = map.clone();
+                    for atom in &layer.edited_atoms {
+                        map.replace_bounds(lifted_atom_bounds(source_origin, atom), None)
+                            .expect("move source fits the sparse canvas");
+                        for origin in &destinations {
+                            map.replace_bounds(lifted_atom_bounds(*origin, atom), None)
+                                .expect("move destination fits the sparse canvas");
+                        }
+                    }
+                    for origin in &destinations {
+                        for atom in &layer.edited_atoms {
+                            let coord = offset_origin(*origin, atom.offset);
+                            map.set_at(
+                                i16::try_from(coord.column).expect("validated move column"),
+                                i16::try_from(coord.line).expect("validated move line"),
+                                atom.atom.clone(),
+                                &atom.atom.face,
+                            )
+                            .expect("moved atom occupies one sparse cell");
+                        }
+                        for marker in &layer.markers {
+                            let coord = offset_origin(*origin, marker.coord);
+                            map.set_line_at(
+                                coord,
+                                LineData {
+                                    ending: marker.ending,
+                                    base_glyph: marker.base_glyph.clone(),
+                                },
+                            );
+                        }
+                    }
+                    changed |= *map != before;
+                })
+                .expect("move remains inside the sparse canvas");
+            self.refresh_active_dense_view();
+        }
         self.cursor_index = index_for_column(
             &self.grid.lines[self.grid.cursor_pos.line],
             self.grid.cursor_pos.column,
