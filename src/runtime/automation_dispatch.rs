@@ -79,6 +79,13 @@ pub fn handle_automation(
         AutomationCommand::Scroll { x, y, steps } => {
             apply_scroll(editor, x, y, steps).map(|()| true)
         }
+        AutomationCommand::Zoom { delta } => {
+            if !delta.is_finite() {
+                Err(anyhow::anyhow!("zoom delta must be finite"))
+            } else {
+                Ok(editor.zoom_canvas_by(delta))
+            }
+        }
         AutomationCommand::State => {
             let mut state = editor.automation_state();
             state["frame_sequence"] = json!(frame_sequences.get(&window_id).copied().unwrap_or(0));

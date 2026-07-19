@@ -1378,7 +1378,7 @@ impl EditorWindow {
         self.zoom_canvas_by(steps as f32)
     }
 
-    fn zoom_canvas_by(&mut self, delta: f32) -> bool {
+    pub(crate) fn zoom_canvas_by(&mut self, delta: f32) -> bool {
         if delta.abs() < f32::EPSILON {
             return false;
         }

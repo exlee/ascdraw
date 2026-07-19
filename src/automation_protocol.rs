@@ -32,6 +32,9 @@ pub enum AutomationCommand {
         #[serde(default = "default_one")]
         steps: u32,
     },
+    Zoom {
+        delta: f32,
+    },
     State,
     Metrics {
         #[serde(default)]
@@ -129,6 +132,7 @@ mod tests {
                 y: 2.25,
                 steps: 4,
             },
+            AutomationCommand::Zoom { delta: 1.0 },
             AutomationCommand::State,
             AutomationCommand::Metrics { reset: true },
             AutomationCommand::Screenshot {
