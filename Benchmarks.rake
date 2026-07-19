@@ -35,6 +35,15 @@ end
 module FpsBenchmark
   module_function
 
+  def point_on_circle(t, radius)
+    angle = 2.0 * Math::PI * t
+
+    x = radius * Math.cos(angle)
+    y = radius * Math.sin(angle)
+
+    [x, y]
+  end
+
   def run
     operations = positive_integer("FPS_OPERATIONS", 300)
     warmup = nonnegative_integer("FPS_WARMUP", 20)
@@ -111,11 +120,17 @@ module FpsBenchmark
 
   def run_scenarios(client, warmup, operations, name_prefix = "")
     reports = []
-    scroll_directions = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]]
-    scroll_direction = 0
+    circle_points = 100
+    circle_radius = 40.0
+    scroll_step = 0
+    previous_point = point_on_circle(0.0, circle_radius)
     reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
-      x, y = scroll_directions[scroll_direction]
-      scroll_direction = (scroll_direction + 1) % scroll_directions.length
+      t = (scroll_step % circle_points).fdiv(circle_points - 1)
+      point = point_on_circle(t, circle_radius)
+      scroll_step += 1
+      x = point[0] - previous_point[0]
+      y = point[1] - previous_point[1]
+      previous_point = point
       client.request(command: "scroll", x: x, y: y, steps: 1)
     end
 
