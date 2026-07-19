@@ -306,7 +306,7 @@ const ARROW_ROTATIONS: [[&str; 4]; 6] = [
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
 const QUADRANT_BLOCKS: [&str; 15] = [
-    "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
+    "▘", "▝", "▖", "▗", "▌", "▐", "▞", "▚", "▛", "▜", "▙", "▟", "▀", "▄", "█",
 ];
 
 const STAMP_LABELS: [&str; 4] = ["Decorators", "Arrows", "Fills", "Blocks"];
@@ -475,11 +475,25 @@ impl ToolbarState {
             self.close_export_menu();
             return true;
         }
-        if !self.export_open && digit == LAYERS_DIGIT && self.multi_layer_mode() {
+        if !self.export_open
+            && !matches!(
+                self.shortcut_prefix,
+                Some(PendingShortcut::Category(_) | PendingShortcut::Option { .. })
+            )
+            && digit == LAYERS_DIGIT
+            && self.multi_layer_mode()
+        {
             self.begin_layers_path();
             return true;
         }
-        if !self.export_open && digit == COLORS_DIGIT && self.multi_color_mode() {
+        if !self.export_open
+            && !matches!(
+                self.shortcut_prefix,
+                Some(PendingShortcut::Category(_) | PendingShortcut::Option { .. })
+            )
+            && digit == COLORS_DIGIT
+            && self.multi_color_mode()
+        {
             self.begin_colors_path();
             return true;
         }
@@ -2125,10 +2139,10 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("2.1. □ ■ ▫ ▪ ◆ ◊ · ∙ • ●"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ░ ▒ ▓ █"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5.1. ▘ ▝ ▖ ▗ ▌ ▐ ▞ ▚ ▛ ▜"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("5.2. ▜ ▄ ▙ ▟ █"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("5.2. ▙ ▟ ▀ ▄ █"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("3.3. ↕ ↔"));
     }
 
@@ -2166,12 +2180,32 @@ mod tests {
         );
         assert_eq!(
             category_cell_text(&toolbar, MENU_FIRST_ROW + 1, 3).trim_end(),
-            "   5.1. ▘ ▝ ▀ ▖ ▌ ▞ ▛ ▗ ▚ ▐"
+            "   5.1. ▘ ▝ ▖ ▗ ▌ ▐ ▞ ▚ ▛ ▜"
         );
         assert_eq!(
             category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 3).trim_end(),
-            "   5.2. ▜ ▄ ▙ ▟ █"
+            "   5.2. ▙ ▟ ▀ ▄ █"
         );
+    }
+
+    #[test]
+    fn pending_stamp_path_takes_precedence_over_auxiliary_menu_digits() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+
+        for key in ["5", "1", "8"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.stamp(), "▚");
+        assert_eq!(toolbar.pending_shortcut(), None);
+
+        for key in ["5", "1", "9"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.stamp(), "▛");
+        assert_eq!(toolbar.pending_shortcut(), None);
     }
 
     #[test]
@@ -3319,7 +3353,7 @@ mod tests {
         assert_eq!(GREY_SHADING.iter().copied().collect::<String>(), "░▒▓█");
         assert_eq!(
             QUADRANT_BLOCKS.iter().copied().collect::<String>(),
-            "▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
+            "▘▝▖▗▌▐▞▚▛▜▙▟▀▄█"
         );
 
         let counts =
