@@ -76,6 +76,30 @@ module FpsBenchmark
     end
   end
 
+  def run_mini
+    operations = positive_integer("FPS_MINI_OPERATIONS", 30)
+    warmup = nonnegative_integer("FPS_MINI_WARMUP", 0)
+    report_dir = ENV.fetch("FPS_MINI_REPORT_DIR", "target/benchmarks/fps-mini")
+    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
+    FileUtils.mkdir_p(report_dir)
+
+    Dir.mktmpdir("ascdraw-fps-mini") do |temporary_dir|
+      socket_path = File.join(temporary_dir, "control.sock")
+      document_path = File.join(temporary_dir, "workspace.json")
+      FileUtils.cp(fixture, "#{document_path}.bz2")
+      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
+      log_path = File.join(report_dir, "ascdraw.log")
+
+      File.open(log_path, "w") do |log|
+        reports = run_editor(socket_path, document_path, log) do |client|
+          run_scenarios(client, warmup, operations, include_scroll: false)
+        end
+        write_reports(report_dir, reports, warmup, operations, fixture)
+        print_summary(reports, report_dir)
+      end
+    end
+  end
+
   def run_editor(socket_path, document_path, log)
     pid = Process.spawn(
       "target/release/ascdraw",
@@ -121,20 +145,22 @@ module FpsBenchmark
     end
   end
 
-  def run_scenarios(client, warmup, operations, name_prefix = "")
+  def run_scenarios(client, warmup, operations, name_prefix = "", include_scroll: true)
     reports = []
-    circle_points = 100
-    circle_radius = 40.0
-    scroll_step = 0
-    previous_point = point_on_circle(0.0, circle_radius)
-    reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
-      t = (scroll_step % circle_points).fdiv(circle_points - 1)
-      point = point_on_circle(t, circle_radius)
-      scroll_step += 1
-      x = point[0] - previous_point[0]
-      y = point[1] - previous_point[1]
-      previous_point = point
-      client.request(command: "scroll", x: x, y: y, steps: 1)
+    if include_scroll
+      circle_points = 100
+      circle_radius = 40.0
+      scroll_step = 0
+      previous_point = point_on_circle(0.0, circle_radius)
+      reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
+        t = (scroll_step % circle_points).fdiv(circle_points - 1)
+        point = point_on_circle(t, circle_radius)
+        scroll_step += 1
+        x = point[0] - previous_point[0]
+        y = point[1] - previous_point[1]
+        previous_point = point
+        client.request(command: "scroll", x: x, y: y, steps: 1)
+      end
     end
 
     client.request(command: "key", key: "i", count: 1)
@@ -262,5 +288,10 @@ namespace :benchmark do
   desc "Run native-window FPS benchmarks before and after saving and reopening the active file"
   task fps: :build_release do
     FpsBenchmark.run
+  end
+
+  desc "Run a short native-window text and line FPS benchmark"
+  task fps_mini: :build_release do
+    FpsBenchmark.run_mini
   end
 end
