@@ -63,13 +63,19 @@ module FpsBenchmark
 
       File.open(log_path, "w") do |log|
         reports = run_editor(socket_path, document_path, log) do |client|
-          run_scenarios(client, warmup, operations)
+          run_scenarios(client, warmup, operations) +
+            [measure_zoom(client, "zoom-file", warmup, operations)]
         end
         reports.concat(
           run_editor(socket_path, saved_document_path, log) do |client|
             run_scenarios(client, warmup, operations, "saved-file-")
           end,
         )
+        empty_home = File.join(temporary_dir, "empty-home")
+        FileUtils.mkdir_p(empty_home)
+        reports << run_editor(socket_path, nil, log, { "HOME" => empty_home }) do |client|
+          measure_zoom(client, "zoom-empty", warmup, operations)
+        end
         write_reports(report_dir, reports, warmup, operations, fixture)
         print_summary(reports, report_dir)
       end
@@ -100,12 +106,41 @@ module FpsBenchmark
     end
   end
 
-  def run_editor(socket_path, document_path, log)
-    pid = Process.spawn(
+  def run_zoom
+    operations = positive_integer("ZOOM_OPERATIONS", 1_200)
+    warmup = nonnegative_integer("ZOOM_WARMUP", 0)
+    report_dir = ENV.fetch("ZOOM_REPORT_DIR", "target/benchmarks/zoom")
+    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
+    FileUtils.mkdir_p(report_dir)
+
+    Dir.mktmpdir("ascdraw-zoom") do |temporary_dir|
+      socket_path = File.join(temporary_dir, "control.sock")
+      document_path = File.join(temporary_dir, "workspace.json")
+      FileUtils.cp(fixture, "#{document_path}.bz2")
+      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
+      log_path = File.join(report_dir, "ascdraw.log")
+
+      File.open(log_path, "w") do |log|
+        report = run_editor(socket_path, document_path, log) do |client|
+          measure_zoom(client, "zoom-file", warmup, operations)
+        end
+        reports = [report]
+        write_reports(report_dir, reports, warmup, operations, fixture)
+        print_summary(reports, report_dir)
+      end
+    end
+  end
+
+  def run_editor(socket_path, document_path, log, environment = {})
+    arguments = [
       "target/release/ascdraw",
       "--automation-socket",
       socket_path,
-      document_path,
+    ]
+    arguments << document_path if document_path
+    pid = Process.spawn(
+      environment,
+      *arguments,
       out: log,
       err: [:child, :out],
     )
@@ -201,6 +236,23 @@ module FpsBenchmark
     reports
   end
 
+  def measure_zoom(client, name, warmup, operations)
+    minimum = 5.0
+    maximum = 48.0
+    step = 0.25
+    current = minimum
+    direction = 1.0
+
+    client.request(command: "zoom", delta: -1_000.0)
+    client.request(command: "zoom", delta: minimum - 4.0)
+    measure(client, name, warmup, operations) do
+      client.request(command: "zoom", delta: step * direction)
+      current += step * direction
+      direction = -1.0 if current >= maximum
+      direction = 1.0 if current <= minimum
+    end
+  end
+
   def measure(client, name, warmup, operations, &operation)
     warmup.times(&operation)
     client.request(command: "metrics", reset: true)
@@ -293,5 +345,10 @@ namespace :benchmark do
   desc "Run a short native-window text and line FPS benchmark"
   task fps_mini: :build_release do
     FpsBenchmark.run_mini
+  end
+
+  desc "Run a fixture-backed native-window zoom benchmark"
+  task zoom: :build_release do
+    FpsBenchmark.run_zoom
   end
 end
