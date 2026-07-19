@@ -19,8 +19,9 @@ task :bundle => [ICON_OUTPUT, :build_release] do
   sh "cargo bundle --release --format osx"
 end
 
+desc "Build release binaries"
 task :build_release do
-  sh "cargo build --release"
+  sh "cargo build --release --bins --locked"
 end
 
 task :register => [:unregister_target] do
@@ -83,3 +84,5 @@ file ICON_OUTPUT => [ICON_SOURCE] do
     end
   end
 end
+
+import "Benchmarks.rake"
