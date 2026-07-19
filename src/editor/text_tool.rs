@@ -116,7 +116,7 @@ impl Editor {
         self.end_stroke();
         self.replace_selection_literal(Some(grapheme));
         self.sync_cursor_mode_with_toolbar();
-        self.restore_active_cursor_index();
+        self.restore_active_cursor();
     }
 
     fn replace(&mut self, text: &str) {

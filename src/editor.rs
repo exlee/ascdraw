@@ -55,7 +55,6 @@ pub struct Editor {
     pub cursor_mode: CursorMode,
     pub toolbar: ToolbarState,
     pub selection: CanvasSelection,
-    cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     canvas: crate::canvas::LayerStack,
     line_preview: Option<LinePreview>,
@@ -83,7 +82,6 @@ fn reverse_theme_colors(theme: &mut ThemeConfig) {
 #[derive(Debug, Clone)]
 pub struct EditSnapshot {
     cursor_pos: Coord,
-    cursor_index: usize,
     selection: CanvasSelection,
     active_stroke: Option<ActiveStroke>,
     canvas_origin: Coord,
@@ -93,7 +91,6 @@ pub struct EditSnapshot {
 impl PartialEq for EditSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.cursor_pos == other.cursor_pos
-            && self.cursor_index == other.cursor_index
             && self.selection == other.selection
             && self.active_stroke == other.active_stroke
             && self.canvas_origin == other.canvas_origin
@@ -200,10 +197,6 @@ impl Editor {
         while self.grid.lines.len() <= self.grid.cursor_pos.line {
             self.grid.lines.push(Vec::new());
         }
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
     }
 
     pub fn canvas(&self) -> &crate::canvas::LayerStack {
@@ -447,10 +440,6 @@ impl Editor {
             &mut self.grid.lines[self.grid.cursor_pos.line],
             self.grid.cursor_pos.column,
         );
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
     }
 
     pub fn has_shape_preview(&self) -> bool {
@@ -460,15 +449,14 @@ impl Editor {
         if let Some(lift) = &self.move_lift {
             return lift.source_snapshot.clone();
         }
-        let (canvas, cursor_pos, cursor_index, selection, canvas_origin) = if let Some(preview) =
-            self.line_preview
-                .as_ref()
-                .filter(|preview| !preview.has_committed_segments())
+        let (canvas, cursor_pos, selection, canvas_origin) = if let Some(preview) = self
+            .line_preview
+            .as_ref()
+            .filter(|preview| !preview.has_committed_segments())
         {
             (
                 preview.source_canvas.clone(),
                 preview.source_cursor,
-                preview.source_cursor_index,
                 preview.source_selection,
                 preview.source_canvas_origin,
             )
@@ -480,14 +468,12 @@ impl Editor {
             (
                 canvas,
                 self.grid.cursor_pos,
-                self.cursor_index,
                 self.selection,
                 self.canvas_origin,
             )
         };
         EditSnapshot {
             cursor_pos,
-            cursor_index,
             selection,
             active_stroke: self.active_stroke.clone(),
             canvas_origin,
@@ -497,7 +483,6 @@ impl Editor {
 
     pub fn restore_edit_snapshot(&mut self, snapshot: EditSnapshot) {
         self.grid.cursor_pos = snapshot.cursor_pos;
-        self.cursor_index = snapshot.cursor_index;
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
         self.canvas_origin = snapshot.canvas_origin;
@@ -530,7 +515,6 @@ impl Editor {
             cursor_mode: CursorMode::Stamp,
             toolbar,
             selection: CanvasSelection::collapsed_at(Coord::default()),
-            cursor_index: 0,
             active_stroke: None,
             canvas,
             line_preview: None,
@@ -891,12 +875,11 @@ impl Editor {
         self.end_stroke();
         if self.canvas_is_current() {
             self.grid.cursor_pos.column = 0;
-            self.cursor_index = 0;
             self.collapse_selection();
             return;
         }
         grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], 0);
-        self.cursor_index = 0;
+        self.grid.cursor_pos.column = 0;
         self.sync_cursor_column();
         self.collapse_selection();
     }
@@ -906,19 +889,12 @@ impl Editor {
         if self.canvas_is_current() {
             let width = self.canvas.active_row_width(self.grid.cursor_pos.line);
             self.grid.cursor_pos.column = width.min(MAX_CANVAS_WIDTH - 1);
-            self.cursor_index = self
-                .grid
-                .lines
-                .get(self.grid.cursor_pos.line)
-                .map_or(0, |line| {
-                    index_for_column(line, self.grid.cursor_pos.column)
-                });
             self.collapse_selection();
             return;
         }
         let width = display_width(&self.grid.lines[self.grid.cursor_pos.line]);
         grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], width);
-        self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
+        self.grid.cursor_pos.column = width.min(MAX_CANVAS_WIDTH - 1);
         self.sync_cursor_column();
         self.collapse_selection();
     }
@@ -985,11 +961,6 @@ impl Editor {
         self.shape_preview = None;
         self.move_lift = None;
         self.grid.cursor_pos = coord;
-        self.cursor_index = self
-            .grid
-            .lines
-            .get(coord.line)
-            .map_or(0, |line| index_for_column(line, coord.column));
         if !self.canvas_is_current() {
             self.sync_cursor_column();
         }
@@ -1011,25 +982,20 @@ impl Editor {
         let coord = clamp_canvas_coord(coord);
         if self.canvas_is_current() {
             self.grid.cursor_pos = coord;
-            self.cursor_index = self
-                .grid
-                .lines
-                .get(coord.line)
-                .map_or(0, |line| index_for_column(line, coord.column));
             return;
         }
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
         }
         self.grid.cursor_pos.line = coord.line;
+        self.grid.cursor_pos.column = coord.column;
         grid::expose_cursor_cells(&mut self.grid.lines[coord.line], coord.column);
-        self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
-        let current_width = display_width(&self.grid.lines[coord.line][..self.cursor_index]);
-        if current_width < coord.column && self.cursor_index == self.grid.lines[coord.line].len() {
+        let cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
+        let current_width = display_width(&self.grid.lines[coord.line][..cursor_index]);
+        if current_width < coord.column && cursor_index == self.grid.lines[coord.line].len() {
             if let Some(blank) = grid::blank_run(coord.column - current_width) {
                 self.grid.lines[coord.line].push(blank);
             }
-            self.cursor_index = self.grid.lines[coord.line].len();
         }
         self.sync_cursor_column();
     }
@@ -1190,11 +1156,6 @@ impl Editor {
     fn move_selection_to_without_ending_stroke(&mut self, coord: Coord) {
         if self.canvas_is_current() {
             self.grid.cursor_pos = coord;
-            self.cursor_index = self
-                .grid
-                .lines
-                .get(coord.line)
-                .map_or(0, |line| index_for_column(line, coord.column));
             return;
         }
         while self.grid.lines.len() <= coord.line {
@@ -1209,7 +1170,6 @@ impl Editor {
         }
         grid::expose_cursor_cells(line, coord.column);
         self.grid.cursor_pos = coord;
-        self.cursor_index = index_for_column(line, coord.column);
     }
 
     pub fn clear_selection(&mut self) {
@@ -1231,7 +1191,7 @@ impl Editor {
                     replace_range(lines, bounds, None);
                 })
                 .expect("legacy selection bounds fit the canvas");
-            self.restore_active_cursor_index();
+            self.restore_active_cursor();
             return;
         }
         self.commit_canvas();
@@ -1239,7 +1199,7 @@ impl Editor {
             .clear_bounds_in_all_layers(bounds)
             .expect("selection bounds fit the sparse canvas");
         self.refresh_active_dense_view();
-        self.restore_active_cursor_index();
+        self.restore_active_cursor();
     }
 
     fn selection_contains_nonblank(&self) -> bool {
@@ -1371,7 +1331,6 @@ impl Editor {
         };
         self.selection.select(origin, active);
         self.grid.cursor_pos = active;
-        self.cursor_index = index_for_column(&self.grid.lines[active.line], active.column);
         true
     }
 
@@ -1415,7 +1374,6 @@ impl Editor {
         self.refresh_active_dense_view();
         self.selection.collapse(origin);
         self.grid.cursor_pos = origin;
-        self.cursor_index = index_for_column(&self.grid.lines[origin.line], origin.column);
         true
     }
 
@@ -1430,7 +1388,6 @@ impl Editor {
         };
         self.canvas_origin = edited_content_origin(&self.grid.lines).unwrap_or_default();
         self.grid.cursor_pos = Coord::default();
-        self.cursor_index = 0;
         self.active_stroke = None;
         self.line_preview = None;
         self.shape_preview = None;
@@ -1464,7 +1421,6 @@ impl Editor {
         self.restore_menu_selections(menu_selections);
         let cursor = clamp_canvas_coord(cursor);
         self.grid.cursor_pos = cursor;
-        self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
         self.selection.select(
             clamp_canvas_coord(selection.anchor()),
             clamp_canvas_coord(selection.active()),
@@ -1485,7 +1441,6 @@ impl Editor {
         self.canvas.clear_contents(&mut self.grid.lines, cursor);
 
         self.grid.cursor_pos = cursor;
-        self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
         self.active_stroke = None;
         self.line_preview = None;
         self.shape_preview = None;
@@ -1504,16 +1459,10 @@ impl Editor {
     }
 
     fn sync_cursor_column(&mut self) {
-        self.grid.cursor_pos.column =
-            display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
-        if self.grid.cursor_pos.column >= MAX_CANVAS_WIDTH {
-            self.cursor_index = index_for_column(
-                &self.grid.lines[self.grid.cursor_pos.line],
-                MAX_CANVAS_WIDTH - 1,
-            );
-            self.grid.cursor_pos.column =
-                display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
-        }
+        let line = &self.grid.lines[self.grid.cursor_pos.line];
+        let target = self.grid.cursor_pos.column.min(MAX_CANVAS_WIDTH - 1);
+        let cursor_index = index_for_column(line, target);
+        self.grid.cursor_pos.column = display_width(&line[..cursor_index]);
     }
 
     fn collapse_selection(&mut self) {
@@ -1524,13 +1473,11 @@ impl Editor {
     fn expose_cursor_cells(&mut self) {
         let line = self.grid.cursor_pos.line;
         grid::expose_cursor_cells(&mut self.grid.lines[line], self.grid.cursor_pos.column);
-        self.cursor_index = index_for_column(&self.grid.lines[line], self.grid.cursor_pos.column);
     }
 
-    fn restore_active_cursor_index(&mut self) {
+    fn restore_active_cursor(&mut self) {
         let active = self.selection.active();
         self.grid.cursor_pos = active;
-        self.cursor_index = index_for_column(&self.grid.lines[active.line], active.column);
     }
 
     fn replace_selection_literal(&mut self, replacement: Option<&str>) {
@@ -1549,7 +1496,7 @@ impl Editor {
             if replacement.is_some() {
                 self.color_written_bounds(bounds);
             }
-            self.restore_active_cursor_index();
+            self.restore_active_cursor();
             self.commit_canvas();
             return;
         }
@@ -1571,7 +1518,7 @@ impl Editor {
             .replace_active_bounds(bounds, replacement)
             .expect("literal selection replacements contain one-cell atoms");
         self.refresh_active_dense_view();
-        self.restore_active_cursor_index();
+        self.restore_active_cursor();
     }
 
     /// Positive values compensate for prepended cells; negative values undo
@@ -1698,7 +1645,6 @@ impl Editor {
             line.insert(0, blank_atom());
         }
         self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(1);
-        self.cursor_index = self.cursor_index.saturating_add(1);
         self.selection.shift(1, 0);
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end.column = stroke.end.column.saturating_add(1);
@@ -2657,7 +2603,6 @@ mod tests {
             contents: "x".into(),
         }]];
         state.grid.cursor_pos = Coord { line: 3, column: 4 };
-        state.cursor_index = 1;
         state
             .selection
             .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
@@ -2689,7 +2634,6 @@ mod tests {
         assert_eq!(display_width(&state.grid.lines[3]), 4);
         assert!(state.content_cells().is_empty());
         assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
-        assert_eq!(state.cursor_index, 4);
         assert!(state.selection.is_collapsed());
         assert_eq!(state.selection.active(), Coord { line: 3, column: 4 });
         assert!(state.active_stroke.is_none());
@@ -5098,7 +5042,6 @@ mod tests {
             },
         });
         state.grid.cursor_pos = cursor;
-        state.cursor_index = index_for_column(&state.grid.lines[cursor.line], cursor.column);
         state.selection.collapse(cursor);
         state
     }

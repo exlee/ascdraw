@@ -6,14 +6,13 @@ use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
 };
 
-use super::{EditSnapshot, Editor, PlacedLineMarker, index_for_column};
+use super::{EditSnapshot, Editor, PlacedLineMarker};
 
 #[derive(Debug, Clone)]
 pub(super) struct MoveLift {
     pub(super) source_snapshot: EditSnapshot,
     source_selection: CanvasSelection,
     source_cursor: Coord,
-    source_cursor_index: usize,
     source_bounds: SelectionBounds,
     origin: Coord,
     prepended_columns: usize,
@@ -110,7 +109,6 @@ impl Editor {
             source_snapshot,
             source_selection,
             source_cursor: self.grid.cursor_pos,
-            source_cursor_index: self.cursor_index,
             source_bounds,
             origin: Coord {
                 line: source_bounds.top,
@@ -200,13 +198,6 @@ impl Editor {
             offset_coord(lift.source_selection.active(), line_delta, column_delta),
         );
         self.grid.cursor_pos = offset_coord(lift.source_cursor, line_delta, column_delta);
-        self.cursor_index = self
-            .grid
-            .lines
-            .get(self.grid.cursor_pos.line)
-            .map_or(0, |line| {
-                index_for_column(line, self.grid.cursor_pos.column)
-            });
         self.refresh_move_lift_render();
         true
     }
@@ -290,10 +281,6 @@ impl Editor {
                 .expect("move remains inside the sparse canvas");
             self.refresh_active_dense_view();
         }
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
         changed
     }
 
@@ -466,7 +453,6 @@ impl MoveLift {
         self.source_selection.shift(columns, lines);
         self.source_cursor.column = self.source_cursor.column.saturating_add(columns);
         self.source_cursor.line = self.source_cursor.line.saturating_add(lines);
-        self.source_cursor_index = self.source_cursor_index.saturating_add(columns);
         self.source_bounds.left = self.source_bounds.left.saturating_add(columns);
         self.source_bounds.right = self.source_bounds.right.saturating_add(columns);
         self.source_bounds.top = self.source_bounds.top.saturating_add(lines);

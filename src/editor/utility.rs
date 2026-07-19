@@ -1,4 +1,4 @@
-use super::{Editor, atom_width, index_for_column};
+use super::{Editor, atom_width};
 use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::UtilityKind;
 
@@ -287,10 +287,6 @@ impl Editor {
             }
         });
         self.shape_preview = None;
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
     }
 
     fn map_global_coordinate_state(&mut self, mut map: impl FnMut(Coord) -> Coord) {
@@ -304,10 +300,6 @@ impl Editor {
             preview.anchor = map(preview.anchor);
             preview.end = map(preview.end);
         }
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
     }
 }
 

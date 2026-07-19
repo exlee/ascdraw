@@ -5,7 +5,7 @@ use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
 
 use super::routing::{RouteStep, route_steps};
-use super::{Editor, adjacent_coord, blank_atom, index_for_column};
+use super::{Editor, adjacent_coord, blank_atom};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutedSegment {
@@ -23,7 +23,6 @@ pub(super) struct LinePreview {
     pub(super) source_lines: Vec<Vec<Atom>>,
     pub(super) source_canvas: crate::canvas::LayerStack,
     pub(super) source_cursor: Coord,
-    pub(super) source_cursor_index: usize,
     pub(super) source_selection: CanvasSelection,
     pub(super) source_canvas_origin: Coord,
     rendered_lines: Vec<Vec<Atom>>,
@@ -129,7 +128,6 @@ impl Editor {
             source_lines: self.grid.lines.clone(),
             source_canvas: self.canvas.clone(),
             source_cursor: self.grid.cursor_pos,
-            source_cursor_index: self.cursor_index,
             source_selection,
             source_canvas_origin: self.canvas_origin,
             rendered_lines: self.grid.lines.clone(),
@@ -166,11 +164,6 @@ impl Editor {
             self.grid.lines.push(Vec::new());
         }
         self.grid.cursor_pos = target;
-        self.cursor_index = self
-            .grid
-            .lines
-            .get(target.line)
-            .map_or(0, |line| index_for_column(line, target.column));
         self.selection.collapse(target);
         self.line_preview
             .as_mut()
@@ -212,7 +205,6 @@ impl Editor {
             self.grid.lines = preview.source_lines;
             self.canvas = preview.source_canvas;
             self.grid.cursor_pos = preview.source_cursor;
-            self.cursor_index = preview.source_cursor_index;
             self.selection = preview.source_selection;
             self.canvas_origin = preview.source_canvas_origin;
         } else {
@@ -265,7 +257,6 @@ impl Editor {
         let changed = self.grid.lines != composed.grid.lines || self.canvas != composed.canvas;
         self.grid.lines = composed.grid.lines;
         self.grid.cursor_pos = composed.grid.cursor_pos;
-        self.cursor_index = composed.cursor_index;
         self.selection.collapse(self.grid.cursor_pos);
         self.canvas = composed.canvas;
         self.canvas_origin = composed.canvas_origin;
@@ -317,11 +308,6 @@ impl Editor {
         };
         let start = adjust(preview.start);
         composed.grid.cursor_pos = start;
-        composed.cursor_index = composed
-            .grid
-            .lines
-            .get(start.line)
-            .map_or(0, |line| index_for_column(line, start.column));
         composed.selection.collapse(start);
 
         let final_end = if include_active && preview.end != preview.anchor() {
@@ -461,11 +447,6 @@ fn draw_diagonal_step(
     };
     state.write_diagonal_cell(target, glyph, false, false);
     state.grid.cursor_pos = target;
-    state.cursor_index = state
-        .grid
-        .lines
-        .get(target.line)
-        .map_or(0, |line| index_for_column(line, target.column));
     state.selection.collapse(target);
     state.end_stroke();
 }
