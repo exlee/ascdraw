@@ -345,9 +345,9 @@ const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["↕", "↕", "↔", "↔"],
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
-const STAMP_DECORATORS: [&str; 25] = [
-    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "◯", "Ø", "ø", "╳", "╱", "╲", "÷", "×",
-    "±", "¤", "◇", "☆", "★", "※",
+const STAMP_DECORATORS: [&str; 20] = [
+    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
+    "¤",
 ];
 const BLOCKS: [&str; 29] = [
     "▘", "▝", "▖", "▗", "▌", "▐", "▞", "▚", "▛", "▜", "▙", "▟", "▀", "▄", "█", "▏", "▎", "▍", "▋",
@@ -2461,10 +2461,9 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ░ ▒ ▓ █"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5.1. ▘ ▝ ▖ ▗ ▌ ▐ ▞ ▚ ▛ ▜"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ ◯ Ø ø ╳ ╱ ╲ ÷ × ±"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("5.2. ▙ ▟ ▀ ▄ █"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("2.3. ¤ ◇ ☆ ★ ※"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("3.3. ↕ ↔"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("5.3. ▏ ▎ ▍ ▋ ▊ ▉ ▔"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 4).contains("5.4. ▁ ▂ ▃ ▅ ▆ ▇ ▕"));
@@ -3758,7 +3757,7 @@ mod tests {
         assert_eq!(&DECORATORS[13..], CROSSES_AND_OPERATORS);
         assert_eq!(
             STAMP_DECORATORS.iter().copied().collect::<String>(),
-            "□■▫▪◆◊·∙•●◦◯Øø╳╱╲÷×±¤◇☆★※"
+            "□■▫▪◆◊·∙•●◦Øø╳╱╲÷×±¤"
         );
         assert_eq!(ARROWS.len(), 22);
         assert_eq!(
@@ -3779,7 +3778,7 @@ mod tests {
                     *counts.entry(*symbol).or_insert(0) += 1;
                     counts
                 });
-        assert_eq!(counts.len(), 79);
+        assert_eq!(counts.len(), 74);
         assert_eq!(counts.get("█"), Some(&2));
         assert!(
             counts
@@ -3806,16 +3805,15 @@ mod tests {
     #[test]
     fn unsupported_decorations_ascii_and_connected_lines_are_not_stamps() {
         let stamps: Vec<_> = STAMP_OPTIONS.into_iter().flatten().copied().collect();
-        for included in [
-            "◯", "◇", "☆", "★", "※", "▁", "▂", "▃", "▅", "▆", "▇", "▊", "▉", "▔", "▕",
-        ] {
+        for included in ["▁", "▂", "▃", "▅", "▆", "▇", "▊", "▉", "▔", "▕"] {
             assert!(stamps.contains(&included), "stamp {included:?}");
         }
-        let excluded = "○";
-        assert!(
-            !stamps.contains(&excluded),
-            "excluded decoration {excluded:?}"
-        );
+        for excluded in ["○", "◯", "◇", "☆", "★", "※"] {
+            assert!(
+                !stamps.contains(&excluded),
+                "excluded decoration {excluded:?}"
+            );
+        }
         for ascii in [
             "^", "v", "V", "|", "\"", "-", "_", ">", "<", "=", "+", "/", "\\", "'", "`", "#", "o",
             "O", "*", ".",
