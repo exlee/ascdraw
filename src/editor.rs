@@ -3313,6 +3313,52 @@ mod tests {
     }
 
     #[test]
+    fn shape_space_draws_one_cell_outside_a_selected_region() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state
+            .selection
+            .select(Coord { line: 3, column: 5 }, Coord { line: 2, column: 3 });
+
+        assert!(state.start_shape_or_confirm());
+
+        assert!(state.selection.is_collapsed());
+        assert!(state.shape_preview.is_none());
+        assert_eq!(state.take_pending_prepend(), (0, 0));
+        assert_eq!(
+            state
+                .grid
+                .lines
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            ["", "  ┌───┐", "  │   │", "  │   │", "  └───┘"]
+        );
+    }
+
+    #[test]
+    fn shape_space_prepends_to_surround_a_selection_at_the_origin() {
+        let mut state = state();
+        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        state
+            .selection
+            .select(Coord { line: 1, column: 1 }, Coord { line: 0, column: 0 });
+
+        assert!(state.start_shape_or_confirm());
+
+        assert_eq!(state.take_pending_prepend(), (1, 1));
+        assert_eq!(
+            state
+                .grid
+                .lines
+                .iter()
+                .map(|line| contents(line))
+                .collect::<Vec<_>>(),
+            ["┌──┐", "│  │", "│  │", "└──┘"]
+        );
+    }
+
+    #[test]
     fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
         let mut state = state();
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));

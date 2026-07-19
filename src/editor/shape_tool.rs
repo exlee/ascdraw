@@ -28,18 +28,41 @@ impl Editor {
         let had_selection = !self.selection.is_collapsed();
         self.end_stroke();
         self.toolbar.cancel_shortcut();
-        self.collapse_selection();
         if self.cursor_mode != CursorMode::Shapes {
+            self.collapse_selection();
             return false;
         }
         if had_preview {
+            self.collapse_selection();
             self.shape_preview = preview;
             self.confirm_shape();
             return true;
         }
-        if !had_selection {
-            self.toggle_shape_preview();
+        if had_selection {
+            let bounds = self.selection.bounds();
+            if bounds.top == 0 {
+                self.prepend_line();
+            }
+            if bounds.left == 0 {
+                self.prepend_column();
+            }
+            let bounds = self.selection.bounds();
+            self.shape_preview = Some(ShapePreview {
+                anchor: Coord {
+                    line: bounds.top.saturating_sub(1),
+                    column: bounds.left.saturating_sub(1),
+                },
+                end: Coord {
+                    line: bounds.bottom.saturating_add(1),
+                    column: bounds.right.saturating_add(1),
+                },
+            });
+            self.collapse_selection();
+            self.confirm_shape();
+            return true;
         }
+        self.collapse_selection();
+        self.toggle_shape_preview();
         false
     }
 
