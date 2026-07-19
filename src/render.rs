@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -666,23 +667,61 @@ fn render_cached_sparse_grid_atoms(
     {
         for (&row, cells) in layer.rows().range(row_start..row_end) {
             for (&column, data) in cells.range(column_start..column_end) {
-                canvas.save();
-                canvas.translate((f32::from(column) * metrics.cell_width, 0.0));
-                render_cached_overlay_line(
-                    canvas,
-                    usize::try_from(row).unwrap_or(0),
-                    std::slice::from_ref(data.atom.as_ref()),
+                let mut atom = data.atom.as_ref().clone();
+                atom.face = data.face.as_ref().clone();
+                let resolved_face = if face_is_default(&atom.face) {
+                    root_face
+                } else {
+                    resolve_derived_face(
+                        &state.grid.default_face,
+                        &atom.face,
+                        FALLBACK_FG,
+                        FALLBACK_BG,
+                    )
+                };
+                let paints_background = atom.face.bg != "default"
+                    || atom.face.attributes.iter().any(|attribute| {
+                        attribute
+                            .trim_start_matches("final:")
+                            .eq_ignore_ascii_case("reverse")
+                    });
+                let key = rendered_atom_key(
+                    &atom,
+                    resolved_face,
+                    root_face,
+                    paints_background,
                     &state.grid.default_face,
                     &state.theme,
-                    root_face,
-                    0..1,
                     metrics,
-                    DrawOrigin::Grid {
-                        top_padding: layout.grid_top,
-                    },
-                    cache,
                 );
-                canvas.restore();
+                let mut hasher = DefaultHasher::new();
+                key.hash(&mut hasher);
+                let generation = hasher.finish();
+                let cached_image = {
+                    data.raster_cache
+                        .borrow()
+                        .as_ref()
+                        .filter(|cached| cached.generation == generation)
+                        .map(|cached| cached.image.clone())
+                };
+                let image = cached_image.or_else(|| {
+                    let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
+                    *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
+                        generation,
+                        image: image.clone(),
+                    }));
+                    Some(image)
+                });
+                if let Some(image) = image {
+                    canvas.draw_image(
+                        &image,
+                        (
+                            PADDING as f32 + f32::from(column) * metrics.cell_width,
+                            layout.grid_top + f32::from(row) * metrics.cell_height,
+                        ),
+                        None,
+                    );
+                }
             }
         }
     }
@@ -791,7 +830,28 @@ fn cached_atom_image(
     if width == 0 || width > 128 {
         return None;
     }
-    let key = RenderedAtomKey {
+    let key = rendered_atom_key(
+        atom,
+        resolved_face,
+        root_face,
+        paints_background,
+        default_face,
+        theme,
+        metrics,
+    );
+    cached_atom_image_for_key(cache, atom, &key, metrics)
+}
+
+fn rendered_atom_key(
+    atom: &Atom,
+    resolved_face: ResolvedFace,
+    root_face: ResolvedFace,
+    paints_background: bool,
+    default_face: &Face,
+    theme: &ThemeConfig,
+    metrics: &CellMetrics,
+) -> RenderedAtomKey {
+    RenderedAtomKey {
         contents: atom.contents.clone(),
         resolved_face,
         root_face,
@@ -802,7 +862,19 @@ fn cached_atom_image(
         cell_height_bits: metrics.cell_height.to_bits(),
         baseline_offset_bits: metrics.baseline_offset.to_bits(),
         underline_offset_bits: metrics.underline_offset.to_bits(),
-    };
+    }
+}
+
+fn cached_atom_image_for_key(
+    cache: &RefCell<RenderedAtomCache>,
+    atom: &Atom,
+    key: &RenderedAtomKey,
+    metrics: &CellMetrics,
+) -> Option<skia_safe::Image> {
+    let width = atom_display_width(&atom.contents);
+    if width == 0 || width > 128 {
+        return None;
+    }
     if let Some(image) = cache.borrow().images.get(&key) {
         return Some(image.clone());
     }
@@ -822,7 +894,7 @@ fn cached_atom_image(
             max_column: width,
         },
         std::slice::from_ref(atom),
-        default_face,
+        &key.default_face,
         metrics,
         DrawOrigin::Grid { top_padding: 0.0 },
         true,
@@ -837,7 +909,7 @@ fn cached_atom_image(
         cache.images.remove(&oldest);
     }
     cache.insertion_order.push_back(key.clone());
-    cache.images.insert(key, image.clone());
+    cache.images.insert(key.clone(), image.clone());
     Some(image)
 }
 
@@ -2267,6 +2339,48 @@ mod tests {
             &cache,
         );
         assert_eq!(cache.borrow().images.len(), 2);
+    }
+
+    #[test]
+    fn sparse_render_populates_coordinate_cache() {
+        let config = AppConfig::default();
+        let renderer = load_renderer(&config);
+        let metrics = renderer.metrics(1.0);
+        let toolbar_metrics = renderer.title_metrics(1.0);
+        let width = 320;
+        let height = 240;
+        let layout = layout_metrics(
+            width,
+            height,
+            &metrics,
+            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+            &ToolbarState::default(),
+            config.transparent_menubar,
+            1.0,
+        );
+        let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
+        let mut state = Editor::new(&config.theme, "test");
+        state.insert("x");
+        state.commit_canvas_mutations().unwrap();
+        let cache = RefCell::new(RenderedAtomCache::default());
+
+        render_cached_sparse_grid_atoms(
+            surface.canvas(),
+            state.canvas(),
+            &state,
+            &metrics,
+            layout,
+            ViewportOffset::default(),
+            width as usize,
+            0,
+            2,
+            0,
+            2,
+            &cache,
+        );
+
+        let coordinate = state.canvas().layers()[0].get(0, 0).unwrap();
+        assert!(coordinate.raster_cache.borrow().is_some());
     }
 
     #[test]

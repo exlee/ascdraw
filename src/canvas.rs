@@ -24,11 +24,10 @@ fn blank_atom() -> Rc<Atom> {
     BLANK_ATOM.with(Rc::clone)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Rasterized {
     pub generation: u64,
-    pub scale: u16,
-    pub rgba: Vec<u8>,
+    pub image: skia_safe::Image,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -985,10 +984,12 @@ mod tests {
     #[test]
     fn cloning_coordinate_data_drops_raster_cache() {
         let source = data("a", Face::default());
+        let image = skia_safe::surfaces::raster_n32_premul((1, 1))
+            .unwrap()
+            .image_snapshot();
         *source.raster_cache.borrow_mut() = Some(Rc::new(Rasterized {
             generation: 3,
-            scale: 2,
-            rgba: vec![0, 1, 2, 3],
+            image,
         }));
 
         let cloned = source.clone();
