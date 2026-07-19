@@ -4,7 +4,7 @@ use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::ShapeKind;
 
 use super::color_tool::color_atom_at;
-use super::{Editor, ShapePreview, index_for_column, replace_cell};
+use super::{Editor, ShapePreview, atom_width, replace_cell};
 
 impl Editor {
     pub fn toggle_shape_preview(&mut self) {
@@ -75,16 +75,34 @@ impl Editor {
         let Some(preview) = self.shape_preview.take() else {
             return;
         };
+        if self.canvas.has_legacy_wide_atoms()
+            || self
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .any(|atom| atom_width(atom) != 1)
+        {
+            for (coord, contents) in self.shape_cells(preview) {
+                self.remove_line_marker(coord);
+                replace_cell(&mut self.grid.lines, coord, contents);
+                self.color_written_cell(coord);
+            }
+            self.commit_canvas();
+            return;
+        }
+        let face = self.write_face();
         for (coord, contents) in self.shape_cells(preview) {
             self.remove_line_marker(coord);
-            replace_cell(&mut self.grid.lines, coord, contents);
-            self.color_written_cell(coord);
+            let atom = Atom {
+                face: face.clone(),
+                contents,
+            };
+            self.canvas
+                .set_at(coord, atom, &face)
+                .expect("shape glyphs occupy one sparse cell");
         }
-        self.cursor_index = index_for_column(
-            &self.grid.lines[self.grid.cursor_pos.line],
-            self.grid.cursor_pos.column,
-        );
-        self.sync_cursor_column();
+        self.refresh_active_dense_view();
     }
 
     pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
