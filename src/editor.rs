@@ -82,7 +82,6 @@ fn reverse_theme_colors(theme: &mut ThemeConfig) {
 
 #[derive(Debug, Clone)]
 pub struct EditSnapshot {
-    lines: Vec<Vec<Atom>>,
     cursor_pos: Coord,
     cursor_index: usize,
     selection: CanvasSelection,
@@ -93,8 +92,7 @@ pub struct EditSnapshot {
 
 impl PartialEq for EditSnapshot {
     fn eq(&self, other: &Self) -> bool {
-        self.lines == other.lines
-            && self.cursor_pos == other.cursor_pos
+        self.cursor_pos == other.cursor_pos
             && self.cursor_index == other.cursor_index
             && self.selection == other.selection
             && self.active_stroke == other.active_stroke
@@ -107,9 +105,7 @@ impl Eq for EditSnapshot {}
 
 impl EditSnapshot {
     pub fn same_document(&self, other: &Self) -> bool {
-        self.lines == other.lines
-            && self.canvas_origin == other.canvas_origin
-            && self.canvas == other.canvas
+        self.canvas_origin == other.canvas_origin && self.canvas == other.canvas
     }
 
     #[cfg(test)]
@@ -464,36 +460,32 @@ impl Editor {
         if let Some(lift) = &self.move_lift {
             return lift.source_snapshot.clone();
         }
-        let (lines, cursor_pos, cursor_index, selection, line_markers, canvas_origin) =
-            if let Some(preview) = self
-                .line_preview
+        let (canvas, cursor_pos, cursor_index, selection, canvas_origin) = if let Some(preview) =
+            self.line_preview
                 .as_ref()
                 .filter(|preview| !preview.has_committed_segments())
-            {
-                (
-                    preview.source_lines.clone(),
-                    preview.source_cursor,
-                    preview.source_cursor_index,
-                    preview.source_selection,
-                    preview.source_canvas.active_line_markers(),
-                    preview.source_canvas_origin,
-                )
-            } else {
-                (
-                    self.grid.lines.clone(),
-                    self.grid.cursor_pos,
-                    self.cursor_index,
-                    self.selection,
-                    self.canvas.active_line_markers(),
-                    self.canvas_origin,
-                )
-            };
-        let mut canvas = self.canvas.clone();
-        canvas
-            .commit_active_with_markers(&lines, &line_markers)
-            .expect("editor layers contain valid sparse cells");
+        {
+            (
+                preview.source_canvas.clone(),
+                preview.source_cursor,
+                preview.source_cursor_index,
+                preview.source_selection,
+                preview.source_canvas_origin,
+            )
+        } else {
+            let mut canvas = self.canvas.clone();
+            canvas
+                .commit_active_with_markers(&self.grid.lines, &self.canvas.active_line_markers())
+                .expect("editor layers contain valid sparse cells");
+            (
+                canvas,
+                self.grid.cursor_pos,
+                self.cursor_index,
+                self.selection,
+                self.canvas_origin,
+            )
+        };
         EditSnapshot {
-            lines,
             cursor_pos,
             cursor_index,
             selection,
@@ -504,13 +496,13 @@ impl Editor {
     }
 
     pub fn restore_edit_snapshot(&mut self, snapshot: EditSnapshot) {
-        self.grid.lines = snapshot.lines;
         self.grid.cursor_pos = snapshot.cursor_pos;
         self.cursor_index = snapshot.cursor_index;
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
         self.canvas_origin = snapshot.canvas_origin;
         self.canvas = snapshot.canvas;
+        self.grid.lines = self.canvas.active_dense_lines();
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.line_preview = None;
         self.shape_preview = None;
@@ -4809,7 +4801,7 @@ mod tests {
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
         assert!(state.move_lift(Direction::Right));
-        assert_eq!(state.edit_snapshot().lines, before.lines);
+        assert_eq!(state.edit_snapshot(), before);
         let preview = state
             .lines_with_shape_preview()
             .expect("lifted selection has a composited preview");
