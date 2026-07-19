@@ -1,4 +1,5 @@
 use crate::app::CursorMode;
+use crate::canvas::LayerStack;
 use crate::drawing::{LineStyle, glyph_with_connection};
 use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::ShapeKind;
@@ -119,6 +120,25 @@ impl Editor {
             color_atom_at(&mut lines, coord, self.write_face().fg.as_str());
         }
         Some(lines)
+    }
+
+    pub(crate) fn shape_preview_canvas(&self) -> Option<LayerStack> {
+        let preview = self.shape_preview?;
+        if !self.canvas_is_current() {
+            return None;
+        }
+        let face = self.write_face();
+        let mut canvas = self.canvas.clone();
+        for (coord, contents) in self.shape_cells(preview) {
+            let atom = Atom {
+                face: face.clone(),
+                contents,
+            };
+            canvas
+                .set_at(coord, atom, &face)
+                .expect("shape preview glyphs occupy one sparse cell");
+        }
+        Some(canvas)
     }
 
     fn shape_cells(&self, preview: ShapePreview) -> Vec<(Coord, String)> {

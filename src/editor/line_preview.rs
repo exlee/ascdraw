@@ -27,6 +27,7 @@ pub(super) struct LinePreview {
     pub(super) source_selection: CanvasSelection,
     pub(super) source_canvas_origin: Coord,
     rendered_lines: Vec<Vec<Atom>>,
+    rendered_canvas: crate::canvas::LayerStack,
     prepended_columns: usize,
     prepended_lines: usize,
 }
@@ -132,6 +133,7 @@ impl Editor {
             source_selection,
             source_canvas_origin: self.canvas_origin,
             rendered_lines: self.grid.lines.clone(),
+            rendered_canvas: self.canvas.clone(),
             prepended_columns: 0,
             prepended_lines: 0,
         });
@@ -239,15 +241,20 @@ impl Editor {
             .map(|preview| preview.rendered_lines.as_slice())
     }
 
+    pub(crate) fn line_preview_render_canvas(&self) -> Option<&crate::canvas::LayerStack> {
+        self.line_preview
+            .as_ref()
+            .map(|preview| &preview.rendered_canvas)
+            .filter(|canvas| !canvas.has_legacy_wide_atoms())
+    }
+
     pub(super) fn refresh_line_preview_render(&mut self) {
-        let Some(lines) = self
-            .composed_line_preview_state(true)
-            .map(|composed| composed.grid.lines)
-        else {
+        let Some(composed) = self.composed_line_preview_state(true) else {
             return;
         };
         if let Some(preview) = self.line_preview.as_mut() {
-            preview.rendered_lines = lines;
+            preview.rendered_lines = composed.grid.lines;
+            preview.rendered_canvas = composed.canvas;
         }
     }
 

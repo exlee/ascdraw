@@ -310,8 +310,15 @@ fn render_canvas(
         .saturating_add(visible_cells.columns)
         .saturating_add(2);
     let line_preview = state.preview_render_lines();
-    let preview_lines = line_preview
+    let sparse_line_preview = (!state.move_lift_active())
+        .then(|| state.line_preview_render_canvas())
+        .flatten();
+    let shape_preview_canvas = sparse_line_preview
         .is_none()
+        .then(|| state.shape_preview_canvas())
+        .flatten();
+    let sparse_preview_canvas = sparse_line_preview.or(shape_preview_canvas.as_ref());
+    let preview_lines = (sparse_preview_canvas.is_none() && line_preview.is_none())
         .then(|| state.lines_with_shape_preview())
         .flatten();
     let active_lines = line_preview
@@ -334,14 +341,13 @@ fn render_canvas(
                 })
         })
         .collect::<Vec<_>>();
-    if line_preview.is_none()
+    if !state.move_lift_active()
         && preview_lines.is_none()
-        && !state.move_lift_active()
-        && state.canvas_is_current()
+        && (sparse_preview_canvas.is_some() || state.canvas_is_current())
     {
         render_cached_sparse_grid_atoms(
             canvas,
-            state.canvas(),
+            sparse_preview_canvas.unwrap_or_else(|| state.canvas()),
             state,
             metrics,
             layout,
