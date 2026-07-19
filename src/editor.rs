@@ -199,6 +199,17 @@ impl Editor {
             .expect("edited cells contain one display-width-1 grapheme");
     }
 
+    fn refresh_active_dense_view(&mut self) {
+        self.grid.lines = self.canvas.active_dense_lines();
+        while self.grid.lines.len() <= self.grid.cursor_pos.line {
+            self.grid.lines.push(Vec::new());
+        }
+        self.cursor_index = index_for_column(
+            &self.grid.lines[self.grid.cursor_pos.line],
+            self.grid.cursor_pos.column,
+        );
+    }
+
     pub fn canvas(&self) -> &crate::canvas::LayerStack {
         &self.canvas
     }
@@ -433,6 +444,11 @@ impl Editor {
         while self.grid.lines.len() <= self.grid.cursor_pos.line {
             self.grid.lines.push(Vec::new());
         }
+        self.grid.cursor_pos.column = self
+            .grid
+            .cursor_pos
+            .column
+            .min(display_width(&self.grid.lines[self.grid.cursor_pos.line]));
         grid::expose_cursor_cells(
             &mut self.grid.lines[self.grid.cursor_pos.line],
             self.grid.cursor_pos.column,

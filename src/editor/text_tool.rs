@@ -2,9 +2,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::CursorMode;
-use crate::model::{Atom, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{Atom, Coord, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 
-use super::{Editor, atom_width, display_width};
+use super::{Editor, atom_width};
 
 impl Editor {
     pub fn insert(&mut self, text: &str) {
@@ -12,7 +12,7 @@ impl Editor {
             return;
         }
         self.end_stroke();
-        self.expose_cursor_cells();
+        self.commit_canvas();
         for part in text.split_inclusive('\n') {
             let content = part.strip_suffix('\n').unwrap_or(part);
             let atoms = UnicodeSegmentation::graphemes(content, true)
@@ -22,7 +22,7 @@ impl Editor {
                 })
                 .collect::<Vec<_>>();
             let available = MAX_CANVAS_WIDTH
-                .saturating_sub(display_width(&self.grid.lines[self.grid.cursor_pos.line]));
+                .saturating_sub(self.canvas.active_row_width(self.grid.cursor_pos.line));
             let mut accepted_width: usize = 0;
             let atoms = atoms
                 .into_iter()
@@ -35,21 +35,35 @@ impl Editor {
                     true
                 })
                 .collect::<Vec<_>>();
-            let inserted_count = atoms.len();
-            let inserted_width = display_width(&atoms);
-            let line_index = self.grid.cursor_pos.line;
-            let insertion_column = display_width(&self.grid.lines[line_index][..self.cursor_index]);
-            self.grid.lines[self.grid.cursor_pos.line]
-                .splice(self.cursor_index..self.cursor_index, atoms);
-            self.cursor_index = self.grid.lines[self.grid.cursor_pos.line]
-                .len()
-                .min(self.cursor_index + inserted_count);
-            self.remap_line_data_after_edit(line_index, insertion_column, 0, inserted_width);
-            if part.ends_with('\n') && self.grid.lines.len() < MAX_CANVAS_HEIGHT {
-                self.newline();
+            let inserted_width = atoms.len();
+            let line = self.grid.cursor_pos.line;
+            let column = self.grid.cursor_pos.column;
+            let cells = atoms
+                .into_iter()
+                .map(|atom| {
+                    let face = atom.face.clone();
+                    (atom, face)
+                })
+                .collect();
+            self.canvas
+                .insert_cells(line, column, cells)
+                .expect("validated text fits the sparse canvas");
+            self.grid.cursor_pos.column = self
+                .grid
+                .cursor_pos
+                .column
+                .saturating_add(inserted_width)
+                .min(MAX_CANVAS_WIDTH - 1);
+            if part.ends_with('\n')
+                && self.canvas.layers()[self.canvas.active_index()]
+                    .to_dense()
+                    .len()
+                    < MAX_CANVAS_HEIGHT
+            {
+                self.newline_sparse();
             }
         }
-        self.sync_cursor_column();
+        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
@@ -104,7 +118,7 @@ impl Editor {
 
     fn replace(&mut self, text: &str) {
         self.end_stroke();
-        self.expose_cursor_cells();
+        self.commit_canvas();
         for part in text.split_inclusive('\n') {
             let content = part.strip_suffix('\n').unwrap_or(part);
             for grapheme in UnicodeSegmentation::graphemes(content, true) {
@@ -112,157 +126,100 @@ impl Editor {
                     face: self.write_face(),
                     contents: grapheme.to_string(),
                 };
-                let inserted_width = atom_width(&atom);
-                let line_index = self.grid.cursor_pos.line;
-                let line = &mut self.grid.lines[line_index];
-                let replacement_column = display_width(&line[..self.cursor_index]);
-                let removed_width = line.get(self.cursor_index).map_or(0, atom_width);
-                if display_width(line)
-                    .saturating_sub(removed_width)
-                    .saturating_add(inserted_width)
-                    > MAX_CANVAS_WIDTH
-                {
+                let line = self.grid.cursor_pos.line;
+                let column = self.grid.cursor_pos.column;
+                if column >= MAX_CANVAS_WIDTH {
                     break;
                 }
-                if self.cursor_index < line.len() {
-                    line[self.cursor_index] = atom;
-                } else {
-                    line.push(atom);
-                }
-                self.cursor_index += 1;
-                self.remap_line_data_after_edit(
-                    line_index,
-                    replacement_column,
-                    removed_width,
-                    inserted_width,
-                );
+                let face = atom.face.clone();
+                self.canvas.remove_line_at(Coord { line, column });
+                self.canvas
+                    .set_at(Coord { line, column }, atom, &face)
+                    .expect("validated replacement fits the sparse canvas");
+                self.canvas
+                    .ensure_active_row_width(line, column.saturating_add(1));
+                self.grid.cursor_pos.column = column.saturating_add(1);
             }
-            if part.ends_with('\n') && self.grid.lines.len() < MAX_CANVAS_HEIGHT {
-                self.newline();
+            if part.ends_with('\n')
+                && self.canvas.layers()[self.canvas.active_index()]
+                    .to_dense()
+                    .len()
+                    < MAX_CANVAS_HEIGHT
+            {
+                self.newline_sparse();
             }
         }
-        self.sync_cursor_column();
+        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
     pub fn newline(&mut self) {
         self.end_stroke();
+        self.commit_canvas();
         if self.grid.lines.len() >= MAX_CANVAS_HEIGHT {
             return;
         }
-        let source_line = self.grid.cursor_pos.line;
-        let split_column = display_width(&self.grid.lines[source_line][..self.cursor_index]);
-        let remainder = self.grid.lines[source_line].split_off(self.cursor_index);
-        self.grid.cursor_pos.line += 1;
-        self.grid.lines.insert(self.grid.cursor_pos.line, remainder);
-        self.split_line_data(source_line, split_column);
-        self.cursor_index = 0;
-        self.sync_cursor_column();
+        self.newline_sparse();
+        self.refresh_active_dense_view();
         self.collapse_selection();
+    }
+
+    fn newline_sparse(&mut self) {
+        let line = self.grid.cursor_pos.line;
+        let column = self.grid.cursor_pos.column;
+        self.canvas
+            .split_row(line, column)
+            .expect("text newline fits the sparse canvas");
+        self.grid.cursor_pos.line = line.saturating_add(1);
+        self.grid.cursor_pos.column = 0;
     }
 
     pub fn backspace(&mut self) {
         self.end_stroke();
-        self.expose_cursor_cells();
-        if self.cursor_index > 0 {
-            let line_index = self.grid.cursor_pos.line;
-            self.cursor_index -= 1;
-            let removal_column = display_width(&self.grid.lines[line_index][..self.cursor_index]);
-            let removed_width = atom_width(&self.grid.lines[line_index][self.cursor_index]);
-            self.grid.lines[line_index].remove(self.cursor_index);
-            self.remap_line_data_after_edit(line_index, removal_column, removed_width, 0);
+        self.commit_canvas();
+        if self.grid.cursor_pos.column > 0 {
+            self.grid.cursor_pos.column -= 1;
+            self.canvas
+                .remove_cells(self.grid.cursor_pos.line, self.grid.cursor_pos.column, 1)
+                .expect("backspace remains inside the sparse canvas");
         } else if self.grid.cursor_pos.line > 0 {
             let removed_line = self.grid.cursor_pos.line;
-            if display_width(&self.grid.lines[removed_line - 1])
-                .saturating_add(display_width(&self.grid.lines[removed_line]))
+            let previous = removed_line - 1;
+            let join_column = self.canvas.active_row_width(previous);
+            if join_column.saturating_add(self.canvas.active_row_width(removed_line))
                 > MAX_CANVAS_WIDTH
             {
                 return;
             }
-            let current = self.grid.lines.remove(self.grid.cursor_pos.line);
-            self.grid.cursor_pos.line -= 1;
-            self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
-            let join_column = display_width(&self.grid.lines[self.grid.cursor_pos.line]);
-            self.grid.lines[self.grid.cursor_pos.line].extend(current);
-            self.join_line_data(self.grid.cursor_pos.line, removed_line, join_column);
+            self.canvas
+                .join_row_with_next(previous)
+                .expect("joined text rows fit the sparse canvas");
+            self.grid.cursor_pos.line = previous;
+            self.grid.cursor_pos.column = join_column;
         }
-        self.sync_cursor_column();
+        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
     pub fn delete(&mut self) {
         self.end_stroke();
-        self.expose_cursor_cells();
+        self.commit_canvas();
         let line = self.grid.cursor_pos.line;
-        if self.cursor_index < self.grid.lines[line].len() {
-            let removal_column = display_width(&self.grid.lines[line][..self.cursor_index]);
-            let removed_width = atom_width(&self.grid.lines[line][self.cursor_index]);
-            self.grid.lines[line].remove(self.cursor_index);
-            self.remap_line_data_after_edit(line, removal_column, removed_width, 0);
+        let column = self.grid.cursor_pos.column;
+        let width = self.canvas.active_row_width(line);
+        if column < width {
+            self.canvas
+                .remove_cells(line, column, 1)
+                .expect("delete remains inside the sparse canvas");
         } else if line + 1 < self.grid.lines.len() {
-            let removed_line = line + 1;
-            if display_width(&self.grid.lines[line])
-                .saturating_add(display_width(&self.grid.lines[removed_line]))
-                > MAX_CANVAS_WIDTH
-            {
+            if width.saturating_add(self.canvas.active_row_width(line + 1)) > MAX_CANVAS_WIDTH {
                 return;
             }
-            let join_column = display_width(&self.grid.lines[line]);
-            let next = self.grid.lines.remove(line + 1);
-            self.grid.lines[line].extend(next);
-            self.join_line_data(line, removed_line, join_column);
+            self.canvas
+                .join_row_with_next(line)
+                .expect("joined text rows fit the sparse canvas");
         }
-        self.sync_cursor_column();
+        self.refresh_active_dense_view();
         self.collapse_selection();
-    }
-
-    fn remap_line_data_after_edit(
-        &mut self,
-        line: usize,
-        column: usize,
-        removed_width: usize,
-        inserted_width: usize,
-    ) {
-        let removed_end = column.saturating_add(removed_width);
-        self.commit_canvas_with_remapped_line_data(|mut coord| {
-            if coord.line != line {
-                return Some(coord);
-            }
-            if coord.column >= column && coord.column < removed_end {
-                return None;
-            }
-            if coord.column >= removed_end {
-                coord.column = if inserted_width >= removed_width {
-                    coord.column.saturating_add(inserted_width - removed_width)
-                } else {
-                    coord.column.saturating_sub(removed_width - inserted_width)
-                };
-            }
-            Some(coord)
-        });
-    }
-
-    fn split_line_data(&mut self, line: usize, column: usize) {
-        self.commit_canvas_with_remapped_line_data(|mut coord| {
-            if coord.line == line && coord.column >= column {
-                coord.line = coord.line.saturating_add(1);
-                coord.column -= column;
-            } else if coord.line > line {
-                coord.line = coord.line.saturating_add(1);
-            }
-            Some(coord)
-        });
-    }
-
-    fn join_line_data(&mut self, line: usize, removed_line: usize, join_column: usize) {
-        self.commit_canvas_with_remapped_line_data(|mut coord| {
-            if coord.line == removed_line {
-                coord.line = line;
-                coord.column = coord.column.saturating_add(join_column);
-            } else if coord.line > removed_line {
-                coord.line -= 1;
-            }
-            Some(coord)
-        });
     }
 }
