@@ -1819,6 +1819,16 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
 }
 
 impl Renderer {
+    pub fn rendered_atom_cache_usage(&self) -> (usize, usize, usize) {
+        let cache = self.rendered_atom_cache.borrow();
+        let bytes = cache
+            .images
+            .values()
+            .map(|image| image.width() as usize * image.height() as usize * 4)
+            .sum();
+        (bytes, cache.images.len(), RENDERED_ATOM_CACHE_CAPACITY)
+    }
+
     pub fn zoom(&self) -> i32 {
         (self.logical_font_size.get() - self.default_logical_font_size).round() as i32
     }

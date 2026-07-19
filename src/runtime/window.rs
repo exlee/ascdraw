@@ -746,6 +746,13 @@ impl EditorWindow {
         }
     }
 
+    pub fn report_render_cache_usage(&self) {
+        let (bytes, used, capacity) = self.renderer.rendered_atom_cache_usage();
+        self.background.debug_output(format!(
+            "debug: rendered atom cache bytes={bytes} slots={used}/{capacity}"
+        ));
+    }
+
     pub fn set_mouse_toolbar_hotspot(&mut self, hotspot: Option<usize>) {
         if self.mouse_toolbar_hotspot != hotspot {
             self.mouse_toolbar_hotspot = hotspot;

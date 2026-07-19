@@ -148,6 +148,7 @@ fn try_main() -> Result<ExitCode> {
     let mut frame_sequences = HashMap::<WindowId, u64>::new();
     let mut last_autosave_check = Instant::now();
     let mut last_tooltip_redraw = Instant::now();
+    let mut next_cache_report = Instant::now() + Duration::from_secs(3);
     #[cfg(target_os = "macos")]
     let mut installed_macos_menus = false;
     #[cfg(target_os = "macos")]
@@ -230,6 +231,12 @@ fn try_main() -> Result<ExitCode> {
                     poll_user_config_updates(watch, &mut config, &mut user_keys, &mut windows);
                 }
                 let now = Instant::now();
+                if debug && now >= next_cache_report {
+                    for editor in windows.values() {
+                        editor.report_render_cache_usage();
+                    }
+                    next_cache_report = now + Duration::from_secs(10);
+                }
                 for editor in windows.values_mut() {
                     if editor
                         .state
