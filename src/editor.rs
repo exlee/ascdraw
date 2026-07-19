@@ -1235,9 +1235,18 @@ impl Editor {
 
     pub fn paste_text_rectangle(&mut self, text: &str) -> bool {
         self.cancel_line_preview();
-        let Some(rectangle) = TextRectangle::from_text(text) else {
+        let Some(mut rectangle) = TextRectangle::from_text(text) else {
             return false;
         };
+        if rectangle
+            .rows
+            .iter()
+            .flatten()
+            .any(|atom| atom.validate_cell().is_err())
+        {
+            self.invalid_text_tip();
+            return false;
+        }
         if !self.selection.is_collapsed()
             && rectangle.width == 1
             && let [row] = rectangle.rows.as_slice()
@@ -1258,10 +1267,17 @@ impl Editor {
         }
         self.end_stroke();
         self.shape_preview = None;
+        let face = self.write_face();
+        for atom in rectangle.rows.iter_mut().flatten() {
+            if !atom.contents.chars().all(char::is_whitespace) {
+                atom.face = face.clone();
+            }
+        }
+        self.commit_canvas();
         self.canvas
-            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
-        overwrite_rectangle(&mut self.grid.lines, origin, &rectangle);
-        self.color_written_bounds(bounds);
+            .overwrite_active_rectangle(origin, &rectangle)
+            .expect("pasted text contains one-cell atoms");
+        self.refresh_active_dense_view();
         let active = Coord {
             line: bounds.bottom,
             column: bounds.right,
@@ -1277,7 +1293,9 @@ impl Editor {
             || rectangle.rows.is_empty()
             || rectangle.rows.iter().any(|row| {
                 display_width(row) != rectangle.width
-                    || row.iter().any(|atom| atom.contents.contains('\n'))
+                    || row
+                        .iter()
+                        .any(|atom| atom.contents.contains('\n') || atom.validate_cell().is_err())
             })
         {
             return false;
@@ -1303,9 +1321,11 @@ impl Editor {
             return false;
         }
 
-        self.grid.lines = lines;
+        self.commit_canvas();
         self.canvas
-            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
+            .overwrite_active_rectangle(origin, rectangle)
+            .expect("styled rectangle contains one-cell atoms");
+        self.refresh_active_dense_view();
         self.selection.collapse(origin);
         self.grid.cursor_pos = origin;
         self.cursor_index = index_for_column(&self.grid.lines[origin.line], origin.column);
@@ -3094,15 +3114,15 @@ mod tests {
     }
 
     #[test]
-    fn paste_expands_grid_and_preserves_wide_source_graphemes() {
+    fn paste_rejects_wide_source_graphemes_transactionally() {
         let mut state = state();
         state.move_to(Coord { line: 2, column: 3 });
-        assert!(state.paste_text_rectangle("😀\r\nq"));
-        assert_eq!(state.grid.lines.len(), 4);
-        assert_eq!(state.selected_text(), "😀\nq ");
-        assert_eq!(state.selection_bounds().width(), 2);
-        assert_eq!(state.selection_bounds().height(), 2);
-        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
+        let before = state.edit_snapshot();
+
+        assert!(!state.paste_text_rectangle("😀\r\nq"));
+
+        assert_eq!(state.edit_snapshot(), before);
+        assert!(state.transient_tip().is_some());
     }
 
     #[test]

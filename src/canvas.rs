@@ -457,6 +457,33 @@ impl LayerMap {
         Ok(())
     }
 
+    pub(crate) fn overwrite_rectangle(
+        &mut self,
+        origin: Coord,
+        rectangle: &TextRectangle,
+    ) -> Result<()> {
+        for (row_offset, row) in rectangle.rows.iter().enumerate() {
+            let line = origin
+                .line
+                .checked_add(row_offset)
+                .context("rectangle exceeds canvas height")?;
+            self.ensure_row_width(line, origin.column.saturating_add(rectangle.width));
+            for (column_offset, atom) in row.iter().enumerate() {
+                atom.validate_cell()?;
+                let column = origin
+                    .column
+                    .checked_add(column_offset)
+                    .context("rectangle exceeds canvas width")?;
+                let x = i16::try_from(column).context("rectangle column exceeds signed range")?;
+                let y = i16::try_from(line).context("rectangle line exceeds signed range")?;
+                self.delete_at(x, y);
+                self.set_at(x, y, atom.clone(), &atom.face)?;
+            }
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
     pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<Atom>]) -> Result<Self> {
         for atom in lines.iter().flatten() {
             for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
@@ -739,6 +766,16 @@ impl LayerStack {
         replacement: Option<(Atom, Face)>,
     ) -> Result<()> {
         self.layers[self.active].replace_bounds(bounds, replacement)?;
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn overwrite_active_rectangle(
+        &mut self,
+        origin: Coord,
+        rectangle: &TextRectangle,
+    ) -> Result<()> {
+        self.layers[self.active].overwrite_rectangle(origin, rectangle)?;
         self.recalculate_bounds();
         Ok(())
     }
