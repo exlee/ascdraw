@@ -111,8 +111,12 @@ module FpsBenchmark
 
   def run_scenarios(client, warmup, operations, name_prefix = "")
     reports = []
+    scroll_directions = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]]
+    scroll_direction = 0
     reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
-      client.request(command: "scroll", x: 0.0, y: -1.0, steps: 1)
+      x, y = scroll_directions[scroll_direction]
+      scroll_direction = (scroll_direction + 1) % scroll_directions.length
+      client.request(command: "scroll", x: x, y: y, steps: 1)
     end
 
     client.request(command: "key", key: "i", count: 1)
