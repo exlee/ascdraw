@@ -237,7 +237,6 @@ pub(super) fn render(
     content: &[Coord],
     viewport: VisibleCanvasCells,
     panel: ScreenRect,
-    cell_metrics: &CellMetrics,
     border_metrics: &CellMetrics,
     default_face: &ResolvedFace,
 ) {
@@ -269,8 +268,8 @@ pub(super) fn render(
         content_panel,
         canvas_bounds,
         required_bounds,
-        cell_metrics.cell_width / 8.0,
-        cell_metrics.cell_height / 8.0,
+        border_metrics.cell_width / 4.0,
+        border_metrics.cell_height / 4.0,
     ) else {
         return;
     };

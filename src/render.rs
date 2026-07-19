@@ -349,7 +349,6 @@ fn render_canvas(
         content,
         visible_cells,
         minimap_panel,
-        metrics,
         toolbar_metrics,
         &default_face,
     );
