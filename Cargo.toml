@@ -10,6 +10,7 @@ repository = "https://github.com/exlee/ascdraw"
 homepage = "https://github.com/exlee/ascdraw"
 keywords = ["ascii-art", "diagram", "editor", "unicode"]
 categories = ["graphics", "text-editors"]
+default-run = "ascdraw"
 
 [package.metadata.bundle]
 name = "Ascdraw"
