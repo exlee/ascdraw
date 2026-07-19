@@ -2247,6 +2247,15 @@ mod tests {
             ),
             "  B"
         );
+        let sparse_preview = state
+            .move_lift_render_canvas()
+            .expect("one-cell move has a sparse preview");
+        let upper_preview = sparse_preview
+            .layers()
+            .iter()
+            .find(|layer| layer.id == upper)
+            .expect("upper preview layer");
+        assert_eq!(contents(&upper_preview.to_dense()[0]), "  B");
         assert!(state.confirm_move_lift());
 
         let views = state.layer_views();

@@ -310,41 +310,24 @@ fn render_canvas(
         .saturating_add(visible_cells.columns)
         .saturating_add(2);
     let line_preview = state.preview_render_lines();
-    let sparse_line_preview = (!state.move_lift_active())
+    let sparse_move_preview = state.move_lift_render_canvas();
+    let sparse_line_preview = sparse_move_preview
+        .is_none()
         .then(|| state.line_preview_render_canvas())
         .flatten();
-    let shape_preview_canvas = sparse_line_preview
-        .is_none()
+    let shape_preview_canvas = (sparse_move_preview.is_none() && sparse_line_preview.is_none())
         .then(|| state.shape_preview_canvas())
         .flatten();
-    let sparse_preview_canvas = sparse_line_preview.or(shape_preview_canvas.as_ref());
+    let sparse_preview_canvas = sparse_move_preview
+        .or(sparse_line_preview)
+        .or(shape_preview_canvas.as_ref());
     let preview_lines = (sparse_preview_canvas.is_none() && line_preview.is_none())
         .then(|| state.lines_with_shape_preview())
         .flatten();
     let active_lines = line_preview
         .or(preview_lines.as_deref())
         .unwrap_or(&state.grid.lines);
-    let active_layer = state.active_layer_id();
-    let layer_views = state.layer_views();
-    let layers = layer_views
-        .iter()
-        .filter(|layer| layer.visible)
-        .map(|layer| {
-            state
-                .move_lift_render_lines_for_layer(layer.id)
-                .unwrap_or_else(|| {
-                    if layer.id == active_layer {
-                        active_lines
-                    } else {
-                        &layer.lines
-                    }
-                })
-        })
-        .collect::<Vec<_>>();
-    if !state.move_lift_active()
-        && preview_lines.is_none()
-        && (sparse_preview_canvas.is_some() || state.canvas_is_current())
-    {
+    if preview_lines.is_none() && (sparse_preview_canvas.is_some() || state.canvas_is_current()) {
         render_cached_sparse_grid_atoms(
             canvas,
             sparse_preview_canvas.unwrap_or_else(|| state.canvas()),
@@ -360,6 +343,23 @@ fn render_canvas(
             rendered_atom_cache,
         );
     } else {
+        let active_layer = state.active_layer_id();
+        let layer_views = state.layer_views();
+        let layers = layer_views
+            .iter()
+            .filter(|layer| layer.visible)
+            .map(|layer| {
+                state
+                    .move_lift_render_lines_for_layer(layer.id)
+                    .unwrap_or_else(|| {
+                        if layer.id == active_layer {
+                            active_lines
+                        } else {
+                            &layer.lines
+                        }
+                    })
+            })
+            .collect::<Vec<_>>();
         render_cached_grid_atoms(
             canvas,
             &layers,

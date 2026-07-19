@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::canvas::LineData;
+use crate::canvas::{LayerMap, LayerStack, LineData};
 use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
@@ -23,6 +23,7 @@ pub(super) struct MoveLift {
     last_clone_press: Option<u64>,
     rectangle: TextRectangle,
     layers: Vec<LiftedLayer>,
+    rendered_canvas: Option<LayerStack>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +120,7 @@ impl Editor {
                 width: source_bounds.width(),
             },
             layers,
+            rendered_canvas: None,
         });
         self.refresh_move_lift_render();
         true
@@ -277,36 +279,7 @@ impl Editor {
                         return;
                     };
                     let before = map.clone();
-                    for atom in &layer.edited_atoms {
-                        map.replace_bounds(lifted_atom_bounds(source_origin, atom), None)
-                            .expect("move source fits the sparse canvas");
-                        for origin in &destinations {
-                            map.replace_bounds(lifted_atom_bounds(*origin, atom), None)
-                                .expect("move destination fits the sparse canvas");
-                        }
-                    }
-                    for origin in &destinations {
-                        for atom in &layer.edited_atoms {
-                            let coord = offset_origin(*origin, atom.offset);
-                            map.set_at(
-                                i16::try_from(coord.column).expect("validated move column"),
-                                i16::try_from(coord.line).expect("validated move line"),
-                                atom.atom.clone(),
-                                &atom.atom.face,
-                            )
-                            .expect("moved atom occupies one sparse cell");
-                        }
-                        for marker in &layer.markers {
-                            let coord = offset_origin(*origin, marker.coord);
-                            map.set_line_at(
-                                coord,
-                                LineData {
-                                    ending: marker.ending,
-                                    base_glyph: marker.base_glyph.clone(),
-                                },
-                            );
-                        }
-                    }
+                    apply_sparse_move(map, source_origin, &destinations, layer);
                     changed |= *map != before;
                 })
                 .expect("move remains inside the sparse canvas");
@@ -353,6 +326,12 @@ impl Editor {
         })
     }
 
+    pub(crate) fn move_lift_render_canvas(&self) -> Option<&LayerStack> {
+        self.move_lift
+            .as_ref()
+            .and_then(|lift| lift.rendered_canvas.as_ref())
+    }
+
     fn refresh_move_lift_render(&mut self) {
         let Some(lift) = self.move_lift.as_ref() else {
             return;
@@ -363,6 +342,21 @@ impl Editor {
         };
         let destinations = move_lift_destinations(lift);
         let contents = self.layer_contents();
+        let mut rendered_canvas = (!lift
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.edited_atoms)
+            .any(|atom| atom.width != 1))
+        .then(|| self.canvas.clone());
+        if let Some(canvas) = rendered_canvas.as_mut() {
+            canvas
+                .for_each_layer_mut(&self.grid.lines, |id, map| {
+                    if let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) {
+                        apply_sparse_move(map, source_origin, &destinations, layer);
+                    }
+                })
+                .expect("move preview remains inside the sparse canvas");
+        }
         let lift = self
             .move_lift
             .as_mut()
@@ -379,6 +373,7 @@ impl Editor {
                 &layer.edited_atoms,
             );
         }
+        lift.rendered_canvas = rendered_canvas;
     }
 
     fn restore_move_lift_source(&mut self, lift: MoveLift) {
@@ -388,6 +383,44 @@ impl Editor {
         );
         self.restore_edit_snapshot(lift.source_snapshot);
         self.pending_prepend = prefix_shift;
+    }
+}
+
+fn apply_sparse_move(
+    map: &mut LayerMap,
+    source_origin: Coord,
+    destinations: &[Coord],
+    layer: &LiftedLayer,
+) {
+    for atom in &layer.edited_atoms {
+        map.replace_bounds(lifted_atom_bounds(source_origin, atom), None)
+            .expect("move source fits the sparse canvas");
+        for origin in destinations {
+            map.replace_bounds(lifted_atom_bounds(*origin, atom), None)
+                .expect("move destination fits the sparse canvas");
+        }
+    }
+    for origin in destinations {
+        for atom in &layer.edited_atoms {
+            let coord = offset_origin(*origin, atom.offset);
+            map.set_at(
+                i16::try_from(coord.column).expect("validated move column"),
+                i16::try_from(coord.line).expect("validated move line"),
+                atom.atom.clone(),
+                &atom.atom.face,
+            )
+            .expect("moved atom occupies one sparse cell");
+        }
+        for marker in &layer.markers {
+            let coord = offset_origin(*origin, marker.coord);
+            map.set_line_at(
+                coord,
+                LineData {
+                    ending: marker.ending,
+                    base_glyph: marker.base_glyph.clone(),
+                },
+            );
+        }
     }
 }
 
