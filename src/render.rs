@@ -1605,7 +1605,7 @@ impl Renderer {
     }
 
     pub fn adjust_font_size(&self, delta: f32) -> bool {
-        const MIN_FONT_SIZE: f32 = 6.0;
+        const MIN_FONT_SIZE: f32 = 4.0;
 
         let next = (self.logical_font_size.get() + delta).max(MIN_FONT_SIZE);
         if (next - self.logical_font_size.get()).abs() < f32::EPSILON {
