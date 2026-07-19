@@ -574,7 +574,7 @@ mod tests {
                 + toolbar.rows() as f32 * cell_height
                 + toolbar.rows().saturating_sub(1) as f32 * crate::toolbar::TOOLBAR_ROW_GAP as f32
         );
-        assert_eq!(grid_top, 198.0);
+        assert_eq!(grid_top, 218.0);
     }
 
     #[test]

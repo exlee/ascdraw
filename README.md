@@ -172,7 +172,7 @@ The first held modifier chooses an operation. The second chooses how far it trav
 
 Space fills the current selection with the active stamp. Ctrl + direction stamps continuously
 while moving. The bundled inventory includes decorators, directional arrows, grey fills, and
-quadrant blocks.
+quadrant and fractional blocks.
 
 ### Line
 

@@ -305,12 +305,19 @@ const ARROW_ROTATIONS: [[&str; 4]; 6] = [
     ["↕", "↕", "↔", "↔"],
 ];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
-const QUADRANT_BLOCKS: [&str; 15] = [
-    "▘", "▝", "▖", "▗", "▌", "▐", "▞", "▚", "▛", "▜", "▙", "▟", "▀", "▄", "█",
+const STAMP_DECORATORS: [&str; 25] = [
+    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "◯", "Ø", "ø", "╳", "╱", "╲", "÷", "×",
+    "±", "¤", "◇", "☆", "★", "※",
 ];
+const BLOCKS: [&str; 29] = [
+    "▘", "▝", "▖", "▗", "▌", "▐", "▞", "▚", "▛", "▜", "▙", "▟", "▀", "▄", "█", "▏", "▎", "▍", "▋",
+    "▊", "▉", "▔", "▁", "▂", "▃", "▅", "▆", "▇", "▕",
+];
+const BLOCK_PAGE_LENGTHS: [usize; 4] = [10, 5, 7, 7];
+const STAMP_PAGE_LENGTHS: [Option<&[usize]>; 4] = [None, None, None, Some(&BLOCK_PAGE_LENGTHS)];
 
 const STAMP_LABELS: [&str; 4] = ["Decorators", "Arrows", "Fills", "Blocks"];
-const STAMP_OPTIONS: [&[&str]; 4] = [&DECORATORS, &ARROWS, &GREY_SHADING, &QUADRANT_BLOCKS];
+const STAMP_OPTIONS: [&[&str]; 4] = [&STAMP_DECORATORS, &ARROWS, &GREY_SHADING, &BLOCKS];
 const SHAPE_LABELS: [&str; 3] = ["Shape", "Line", "Fill"];
 const SHAPE_OPTIONS: [&[&str]; 3] = [
     &["Rect", "Round"],
@@ -436,6 +443,32 @@ struct MenuLayout<'a> {
     options: &'a [&'a [&'a str]],
     selected: &'a [usize],
     exclusive_submenu: Option<usize>,
+    page_lengths: &'a [Option<&'a [usize]>],
+}
+
+impl MenuLayout<'_> {
+    fn page_ranges(&self, category: usize) -> Vec<std::ops::Range<usize>> {
+        let option_count = self
+            .options
+            .get(category)
+            .map_or(0, |options| options.len());
+        let Some(lengths) = self.page_lengths.get(category).copied().flatten() else {
+            return (0..option_count)
+                .step_by(OPTIONS_PER_PAGE)
+                .map(|start| start..(start + OPTIONS_PER_PAGE).min(option_count))
+                .collect();
+        };
+        debug_assert_eq!(lengths.iter().sum::<usize>(), option_count);
+        let mut start = 0;
+        lengths
+            .iter()
+            .map(|length| {
+                let range = start..start + length;
+                start = range.end;
+                range
+            })
+            .collect()
+    }
 }
 
 impl ToolbarState {
@@ -530,11 +563,11 @@ impl ToolbarState {
                 }
             }
             Some(PendingShortcut::Category(category)) => {
-                let option_count = self
+                let page_ranges = self
                     .layout()
-                    .and_then(|layout| layout.options.get(category))
-                    .map_or(0, |options| options.len());
-                match category_shortcut(option_count, digit) {
+                    .map(|layout| layout.page_ranges(category))
+                    .unwrap_or_default();
+                match category_shortcut(&page_ranges, digit) {
                     Some(CategoryShortcut::Select(option)) => {
                         self.apply_action(ToolbarAction::SelectSubmenu {
                             submenu: category,
@@ -549,11 +582,16 @@ impl ToolbarState {
             }
             Some(PendingShortcut::Option { category, page }) => {
                 let position = shortcut_position(digit);
-                let option = page * OPTIONS_PER_PAGE + position;
-                self.apply_action(ToolbarAction::SelectSubmenu {
-                    submenu: category,
-                    option,
-                });
+                if let Some(option) = self
+                    .layout()
+                    .and_then(|layout| layout.page_ranges(category).get(page).cloned())
+                    .and_then(|range| (position < range.len()).then_some(range.start + position))
+                {
+                    self.apply_action(ToolbarAction::SelectSubmenu {
+                        submenu: category,
+                        option,
+                    });
+                }
             }
             Some(PendingShortcut::ExportCategory) => {
                 if digit == 0 {
@@ -812,9 +850,7 @@ impl ToolbarState {
     }
 
     pub fn content_rows_for_width(&self, box_width: usize) -> usize {
-        MENU_FIRST_ROW
-            + self.menu_row_count_for_width(box_width)
-            + usize::from(self.auxiliary_panels_visible())
+        MENU_FIRST_ROW + self.menu_row_count_for_width(box_width)
     }
 
     #[cfg(test)]
@@ -1320,6 +1356,7 @@ impl ToolbarState {
                     options: &LINE_DISPLAY_OPTIONS[..category_count],
                     selected: &self.line_selected[..category_count],
                     exclusive_submenu: None,
+                    page_lengths: &[],
                 })
             }
             MainMode::Stamp => Some(MenuLayout {
@@ -1327,12 +1364,14 @@ impl ToolbarState {
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
                 exclusive_submenu: Some(self.stamp_active_category),
+                page_lengths: &STAMP_PAGE_LENGTHS,
             }),
             MainMode::Shapes => Some(MenuLayout {
                 labels: &SHAPE_LABELS,
                 options: &SHAPE_OPTIONS,
                 selected: &self.shape_selected,
                 exclusive_submenu: None,
+                page_lengths: &[],
             }),
             MainMode::Utilities => None,
         }
@@ -1422,8 +1461,8 @@ fn menu_prefix_width<'a>(label: &str, paths: impl IntoIterator<Item = &'a str>) 
         .unwrap_or(0)
 }
 
-fn submenu_path(category: usize, page: usize, option_count: usize) -> String {
-    if option_count <= OPTIONS_PER_PAGE {
+fn submenu_path_for_pages(category: usize, page: usize, page_count: usize) -> String {
+    if page_count <= 1 {
         format!("{}.", category + 2)
     } else {
         format!("{}.{}.", category + 2, page + 1)
@@ -1432,14 +1471,22 @@ fn submenu_path(category: usize, page: usize, option_count: usize) -> String {
 
 fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
     let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
+    submenu_prefix_width_for_pages(label, category, page_count)
+}
+
+fn submenu_prefix_width_for_pages(label: &str, category: usize, page_count: usize) -> usize {
     let paths: Vec<_> = (0..page_count)
-        .map(|page| submenu_path(category, page, option_count))
+        .map(|page| submenu_path_for_pages(category, page, page_count))
         .collect();
     menu_prefix_width(label, paths.iter().map(String::as_str))
 }
 
 fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
     let columns = submenu_option_column_widths(options);
+    submenu_cell_width_for_columns(prefix_width, &columns)
+}
+
+fn submenu_cell_width_for_columns(prefix_width: usize, columns: &[usize]) -> usize {
     prefix_width + columns.iter().sum::<usize>() + columns.len().saturating_sub(1)
 }
 
@@ -1448,6 +1495,26 @@ fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
     for (index, option) in options.iter().enumerate() {
         widths[index % OPTIONS_PER_PAGE] =
             widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
+    }
+    widths
+}
+
+fn submenu_option_column_widths_for_pages(
+    options: &[&str],
+    page_ranges: &[std::ops::Range<usize>],
+) -> Vec<usize> {
+    let mut widths = vec![
+        0;
+        page_ranges
+            .iter()
+            .map(std::ops::Range::len)
+            .max()
+            .unwrap_or(0)
+    ];
+    for range in page_ranges {
+        for (position, option) in options[range.clone()].iter().enumerate() {
+            widths[position] = widths[position].max(UnicodeWidthStr::width(*option));
+        }
     }
     widths
 }
@@ -1473,14 +1540,19 @@ fn shortcut_digit(text: &str) -> Option<usize> {
     }
 }
 
-fn category_shortcut(option_count: usize, digit: usize) -> Option<CategoryShortcut> {
-    if option_count <= OPTIONS_PER_PAGE {
+fn category_shortcut(
+    page_ranges: &[std::ops::Range<usize>],
+    digit: usize,
+) -> Option<CategoryShortcut> {
+    if page_ranges.len() == 1 {
         let option = shortcut_position(digit);
-        (option < option_count).then_some(CategoryShortcut::Select(option))
+        page_ranges[0]
+            .contains(&option)
+            .then_some(CategoryShortcut::Select(option))
     } else {
         digit
             .checked_sub(1)
-            .filter(|page| page * OPTIONS_PER_PAGE < option_count)
+            .filter(|page| *page < page_ranges.len())
             .map(CategoryShortcut::Page)
     }
 }
@@ -1795,9 +1867,9 @@ mod tests {
     fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
-        assert_eq!(toolbar.menu_row_count(), 4);
-        assert_eq!(toolbar.content_rows(), 7);
-        assert_eq!(toolbar.rows(), 9);
+        assert_eq!(toolbar.menu_row_count(), 5);
+        assert_eq!(toolbar.content_rows(), 8);
+        assert_eq!(toolbar.rows(), 10);
         assert_eq!(
             toolbar_height(&toolbar, 18.0),
             toolbar.rows() as f32 * 18.0
@@ -1805,9 +1877,9 @@ mod tests {
         );
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
-        assert_eq!(toolbar.menu_row_count(), 4);
-        assert_eq!(toolbar.content_rows(), 7);
-        assert_eq!(toolbar.rows(), 9);
+        assert_eq!(toolbar.menu_row_count(), 5);
+        assert_eq!(toolbar.content_rows(), 8);
+        assert_eq!(toolbar.rows(), 10);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Shapes));
         assert_eq!(toolbar.menu_row_count(), 2);
@@ -1816,6 +1888,18 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         assert_eq!(toolbar.menu_row_count(), 1);
         assert_eq!(toolbar.rows(), 6);
+    }
+
+    #[test]
+    fn bottom_border_follows_the_last_auxiliary_panel_row() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Shapes));
+        toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+
+        assert_eq!(toolbar.menu_row_count(), 3);
+        assert_eq!(toolbar.content_rows(), 6);
+        assert_eq!(toolbar.rows(), 8);
+        assert!(!toolbar.toolbar_spans(toolbar.content_rows() - 1).is_empty());
     }
 
     #[test]
@@ -2117,11 +2201,14 @@ mod tests {
     #[test]
     fn a_ten_option_category_flattens_and_maps_zero_to_the_tenth_option() {
         assert_eq!(
-            category_shortcut(OPTIONS_PER_PAGE, 0),
+            category_shortcut(&[0..OPTIONS_PER_PAGE], 0),
             Some(CategoryShortcut::Select(9))
         );
         assert_eq!(
-            category_shortcut(OPTIONS_PER_PAGE + 1, 1),
+            category_shortcut(
+                &[0..OPTIONS_PER_PAGE, OPTIONS_PER_PAGE..OPTIONS_PER_PAGE + 1],
+                1
+            ),
             Some(CategoryShortcut::Page(0))
         );
     }
@@ -2140,10 +2227,13 @@ mod tests {
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("3.1. △ ▽ ◁ ▷ ▲ ▼ ◀ ▶ ↑ ↓"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("4. ░ ▒ ▓ █"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 1).contains("5.1. ▘ ▝ ▖ ▗ ▌ ▐ ▞ ▚ ▛ ▜"));
-        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ Ø ø ╳ ╱ ╲ ÷ × ± ¤"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("2.2. ◦ ◯ Ø ø ╳ ╱ ╲ ÷ × ±"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("3.2. ← → ▵ ▿ ◃ ▹ ▴ ▾ ◂ ▸"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 2).contains("5.2. ▙ ▟ ▀ ▄ █"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("2.3. ¤ ◇ ☆ ★ ※"));
         assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("3.3. ↕ ↔"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 3).contains("5.3. ▏ ▎ ▍ ▋ ▊ ▉ ▔"));
+        assert!(row(&toolbar, MENU_FIRST_ROW + 4).contains("5.4. ▁ ▂ ▃ ▅ ▆ ▇ ▕"));
     }
 
     #[test]
@@ -2186,6 +2276,46 @@ mod tests {
             category_cell_text(&toolbar, MENU_FIRST_ROW + 2, 3).trim_end(),
             "   5.2. ▙ ▟ ▀ ▄ █"
         );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 3, 3).trim_end(),
+            "   5.3. ▏ ▎ ▍ ▋ ▊ ▉ ▔"
+        );
+        assert_eq!(
+            category_cell_text(&toolbar, MENU_FIRST_ROW + 4, 3).trim_end(),
+            "   5.4. ▁ ▂ ▃ ▅ ▆ ▇ ▕"
+        );
+    }
+
+    #[test]
+    fn short_stamp_pages_have_no_selectable_placeholder_options() {
+        let mut toolbar = ToolbarState::default();
+        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
+
+        for (page, option_count) in BLOCK_PAGE_LENGTHS.into_iter().enumerate() {
+            let actions = toolbar
+                .toolbar_spans(MENU_FIRST_ROW + page + 1)
+                .into_iter()
+                .filter(|span| {
+                    matches!(
+                        span.action,
+                        Some(ToolbarAction::SelectSubmenu { submenu: 3, .. })
+                    )
+                })
+                .count();
+            assert_eq!(actions, option_count);
+        }
+
+        for key in ["5", "2", "6"] {
+            press(&mut toolbar, key);
+        }
+        assert_eq!(toolbar.stamp(), "□");
+
+        for (path, expected) in [(["5", "3", "1"], "▏"), (["5", "4", "7"], "▕")] {
+            for key in path {
+                press(&mut toolbar, key);
+            }
+            assert_eq!(toolbar.stamp(), expected);
+        }
     }
 
     #[test]
@@ -2270,12 +2400,7 @@ mod tests {
                 assert!(rows[header_row - 1].is_empty());
                 assert_eq!(
                     header_row,
-                    header_rows[category - 1]
-                        + 1
-                        + layout.options[category - 1]
-                            .len()
-                            .div_ceil(OPTIONS_PER_PAGE)
-                        + 1
+                    header_rows[category - 1] + 1 + layout.page_ranges(category - 1).len() + 1
                 );
             }
         }
@@ -2323,23 +2448,24 @@ mod tests {
                 })
                 .collect();
 
-            for (category, (options, expected)) in
+            for (category, (_options, expected)) in
                 layout.options.iter().zip(expected.iter()).enumerate()
             {
                 assert_eq!(spans_text(&header).chars().nth(expected.1), Some('1'));
-                for page in 0..options.len().div_ceil(OPTIONS_PER_PAGE) {
+                let page_ranges = layout.page_ranges(category);
+                for (page, range) in page_ranges.iter().enumerate() {
                     let page_spans = toolbar.toolbar_spans(MENU_FIRST_ROW + page + 1);
-                    let path = submenu_path(category, page, options.len());
-                    let prefix_width =
-                        submenu_prefix_width(layout.labels[category], category, options.len());
+                    let path = submenu_path_for_pages(category, page, page_ranges.len());
+                    let prefix_width = submenu_prefix_width_for_pages(
+                        layout.labels[category],
+                        category,
+                        page_ranges.len(),
+                    );
                     assert_eq!(
                         path_cell_start(&page_spans, &path, prefix_width),
                         expected.0
                     );
-                    assert_eq!(
-                        option_start(&page_spans, category, page * OPTIONS_PER_PAGE),
-                        expected.1
-                    );
+                    assert_eq!(option_start(&page_spans, category, range.start), expected.1);
                 }
             }
         }
@@ -3345,6 +3471,10 @@ mod tests {
         assert_eq!(&DECORATORS[..6], SQUARES_AND_DIAMONDS);
         assert_eq!(&DECORATORS[6..13], DOTS_AND_CIRCLES);
         assert_eq!(&DECORATORS[13..], CROSSES_AND_OPERATORS);
+        assert_eq!(
+            STAMP_DECORATORS.iter().copied().collect::<String>(),
+            "□■▫▪◆◊·∙•●◦◯Øø╳╱╲÷×±¤◇☆★※"
+        );
         assert_eq!(ARROWS.len(), 22);
         assert_eq!(
             ARROWS.iter().copied().collect::<String>(),
@@ -3352,8 +3482,8 @@ mod tests {
         );
         assert_eq!(GREY_SHADING.iter().copied().collect::<String>(), "░▒▓█");
         assert_eq!(
-            QUADRANT_BLOCKS.iter().copied().collect::<String>(),
-            "▘▝▖▗▌▐▞▚▛▜▙▟▀▄█"
+            BLOCKS.iter().copied().collect::<String>(),
+            "▘▝▖▗▌▐▞▚▛▜▙▟▀▄█▏▎▍▋▊▉▔▁▂▃▅▆▇▕"
         );
 
         let counts =
@@ -3364,7 +3494,7 @@ mod tests {
                     *counts.entry(*symbol).or_insert(0) += 1;
                     counts
                 });
-        assert_eq!(counts.len(), 60);
+        assert_eq!(counts.len(), 79);
         assert_eq!(counts.get("█"), Some(&2));
         assert!(
             counts
@@ -3389,11 +3519,14 @@ mod tests {
     }
 
     #[test]
-    fn stars_excluded_decorations_ascii_and_connected_lines_are_not_stamps() {
+    fn unsupported_decorations_ascii_and_connected_lines_are_not_stamps() {
         let stamps: Vec<_> = STAMP_OPTIONS.into_iter().flatten().copied().collect();
-        for excluded in [
-            "☆", "★", "○", "◇", "※", "▁", "▂", "▃", "▅", "▆", "▇", "▊", "▉",
+        for included in [
+            "◯", "◇", "☆", "★", "※", "▁", "▂", "▃", "▅", "▆", "▇", "▊", "▉", "▔", "▕",
         ] {
+            assert!(stamps.contains(&included), "stamp {included:?}");
+        }
+        for excluded in ["○"] {
             assert!(
                 !stamps.contains(&excluded),
                 "excluded decoration {excluded:?}"

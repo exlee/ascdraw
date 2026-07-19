@@ -3526,6 +3526,9 @@ mod tests {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = Editor::new(&config.theme, "test");
+        state
+            .toolbar
+            .apply_action(ToolbarAction::SelectMain(MainMode::Line));
         let initial = ViewportOffset { x: 21, y: -37 };
         let mut viewport = initial;
 

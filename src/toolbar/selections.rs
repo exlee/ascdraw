@@ -339,7 +339,7 @@ mod tests {
         let mut source = ToolbarState::default();
         for (mode, selections) in [
             (MainMode::Line, &[26, 25, 3, 4, 1][..]),
-            (MainMode::Stamp, &[19, 21, 3, 14][..]),
+            (MainMode::Stamp, &[24, 21, 3, 28][..]),
             (MainMode::Shapes, &[1, 2, 4][..]),
         ] {
             source.apply_action(ToolbarAction::SelectMain(mode));

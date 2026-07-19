@@ -121,7 +121,7 @@ mod tests {
                 "9.2. ■ ■ ■ ■ ■ ■ ■ ■",
             ]
         );
-        assert_eq!(toolbar.menu_row_count(), 4);
+        assert_eq!(toolbar.menu_row_count(), 5);
 
         let colors = (1..3)
             .flat_map(|row| toolbar.color_panel_spans(row))

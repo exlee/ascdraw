@@ -195,7 +195,7 @@ mod tests {
             rows.iter()
                 .all(|row| UnicodeWidthStr::width(row.as_str()) == row.chars().count())
         );
-        assert_eq!(toolbar.menu_row_count(), 4);
+        assert_eq!(toolbar.menu_row_count(), 5);
     }
 
     #[test]

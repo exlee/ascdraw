@@ -64,25 +64,35 @@ fn category_block(toolbar: &ToolbarState, category: usize) -> MenuBlock {
         .layout()
         .expect("hierarchical menu layout excludes Utilities");
     let options = layout.options[category];
-    let prefix_width = submenu_prefix_width(layout.labels[category], category, options.len());
-    let width = submenu_cell_width(prefix_width, options);
-    let mut rows = Vec::with_capacity(1 + options.len().div_ceil(OPTIONS_PER_PAGE));
+    let page_ranges = layout.page_ranges(category);
+    let prefix_width =
+        submenu_prefix_width_for_pages(layout.labels[category], category, page_ranges.len());
+    let column_widths = submenu_option_column_widths_for_pages(options, &page_ranges);
+    let width = submenu_cell_width_for_columns(prefix_width, &column_widths);
+    let mut rows = Vec::with_capacity(1 + page_ranges.len());
     let mut header = Vec::new();
-    push_header(&mut header, layout.labels[category], prefix_width, options);
+    push_header(
+        &mut header,
+        layout.labels[category],
+        prefix_width,
+        &column_widths,
+    );
     pad_spans_to_width(&mut header, width);
     rows.push(header);
-    for page in 0..options.len().div_ceil(OPTIONS_PER_PAGE) {
+    for (page, range) in page_ranges.iter().cloned().enumerate() {
         let mut row = Vec::new();
         push_page(
             &mut row,
             toolbar,
             category,
             page,
+            page_ranges.len(),
             prefix_width,
             options,
+            range,
+            &column_widths,
             layout.selected[category],
             layout.exclusive_submenu,
-            width,
         );
         pad_spans_to_width(&mut row, width);
         rows.push(row);
@@ -139,14 +149,13 @@ fn block_placements(
     placements
 }
 
-fn push_header(spans: &mut Vec<ToolbarSpan>, label: &str, prefix_width: usize, options: &[&str]) {
+fn push_header(spans: &mut Vec<ToolbarSpan>, label: &str, prefix_width: usize, widths: &[usize]) {
     let label = format!("{label}:");
     spans.push(bold_prefix_span(
         pad_right_to_width(label.clone(), prefix_width),
         &label,
     ));
-    let widths = submenu_option_column_widths(options);
-    for (position, width) in widths.into_iter().enumerate() {
+    for (position, width) in widths.iter().copied().enumerate() {
         push_separator(spans, position);
         spans.push(plain_span(pad_right_to_width(
             ((position + 1) % OPTIONS_PER_PAGE).to_string(),
@@ -161,18 +170,15 @@ fn push_page(
     toolbar: &ToolbarState,
     category: usize,
     page: usize,
+    page_count: usize,
     prefix_width: usize,
     options: &[&str],
+    range: std::ops::Range<usize>,
+    widths: &[usize],
     selected: usize,
     exclusive_submenu: Option<usize>,
-    cell_width: usize,
 ) {
-    let page_start = page * OPTIONS_PER_PAGE;
-    if page_start >= options.len() {
-        spans.push(plain_span(" ".repeat(cell_width)));
-        return;
-    }
-    let path = submenu_path(category, page, options.len());
+    let path = submenu_path_for_pages(category, page, page_count);
     let highlighted_prefix = match toolbar.pending_shortcut() {
         Some(PendingShortcut::Category(pending)) if pending == category => {
             Some(format!("{}.", category + 2))
@@ -185,16 +191,11 @@ fn push_page(
     };
     push_shortcut_path(spans, &path, prefix_width, highlighted_prefix.as_deref());
 
-    let widths = submenu_option_column_widths(options);
-    for (position, option) in options[page_start..]
-        .iter()
-        .take(OPTIONS_PER_PAGE)
-        .enumerate()
-    {
+    for (position, option_index) in range.enumerate() {
+        let option = options[option_index];
         push_separator(spans, position);
-        let option_index = page_start + position;
         spans.push(ToolbarSpan {
-            contents: (*option).to_string(),
+            contents: option.to_string(),
             bold_prefix: 0,
             selected: option_index == selected
                 && exclusive_submenu.is_none_or(|active| active == category),
@@ -207,7 +208,7 @@ fn push_page(
             right_aligned: false,
             foreground: None,
         });
-        let padding = widths[position].saturating_sub(UnicodeWidthStr::width(*option));
+        let padding = widths[position].saturating_sub(UnicodeWidthStr::width(option));
         if padding > 0 {
             spans.push(plain_span(" ".repeat(padding)));
         }
