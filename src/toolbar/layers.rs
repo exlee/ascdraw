@@ -18,12 +18,13 @@ pub enum LayerOperation {
     Delete,
 }
 
+// Rows are listed bottom-to-top, so moving upward on screen lowers the stack index.
 const GRID_OPERATIONS: [LayerOperation; 7] = [
     LayerOperation::Select,
     LayerOperation::Select,
     LayerOperation::Show,
-    LayerOperation::MoveUp,
     LayerOperation::MoveDown,
+    LayerOperation::MoveUp,
     LayerOperation::New,
     LayerOperation::Delete,
 ];
@@ -251,8 +252,8 @@ mod tests {
             (2, 1, LayerOperation::Select),
             (2, 2, LayerOperation::Select),
             (2, 3, LayerOperation::Show),
-            (2, 4, LayerOperation::MoveUp),
-            (3, 5, LayerOperation::MoveDown),
+            (3, 4, LayerOperation::MoveDown),
+            (2, 5, LayerOperation::MoveUp),
             (2, 6, LayerOperation::New),
             (2, 7, LayerOperation::Delete),
         ] {
@@ -296,8 +297,8 @@ mod tests {
                         operation: match column - panel_start {
                             5 | 7 => LayerOperation::Select,
                             9 => LayerOperation::Show,
-                            11 => LayerOperation::MoveUp,
-                            13 => LayerOperation::MoveDown,
+                            11 => LayerOperation::MoveDown,
+                            13 => LayerOperation::MoveUp,
                             15 => LayerOperation::New,
                             17 => LayerOperation::Delete,
                             _ => unreachable!(),

@@ -1568,6 +1568,45 @@ mod tests {
     }
 
     #[test]
+    fn layer_panel_arrows_move_toward_the_displayed_row_direction() {
+        let mut state = state();
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let middle = state.active_layer_id();
+        assert!(state.add_layer_above(middle));
+        let top = state.active_layer_id();
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
+
+        for key in ["8", "3", "4"] {
+            assert!(
+                state.handle_toolbar_shortcut(&Key::Character(key.into()), ModifiersState::empty())
+            );
+        }
+        assert_eq!(
+            state
+                .layer_summaries()
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            [base, top, middle]
+        );
+
+        for key in ["8", "2", "5"] {
+            assert!(
+                state.handle_toolbar_shortcut(&Key::Character(key.into()), ModifiersState::empty())
+            );
+        }
+        assert_eq!(
+            state
+                .layer_summaries()
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            [base, middle, top]
+        );
+    }
+
+    #[test]
     fn clear_and_move_apply_to_every_layer_without_flattening_the_stack() {
         let mut state = state();
         state.grid.lines = lines_from_text("A");
