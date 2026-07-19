@@ -5,7 +5,7 @@ use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
 
 use super::routing::{RouteStep, route_steps};
-use super::{Editor, PlacedLineMarker, adjacent_coord, blank_atom, index_for_column};
+use super::{Editor, adjacent_coord, blank_atom, index_for_column};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutedSegment {
@@ -21,7 +21,7 @@ pub(super) struct LinePreview {
     segments: Vec<RoutedSegment>,
     end: Coord,
     pub(super) source_lines: Vec<Vec<Atom>>,
-    pub(super) source_markers: Vec<PlacedLineMarker>,
+    pub(super) source_canvas: crate::canvas::LayerStack,
     pub(super) source_cursor: Coord,
     pub(super) source_cursor_index: usize,
     pub(super) source_selection: CanvasSelection,
@@ -118,6 +118,7 @@ impl Editor {
         self.shape_preview = None;
         self.cancel_move_lift();
         self.toolbar.cancel_shortcut();
+        self.commit_canvas();
         let source_selection = self.selection;
         self.selection.collapse(self.grid.cursor_pos);
         self.line_preview = Some(LinePreview {
@@ -125,7 +126,7 @@ impl Editor {
             segments: Vec::new(),
             end: self.grid.cursor_pos,
             source_lines: self.grid.lines.clone(),
-            source_markers: self.line_markers.clone(),
+            source_canvas: self.canvas.clone(),
             source_cursor: self.grid.cursor_pos,
             source_cursor_index: self.cursor_index,
             source_selection,
@@ -207,7 +208,7 @@ impl Editor {
         if preview.segments.is_empty() {
             let preview = self.line_preview.take().expect("preview exists");
             self.grid.lines = preview.source_lines;
-            self.line_markers = preview.source_markers;
+            self.canvas = preview.source_canvas;
             self.grid.cursor_pos = preview.source_cursor;
             self.cursor_index = preview.source_cursor_index;
             self.selection = preview.source_selection;
@@ -254,13 +255,12 @@ impl Editor {
         let Some(composed) = self.composed_line_preview_state(include_active) else {
             return false;
         };
-        let changed =
-            self.grid.lines != composed.grid.lines || self.line_markers != composed.line_markers;
+        let changed = self.grid.lines != composed.grid.lines || self.canvas != composed.canvas;
         self.grid.lines = composed.grid.lines;
         self.grid.cursor_pos = composed.grid.cursor_pos;
         self.cursor_index = composed.cursor_index;
         self.selection.collapse(self.grid.cursor_pos);
-        self.line_markers = composed.line_markers;
+        self.canvas = composed.canvas;
         self.canvas_origin = composed.canvas_origin;
         self.active_stroke = None;
         changed
@@ -286,7 +286,7 @@ impl Editor {
         composed.move_lift = None;
         composed.active_stroke = None;
         composed.grid.lines = preview.source_lines.clone();
-        composed.line_markers = preview.source_markers.clone();
+        composed.canvas = preview.source_canvas.clone();
         for _ in 0..lines {
             composed.grid.lines.insert(0, Vec::new());
         }
@@ -295,10 +295,15 @@ impl Editor {
                 line.insert(0, blank_atom());
             }
         }
-        for marker in &mut composed.line_markers {
+        let mut markers = composed.canvas.active_line_markers();
+        for marker in &mut markers {
             marker.coord.line = marker.coord.line.saturating_add(lines);
             marker.coord.column = marker.coord.column.saturating_add(columns);
         }
+        composed
+            .canvas
+            .commit_active_with_markers(&composed.grid.lines, &markers)
+            .expect("line preview contains valid sparse cells");
         composed.canvas_origin = Coord {
             line: preview.source_canvas_origin.line.saturating_add(lines),
             column: preview.source_canvas_origin.column.saturating_add(columns),
@@ -671,12 +676,12 @@ mod tests {
 
         assert!(state.start_or_advance_line_preview());
         assert_eq!(state.grid.lines, preview);
-        assert_eq!(state.line_markers.len(), 2);
-        assert_eq!(state.line_markers[0].coord, Coord::default());
-        assert_eq!(state.line_markers[1].coord, target);
+        assert_eq!(state.line_markers_for_test().len(), 2);
+        assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
+        assert_eq!(state.line_markers_for_test()[1].coord, target);
         assert!(
             state
-                .line_markers
+                .line_markers_for_test()
                 .iter()
                 .all(|marker| marker.ending == LineEnding::Fixed('◆'))
         );
@@ -724,14 +729,20 @@ mod tests {
 
         assert!(state.start_or_advance_line_preview());
         assert_eq!(state.grid.lines, preview);
-        assert_eq!(state.line_markers.len(), 2);
-        assert_eq!(state.line_markers[0].coord, Coord::default());
-        assert_eq!(state.line_markers[0].ending, LineEnding::Fixed('◆'));
-        assert_eq!(state.line_markers[1].coord, endpoint);
-        assert_eq!(state.line_markers[1].ending, LineEnding::Fixed('◊'));
+        assert_eq!(state.line_markers_for_test().len(), 2);
+        assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
+        assert_eq!(
+            state.line_markers_for_test()[0].ending,
+            LineEnding::Fixed('◆')
+        );
+        assert_eq!(state.line_markers_for_test()[1].coord, endpoint);
+        assert_eq!(
+            state.line_markers_for_test()[1].ending,
+            LineEnding::Fixed('◊')
+        );
         assert!(
             !state
-                .line_markers
+                .line_markers_for_test()
                 .iter()
                 .any(|marker| marker.coord == anchor)
         );

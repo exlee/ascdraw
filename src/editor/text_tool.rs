@@ -44,7 +44,7 @@ impl Editor {
             self.cursor_index = self.grid.lines[self.grid.cursor_pos.line]
                 .len()
                 .min(self.cursor_index + inserted_count);
-            self.remap_line_markers_after_edit(line_index, insertion_column, 0, inserted_width);
+            self.remap_line_data_after_edit(line_index, insertion_column, 0, inserted_width);
             if part.ends_with('\n') && self.grid.lines.len() < MAX_CANVAS_HEIGHT {
                 self.newline();
             }
@@ -130,7 +130,7 @@ impl Editor {
                     line.push(atom);
                 }
                 self.cursor_index += 1;
-                self.remap_line_markers_after_edit(
+                self.remap_line_data_after_edit(
                     line_index,
                     replacement_column,
                     removed_width,
@@ -153,9 +153,9 @@ impl Editor {
         let source_line = self.grid.cursor_pos.line;
         let split_column = display_width(&self.grid.lines[source_line][..self.cursor_index]);
         let remainder = self.grid.lines[source_line].split_off(self.cursor_index);
-        self.split_line_markers(source_line, split_column);
         self.grid.cursor_pos.line += 1;
         self.grid.lines.insert(self.grid.cursor_pos.line, remainder);
+        self.split_line_data(source_line, split_column);
         self.cursor_index = 0;
         self.sync_cursor_column();
         self.collapse_selection();
@@ -170,7 +170,7 @@ impl Editor {
             let removal_column = display_width(&self.grid.lines[line_index][..self.cursor_index]);
             let removed_width = atom_width(&self.grid.lines[line_index][self.cursor_index]);
             self.grid.lines[line_index].remove(self.cursor_index);
-            self.remap_line_markers_after_edit(line_index, removal_column, removed_width, 0);
+            self.remap_line_data_after_edit(line_index, removal_column, removed_width, 0);
         } else if self.grid.cursor_pos.line > 0 {
             let removed_line = self.grid.cursor_pos.line;
             if display_width(&self.grid.lines[removed_line - 1])
@@ -184,7 +184,7 @@ impl Editor {
             self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
             let join_column = display_width(&self.grid.lines[self.grid.cursor_pos.line]);
             self.grid.lines[self.grid.cursor_pos.line].extend(current);
-            self.join_line_markers(self.grid.cursor_pos.line, removed_line, join_column);
+            self.join_line_data(self.grid.cursor_pos.line, removed_line, join_column);
         }
         self.sync_cursor_column();
         self.collapse_selection();
@@ -198,7 +198,7 @@ impl Editor {
             let removal_column = display_width(&self.grid.lines[line][..self.cursor_index]);
             let removed_width = atom_width(&self.grid.lines[line][self.cursor_index]);
             self.grid.lines[line].remove(self.cursor_index);
-            self.remap_line_markers_after_edit(line, removal_column, removed_width, 0);
+            self.remap_line_data_after_edit(line, removal_column, removed_width, 0);
         } else if line + 1 < self.grid.lines.len() {
             let removed_line = line + 1;
             if display_width(&self.grid.lines[line])
@@ -210,13 +210,13 @@ impl Editor {
             let join_column = display_width(&self.grid.lines[line]);
             let next = self.grid.lines.remove(line + 1);
             self.grid.lines[line].extend(next);
-            self.join_line_markers(line, removed_line, join_column);
+            self.join_line_data(line, removed_line, join_column);
         }
         self.sync_cursor_column();
         self.collapse_selection();
     }
 
-    fn remap_line_markers_after_edit(
+    fn remap_line_data_after_edit(
         &mut self,
         line: usize,
         column: usize,
@@ -224,49 +224,45 @@ impl Editor {
         inserted_width: usize,
     ) {
         let removed_end = column.saturating_add(removed_width);
-        self.line_markers.retain_mut(|marker| {
-            if marker.coord.line != line {
-                return true;
+        self.commit_canvas_with_remapped_line_data(|mut coord| {
+            if coord.line != line {
+                return Some(coord);
             }
-            if marker.coord.column >= column && marker.coord.column < removed_end {
-                return false;
+            if coord.column >= column && coord.column < removed_end {
+                return None;
             }
-            if marker.coord.column >= removed_end {
-                marker.coord.column = if inserted_width >= removed_width {
-                    marker
-                        .coord
-                        .column
-                        .saturating_add(inserted_width - removed_width)
+            if coord.column >= removed_end {
+                coord.column = if inserted_width >= removed_width {
+                    coord.column.saturating_add(inserted_width - removed_width)
                 } else {
-                    marker
-                        .coord
-                        .column
-                        .saturating_sub(removed_width - inserted_width)
+                    coord.column.saturating_sub(removed_width - inserted_width)
                 };
             }
-            true
+            Some(coord)
         });
     }
 
-    fn split_line_markers(&mut self, line: usize, column: usize) {
-        for marker in &mut self.line_markers {
-            if marker.coord.line == line && marker.coord.column >= column {
-                marker.coord.line = marker.coord.line.saturating_add(1);
-                marker.coord.column -= column;
-            } else if marker.coord.line > line {
-                marker.coord.line = marker.coord.line.saturating_add(1);
+    fn split_line_data(&mut self, line: usize, column: usize) {
+        self.commit_canvas_with_remapped_line_data(|mut coord| {
+            if coord.line == line && coord.column >= column {
+                coord.line = coord.line.saturating_add(1);
+                coord.column -= column;
+            } else if coord.line > line {
+                coord.line = coord.line.saturating_add(1);
             }
-        }
+            Some(coord)
+        });
     }
 
-    fn join_line_markers(&mut self, line: usize, removed_line: usize, join_column: usize) {
-        for marker in &mut self.line_markers {
-            if marker.coord.line == removed_line {
-                marker.coord.line = line;
-                marker.coord.column = marker.coord.column.saturating_add(join_column);
-            } else if marker.coord.line > removed_line {
-                marker.coord.line -= 1;
+    fn join_line_data(&mut self, line: usize, removed_line: usize, join_column: usize) {
+        self.commit_canvas_with_remapped_line_data(|mut coord| {
+            if coord.line == removed_line {
+                coord.line = line;
+                coord.column = coord.column.saturating_add(join_column);
+            } else if coord.line > removed_line {
+                coord.line -= 1;
             }
-        }
+            Some(coord)
+        });
     }
 }

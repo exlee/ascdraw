@@ -537,7 +537,13 @@ impl LayerStack {
         self.enabled = enabled;
     }
 
-    pub(crate) fn commit_active(
+    pub(crate) fn commit_active(&mut self, lines: &[Vec<Atom>]) -> Result<()> {
+        let layer = &self.layers[self.active];
+        let markers = layer.line_markers();
+        self.commit_active_with_markers(lines, &markers)
+    }
+
+    pub(crate) fn commit_active_with_markers(
         &mut self,
         lines: &[Vec<Atom>],
         markers: &[LineMarker],
@@ -553,15 +559,13 @@ impl LayerStack {
         &mut self,
         index: usize,
         active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
     ) -> Result<bool> {
         if index >= self.layers.len() || index == self.active {
             return Ok(false);
         }
-        self.commit_active(active_lines, active_markers)?;
+        self.commit_active(active_lines)?;
         self.active = index;
         *active_lines = self.layers[index].to_dense();
-        *active_markers = self.layers[index].line_markers();
         Ok(true)
     }
 
@@ -569,12 +573,11 @@ impl LayerStack {
         &mut self,
         index: usize,
         active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
     ) -> Result<Option<LayerId>> {
         if self.layers.len() >= MAX_LAYERS || index >= self.layers.len() {
             return Ok(None);
         }
-        self.commit_active(active_lines, active_markers)?;
+        self.commit_active(active_lines)?;
         let id = (0..LAYER_SYMBOLS.len())
             .map(|value| LayerId(value as u8))
             .find(|candidate| self.index_of(*candidate).is_none())
@@ -583,7 +586,6 @@ impl LayerStack {
         self.layers.insert(new_index, LayerMap::new(id, true));
         self.active = new_index;
         *active_lines = vec![Vec::new()];
-        active_markers.clear();
         self.recalculate_bounds();
         Ok(Some(id))
     }
@@ -627,7 +629,6 @@ impl LayerStack {
         index: usize,
         target: usize,
         active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
     ) -> Result<bool> {
         if index == 0
             || index >= self.layers.len()
@@ -636,7 +637,7 @@ impl LayerStack {
         {
             return Ok(false);
         }
-        self.commit_active(active_lines, active_markers)?;
+        self.commit_active(active_lines)?;
         let source = self.layers.remove(index);
         let target = target.saturating_sub(usize::from(target > index));
         let target_layer = &mut self.layers[target];
@@ -655,7 +656,6 @@ impl LayerStack {
             LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
         self.active = target;
         *active_lines = target_lines;
-        *active_markers = markers;
         self.recalculate_bounds();
         Ok(true)
     }
@@ -664,17 +664,15 @@ impl LayerStack {
         &mut self,
         index: usize,
         active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
     ) -> Result<bool> {
         if index == 0 || index >= self.layers.len() {
             return Ok(false);
         }
-        self.commit_active(active_lines, active_markers)?;
+        self.commit_active(active_lines)?;
         self.layers.remove(index);
         if index == self.active {
             self.active = index - 1;
             *active_lines = self.layers[self.active].to_dense();
-            *active_markers = self.layers[self.active].line_markers();
         } else if index < self.active {
             self.active -= 1;
         }
@@ -685,10 +683,9 @@ impl LayerStack {
     pub(crate) fn for_each_layer_dense_mut(
         &mut self,
         active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
         mut apply: impl FnMut(LayerId, &mut Vec<Vec<Atom>>, &mut Vec<LineMarker>),
     ) -> Result<()> {
-        self.commit_active(active_lines, active_markers)?;
+        self.commit_active(active_lines)?;
         let active_id = self.active_id();
         for layer in &mut self.layers {
             let mut lines = layer.to_dense();
@@ -697,7 +694,6 @@ impl LayerStack {
             *layer = LayerMap::from_dense_with_markers(layer.id, layer.visible, &lines, &markers)?;
             if layer.id == active_id {
                 *active_lines = lines;
-                *active_markers = markers;
             }
         }
         self.recalculate_bounds();
@@ -722,18 +718,12 @@ impl LayerStack {
         self.recalculate_bounds();
     }
 
-    pub(crate) fn clear_contents(
-        &mut self,
-        active_lines: &mut Vec<Vec<Atom>>,
-        active_markers: &mut Vec<LineMarker>,
-        cursor: Coord,
-    ) {
+    pub(crate) fn clear_contents(&mut self, active_lines: &mut Vec<Vec<Atom>>, cursor: Coord) {
         for layer in &mut self.layers {
             *layer = LayerMap::new(layer.id, layer.visible);
         }
         *active_lines = (0..=cursor.line).map(|_| Vec::new()).collect();
         active_lines[cursor.line] = (0..cursor.column).map(|_| default_blank()).collect();
-        active_markers.clear();
         self.bounds = None;
     }
 
@@ -1010,8 +1000,13 @@ mod tests {
             base_glyph: "╴".to_owned(),
         };
 
-        let map =
-            LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[marker.clone()]).unwrap();
+        let map = LayerMap::from_dense_with_markers(
+            LayerId(0),
+            true,
+            &lines,
+            std::slice::from_ref(&marker),
+        )
+        .unwrap();
 
         assert_eq!(
             map.get(0, 0).and_then(|data| data.line.as_ref()),

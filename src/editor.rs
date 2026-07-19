@@ -57,7 +57,6 @@ pub struct Editor {
     pub selection: CanvasSelection,
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
-    line_markers: Vec<PlacedLineMarker>,
     canvas: crate::canvas::LayerStack,
     line_preview: Option<LinePreview>,
     shape_preview: Option<ShapePreview>,
@@ -88,7 +87,6 @@ pub struct EditSnapshot {
     cursor_index: usize,
     selection: CanvasSelection,
     active_stroke: Option<ActiveStroke>,
-    line_markers: Vec<PlacedLineMarker>,
     canvas_origin: Coord,
     canvas: crate::canvas::LayerStack,
 }
@@ -100,7 +98,6 @@ impl PartialEq for EditSnapshot {
             && self.cursor_index == other.cursor_index
             && self.selection == other.selection
             && self.active_stroke == other.active_stroke
-            && self.line_markers == other.line_markers
             && self.canvas_origin == other.canvas_origin
             && self.canvas == other.canvas
     }
@@ -111,7 +108,6 @@ impl Eq for EditSnapshot {}
 impl EditSnapshot {
     pub fn same_document(&self, other: &Self) -> bool {
         self.lines == other.lines
-            && self.line_markers == other.line_markers
             && self.canvas_origin == other.canvas_origin
             && self.canvas == other.canvas
     }
@@ -123,13 +119,37 @@ impl EditSnapshot {
     }
 }
 
+#[cfg(test)]
+impl Editor {
+    fn line_markers_for_test(&self) -> Vec<PlacedLineMarker> {
+        self.canvas.active_line_markers()
+    }
+
+    fn set_line_markers_for_test(&mut self, markers: Vec<PlacedLineMarker>) {
+        self.canvas
+            .commit_active_with_markers(&self.grid.lines, &markers)
+            .expect("test line markers must address valid cells");
+    }
+
+    fn push_line_marker_for_test(&mut self, marker: PlacedLineMarker) {
+        let mut markers = self.line_markers_for_test();
+        markers.push(marker);
+        self.set_line_markers_for_test(markers);
+    }
+
+    fn extend_line_markers_for_test(
+        &mut self,
+        markers: impl IntoIterator<Item = PlacedLineMarker>,
+    ) {
+        let mut combined = self.line_markers_for_test();
+        combined.extend(markers);
+        self.set_line_markers_for_test(combined);
+    }
+}
+
 impl Editor {
     pub(crate) fn commit_canvas_mutations(&mut self) -> anyhow::Result<()> {
-        if self
-            .canvas
-            .commit_active(&self.grid.lines, &self.line_markers)
-            .is_err()
-        {
+        if self.canvas.commit_active(&self.grid.lines).is_err() {
             // Legacy dense documents can still contain wide atoms. They remain
             // on the compatibility path until the document is edited into
             // one-cell atoms; sparse storage itself never accepts them.
@@ -142,6 +162,23 @@ impl Editor {
     fn commit_canvas(&mut self) {
         self.commit_canvas_mutations()
             .expect("editor mutations preserve one-cell sparse canvas atoms");
+    }
+
+    fn commit_canvas_with_remapped_line_data(
+        &mut self,
+        mut map: impl FnMut(Coord) -> Option<Coord>,
+    ) {
+        let markers = self
+            .canvas
+            .active_line_markers()
+            .into_iter()
+            .filter_map(|marker| {
+                map(marker.coord).map(|coord| PlacedLineMarker { coord, ..marker })
+            })
+            .collect::<Vec<_>>();
+        self.canvas
+            .commit_active_with_markers(&self.grid.lines, &markers)
+            .expect("line metadata remapping preserves valid sparse cells");
     }
 
     pub fn canvas(&self) -> &crate::canvas::LayerStack {
@@ -182,7 +219,7 @@ impl Editor {
             .enumerate()
             .map(|(index, layer)| {
                 if index == self.canvas.active_index() {
-                    (layer.id, self.grid.lines.clone(), self.line_markers.clone())
+                    (layer.id, self.grid.lines.clone(), layer.line_markers())
                 } else {
                     (layer.id, layer.to_dense(), layer.line_markers().to_vec())
                 }
@@ -229,7 +266,6 @@ impl Editor {
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         let active = &self.canvas.layers()[self.canvas.active_index()];
         self.grid.lines = active.to_dense();
-        self.line_markers = active.line_markers().to_vec();
         Ok(())
     }
 
@@ -238,7 +274,6 @@ impl Editor {
         self.toolbar.sync_layer_count(canvas.layers().len());
         let active = &canvas.layers()[canvas.active_index()];
         self.grid.lines = active.to_dense();
-        self.line_markers = active.line_markers();
         self.canvas = canvas;
     }
 
@@ -260,7 +295,7 @@ impl Editor {
         };
         let changed = self
             .canvas
-            .activate(index, &mut self.grid.lines, &mut self.line_markers)
+            .activate(index, &mut self.grid.lines)
             .expect("editor layers contain valid sparse cells");
         if changed {
             self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -277,7 +312,7 @@ impl Editor {
         };
         let changed = self
             .canvas
-            .add_above(index, &mut self.grid.lines, &mut self.line_markers)
+            .add_above(index, &mut self.grid.lines)
             .expect("editor layers contain valid sparse cells")
             .is_some();
         if changed {
@@ -339,7 +374,7 @@ impl Editor {
     fn merge_layer_into(&mut self, index: usize, target: usize) -> bool {
         let changed = self
             .canvas
-            .merge_into(index, target, &mut self.grid.lines, &mut self.line_markers)
+            .merge_into(index, target, &mut self.grid.lines)
             .expect("editor layers contain valid sparse cells");
         if changed {
             self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -356,7 +391,7 @@ impl Editor {
         };
         let changed = self
             .canvas
-            .delete(index, &mut self.grid.lines, &mut self.line_markers)
+            .delete(index, &mut self.grid.lines)
             .expect("editor layers contain valid sparse cells");
         if changed {
             self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -408,7 +443,7 @@ impl Editor {
                     preview.source_cursor,
                     preview.source_cursor_index,
                     preview.source_selection,
-                    preview.source_markers.clone(),
+                    preview.source_canvas.active_line_markers(),
                     preview.source_canvas_origin,
                 )
             } else {
@@ -417,13 +452,13 @@ impl Editor {
                     self.grid.cursor_pos,
                     self.cursor_index,
                     self.selection,
-                    self.line_markers.clone(),
+                    self.canvas.active_line_markers(),
                     self.canvas_origin,
                 )
             };
         let mut canvas = self.canvas.clone();
         canvas
-            .commit_active(&lines, &line_markers)
+            .commit_active_with_markers(&lines, &line_markers)
             .expect("editor layers contain valid sparse cells");
         EditSnapshot {
             lines,
@@ -431,7 +466,6 @@ impl Editor {
             cursor_index,
             selection,
             active_stroke: self.active_stroke.clone(),
-            line_markers,
             canvas_origin,
             canvas,
         }
@@ -443,7 +477,6 @@ impl Editor {
         self.cursor_index = snapshot.cursor_index;
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
-        self.line_markers = snapshot.line_markers;
         self.canvas_origin = snapshot.canvas_origin;
         self.canvas = snapshot.canvas;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -475,7 +508,6 @@ impl Editor {
             selection: CanvasSelection::collapsed_at(Coord::default()),
             cursor_index: 0,
             active_stroke: None,
-            line_markers: Vec::new(),
             canvas,
             line_preview: None,
             shape_preview: None,
@@ -1051,11 +1083,11 @@ impl Editor {
     }
 
     fn erase_connection_or_atom(&mut self, coord: Coord, direction: Direction) -> bool {
-        let is_line = self.line_markers.iter().any(|marker| marker.coord == coord)
+        let is_line = self.canvas.line_at(coord).is_some()
             || self.cell_contents(coord).is_some_and(is_line_glyph);
         if is_line {
             let before_contents = self.cell_contents(coord).map(str::to_owned);
-            let had_marker = self.line_markers.iter().any(|marker| marker.coord == coord);
+            let had_marker = self.canvas.line_at(coord).is_some();
             self.remove_connection(coord, direction);
             return had_marker || self.cell_contents(coord).map(str::to_owned) != before_contents;
         }
@@ -1074,10 +1106,11 @@ impl Editor {
             return false;
         }
         let width = atom_width(atom);
-        self.line_markers.retain(|marker| {
-            marker.coord.line != coord.line
-                || marker.coord.column < start_column
-                || marker.coord.column >= start_column.saturating_add(width)
+        self.canvas.remap_active_line_data(|marker| {
+            (marker.line != coord.line
+                || marker.column < start_column
+                || marker.column >= start_column.saturating_add(width))
+            .then_some(marker)
         });
         line.splice(index..=index, grid::blank_run(width));
         true
@@ -1106,14 +1139,10 @@ impl Editor {
         }
         let bounds = self.selection.bounds();
         self.canvas
-            .for_each_layer_dense_mut(
-                &mut self.grid.lines,
-                &mut self.line_markers,
-                |_, lines, markers| {
-                    markers.retain(|marker| !bounds.contains(marker.coord));
-                    replace_range(lines, bounds, None);
-                },
-            )
+            .for_each_layer_dense_mut(&mut self.grid.lines, |_, lines, markers| {
+                markers.retain(|marker| !bounds.contains(marker.coord));
+                replace_range(lines, bounds, None);
+            })
             .expect("editor layers contain valid sparse cells");
         self.restore_active_cursor_index();
     }
@@ -1189,8 +1218,8 @@ impl Editor {
         }
         self.end_stroke();
         self.shape_preview = None;
-        self.line_markers
-            .retain(|marker| !bounds.contains(marker.coord));
+        self.canvas
+            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
         overwrite_rectangle(&mut self.grid.lines, origin, &rectangle);
         self.color_written_bounds(bounds);
         let active = Coord {
@@ -1225,14 +1254,18 @@ impl Editor {
         }
         let mut lines = self.grid.lines.clone();
         overwrite_rectangle(&mut lines, origin, rectangle);
-        let mut line_markers = self.line_markers.clone();
-        line_markers.retain(|marker| !bounds.contains(marker.coord));
-        if lines == self.grid.lines && line_markers == self.line_markers {
+        let removed_marker = self
+            .canvas
+            .active_line_markers()
+            .iter()
+            .any(|marker| bounds.contains(marker.coord));
+        if lines == self.grid.lines && !removed_marker {
             return false;
         }
 
         self.grid.lines = lines;
-        self.line_markers = line_markers;
+        self.canvas
+            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
         self.selection.collapse(origin);
         self.grid.cursor_pos = origin;
         self.cursor_index = index_for_column(&self.grid.lines[origin.line], origin.column);
@@ -1252,7 +1285,6 @@ impl Editor {
         self.grid.cursor_pos = Coord::default();
         self.cursor_index = 0;
         self.active_stroke = None;
-        self.line_markers.clear();
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -1291,7 +1323,6 @@ impl Editor {
             clamp_canvas_coord(selection.active()),
         );
         self.active_stroke = None;
-        self.line_markers.clear();
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -1304,13 +1335,11 @@ impl Editor {
     pub fn clear_canvas(&mut self) {
         self.cancel_line_preview();
         let cursor = self.grid.cursor_pos;
-        self.canvas
-            .clear_contents(&mut self.grid.lines, &mut self.line_markers, cursor);
+        self.canvas.clear_contents(&mut self.grid.lines, cursor);
 
         self.grid.cursor_pos = cursor;
         self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
         self.active_stroke = None;
-        self.line_markers.clear();
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -1359,8 +1388,8 @@ impl Editor {
 
     fn replace_selection_literal(&mut self, replacement: Option<&str>) {
         let bounds = self.selection.bounds();
-        self.line_markers
-            .retain(|marker| !bounds.contains(marker.coord));
+        self.canvas
+            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
         replace_range(&mut self.grid.lines, bounds, replacement);
         if replacement.is_some() {
             self.color_written_bounds(bounds);
@@ -1433,9 +1462,10 @@ impl Editor {
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end.line = stroke.end.line.saturating_add(1);
         }
-        for marker in &mut self.line_markers {
-            marker.coord.line = marker.coord.line.saturating_add(1);
-        }
+        self.commit_canvas_with_remapped_line_data(|mut coord| {
+            coord.line = coord.line.saturating_add(1);
+            Some(coord)
+        });
         self.shift_line_preview(0, 1);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.anchor.line = preview.anchor.line.saturating_add(1);
@@ -1459,9 +1489,10 @@ impl Editor {
         if let Some(stroke) = self.active_stroke.as_mut() {
             stroke.end.column = stroke.end.column.saturating_add(1);
         }
-        for marker in &mut self.line_markers {
-            marker.coord.column = marker.coord.column.saturating_add(1);
-        }
+        self.commit_canvas_with_remapped_line_data(|mut coord| {
+            coord.column = coord.column.saturating_add(1);
+            Some(coord)
+        });
         self.shift_line_preview(1, 0);
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.anchor.column = preview.anchor.column.saturating_add(1);
@@ -1974,7 +2005,7 @@ mod tests {
     fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
         let mut state = state();
         state.grid.lines = lines_from_text("A界z");
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
             ending: LineEnding::Fixed('◆'),
             base_glyph: "界".into(),
@@ -1985,7 +2016,7 @@ mod tests {
         state.grid.lines = lines_from_text(" B ");
         let source_face = state.theme.tooltip.clone();
         state.grid.lines[0][1].face = source_face.clone();
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
             ending: LineEnding::Fixed('●'),
             base_glyph: "B".into(),
@@ -2007,8 +2038,11 @@ mod tests {
         );
         assert_eq!(contents(&state.grid.lines[0]), "AB z");
         assert_eq!(state.grid.lines[0][1].face, source_face);
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].ending, LineEnding::Fixed('●'));
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(
+            state.line_markers_for_test()[0].ending,
+            LineEnding::Fixed('●')
+        );
         assert_eq!(contents(&state.layer_views()[1].lines[0]), "top");
         assert!(!state.merge_layer_up(base));
         assert!(!state.merge_layer_down(base));
@@ -2079,7 +2113,7 @@ mod tests {
 
         assert!(state.select_layer(base));
         state.grid.lines = lines_from_text("A");
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord::default(),
             ending: LineEnding::Fixed('◆'),
             base_glyph: "A".into(),
@@ -2116,8 +2150,8 @@ mod tests {
         assert_eq!(views[1].lines[0][2].face, upper_face);
         assert_eq!(state.layer_summaries(), summaries);
         assert!(state.select_layer(base));
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].coord, Coord::default());
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
         assert!(state.select_layer(upper));
 
         state.clear_canvas();
@@ -2385,7 +2419,7 @@ mod tests {
             incoming_connection: Direction::Left,
             end_was_existing_line: false,
         });
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord::default(),
             ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "─".into(),
@@ -2408,7 +2442,7 @@ mod tests {
         assert!(state.selection.is_collapsed());
         assert_eq!(state.selection.active(), Coord { line: 3, column: 4 });
         assert!(state.active_stroke.is_none());
-        assert!(state.line_markers.is_empty());
+        assert!(state.line_markers_for_test().is_empty());
         assert!(state.shape_preview.is_none());
         assert!(!state.single_replace_pending);
         assert_eq!(state.pending_prepend, (0, 0));
@@ -2576,7 +2610,7 @@ mod tests {
     fn insert_shifts_line_markers_by_one_cell() {
         let mut state = state();
         state.insert("a◆");
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
             ending: LineEnding::Fixed('◆'),
             base_glyph: "╴".into(),
@@ -2587,14 +2621,17 @@ mod tests {
         state.write_text("z");
 
         assert_eq!(contents(&state.grid.lines[0]), "za◆");
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 0, column: 2 }
+        );
     }
 
     #[test]
     fn replace_removes_overwritten_markers_and_shifts_following_markers() {
         let mut state = state();
         state.insert("a◆");
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
             ending: LineEnding::Fixed('◆'),
             base_glyph: "╴".into(),
@@ -2605,19 +2642,22 @@ mod tests {
         state.write_text("z");
 
         assert_eq!(contents(&state.grid.lines[0]), "z◆");
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 1 });
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 0, column: 1 }
+        );
 
         state.write_text("x");
 
         assert_eq!(contents(&state.grid.lines[0]), "zx");
-        assert!(state.line_markers.is_empty());
+        assert!(state.line_markers_for_test().is_empty());
     }
 
     #[test]
     fn newline_backspace_and_delete_remap_line_markers() {
         let mut state = state();
         state.insert("a◆\nb◆");
-        state.line_markers.extend([
+        state.extend_line_markers_for_test([
             PlacedLineMarker {
                 coord: Coord { line: 0, column: 1 },
                 ending: LineEnding::Fixed('◆'),
@@ -2629,28 +2669,47 @@ mod tests {
                 base_glyph: "╴".into(),
             },
         ]);
+        assert_eq!(state.line_markers_for_test().len(), 2);
         state.move_to(Coord { line: 0, column: 1 });
 
         state.newline();
 
-        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 0 });
-        assert_eq!(state.line_markers[1].coord, Coord { line: 2, column: 1 });
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 1, column: 0 }
+        );
+        assert_eq!(
+            state.line_markers_for_test()[1].coord,
+            Coord { line: 2, column: 1 }
+        );
 
         state.backspace();
 
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 1 });
-        assert_eq!(state.line_markers[1].coord, Coord { line: 1, column: 1 });
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 0, column: 1 }
+        );
+        assert_eq!(
+            state.line_markers_for_test()[1].coord,
+            Coord { line: 1, column: 1 }
+        );
 
         state.delete();
 
         assert_eq!(contents(&state.grid.lines[0]), "a");
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 1 });
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 1, column: 1 }
+        );
 
         state.delete();
 
         assert_eq!(contents(&state.grid.lines[0]), "ab◆");
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 0, column: 2 }
+        );
     }
 
     #[test]
@@ -2863,13 +2922,13 @@ mod tests {
             ending: LineEnding::Fixed('◆'),
             base_glyph: "─".into(),
         };
-        state.line_markers = vec![inside, outside.clone()];
+        state.set_line_markers_for_test(vec![inside, outside.clone()]);
         state.move_to(Coord::default());
 
         state.clear_selection();
 
         assert_eq!(contents(&state.grid.lines[0]), " ─◆");
-        assert_eq!(state.line_markers, vec![outside]);
+        assert_eq!(state.line_markers_for_test(), vec![outside]);
     }
 
     #[test]
@@ -3279,7 +3338,7 @@ mod tests {
         let mut state = state();
         state.insert("ab");
         state.move_to(Coord { line: 0, column: 1 });
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord::default(),
             ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "╶".to_string(),
@@ -3294,7 +3353,7 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
         assert_eq!(contents(&state.grid.lines[0]), " ");
         assert_eq!(contents(&state.grid.lines[1]), "ab");
-        assert_eq!(state.line_markers[0].coord.line, 1);
+        assert_eq!(state.line_markers_for_test()[0].coord.line, 1);
         let preview = state.shape_preview.unwrap();
         assert_eq!(preview.anchor.line, 1);
         assert_eq!(preview.end, state.grid.cursor_pos);
@@ -3322,7 +3381,7 @@ mod tests {
         let mut state = state();
         state.insert("a\nb");
         state.move_to(Coord::default());
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 1, column: 0 },
             ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "╶".to_string(),
@@ -3337,7 +3396,7 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord::default());
         assert_eq!(contents(&state.grid.lines[0]), " a");
         assert_eq!(contents(&state.grid.lines[1]), " b");
-        assert_eq!(state.line_markers[0].coord.column, 1);
+        assert_eq!(state.line_markers_for_test()[0].coord.column, 1);
         let preview = state.shape_preview.unwrap();
         assert_eq!(preview.anchor.column, 1);
         assert_eq!(preview.end, state.grid.cursor_pos);
@@ -3566,10 +3625,13 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "◆─╮");
         assert_eq!(contents(&state.grid.lines[1]), "  ↓");
-        assert_eq!(state.line_markers.len(), 2);
-        assert_eq!(state.line_markers[0].ending, LineEnding::Fixed('◆'));
+        assert_eq!(state.line_markers_for_test().len(), 2);
         assert_eq!(
-            state.line_markers[1].ending,
+            state.line_markers_for_test()[0].ending,
+            LineEnding::Fixed('◆')
+        );
+        assert_eq!(
+            state.line_markers_for_test()[1].ending,
             LineEnding::Directional(crate::drawing::DirectionalEnding::Arrow)
         );
 
@@ -3579,7 +3641,7 @@ mod tests {
         assert_eq!(contents(&state.grid.lines[0]), "◆─╮");
         assert_eq!(contents(&state.grid.lines[1]), "  ↓");
         assert_eq!(
-            state.line_markers[1].ending,
+            state.line_markers_for_test()[1].ending,
             LineEnding::Directional(crate::drawing::DirectionalEnding::Arrow)
         );
     }
@@ -4308,7 +4370,7 @@ mod tests {
             incoming_connection: Direction::Left,
             end_was_existing_line: false,
         });
-        state.line_markers.extend([
+        state.extend_line_markers_for_test([
             PlacedLineMarker {
                 coord: Coord { line: 0, column: 1 },
                 ending: LineEnding::None,
@@ -4332,8 +4394,8 @@ mod tests {
         assert_eq!(state.grid.lines[0][2].face.fg, "#333333");
         assert_eq!(state.selection.active().column, 2);
         assert!(state.active_stroke.is_none());
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].coord.column, 2);
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(state.line_markers_for_test()[0].coord.column, 2);
         assert!(state.shape_preview.is_none());
     }
 
@@ -4374,7 +4436,7 @@ mod tests {
             incoming_connection: Direction::Up,
             end_was_existing_line: false,
         });
-        state.line_markers.extend([
+        state.extend_line_markers_for_test([
             PlacedLineMarker {
                 coord: Coord { line: 2, column: 0 },
                 ending: LineEnding::None,
@@ -4391,8 +4453,8 @@ mod tests {
         assert_eq!(line_contents(&state), vec!["A", "B", "D"]);
         assert_eq!(state.selection.active().line, 2);
         assert_eq!(state.active_stroke.as_ref().unwrap().end.line, 2);
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].coord.line, 2);
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(state.line_markers_for_test()[0].coord.line, 2);
     }
 
     #[test]
@@ -4455,7 +4517,7 @@ mod tests {
             incoming_connection: Direction::Left,
             end_was_existing_line: false,
         });
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 2 },
             ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
             base_glyph: "─".into(),
@@ -4469,7 +4531,7 @@ mod tests {
         assert_eq!(state.selection.anchor().column, 2);
         assert_eq!(state.selection.active().column, 3);
         assert_eq!(state.active_stroke.as_ref().unwrap().end.column, 3);
-        assert_eq!(state.line_markers[0].coord.column, 3);
+        assert_eq!(state.line_markers_for_test()[0].coord.column, 3);
         let preview = state.shape_preview.unwrap();
         assert_eq!((preview.anchor.column, preview.end.column), (2, 3));
     }
@@ -4556,7 +4618,7 @@ mod tests {
         let mut state = utility_state(&["A"], UtilityKind::Push, Coord::default());
         let configured_face = state.theme.tooltip.clone();
         state.grid.lines[0][0].face = configured_face.clone();
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord::default(),
             ending: LineEnding::Fixed('◆'),
             base_glyph: "A".into(),
@@ -4578,7 +4640,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .line_markers
+                .line_markers_for_test()
                 .iter()
                 .map(|marker| marker.coord.column)
                 .collect::<Vec<_>>(),
@@ -4586,7 +4648,7 @@ mod tests {
         );
 
         let mut overlap = utility_state(&["AB"], UtilityKind::Push, Coord::default());
-        overlap.line_markers.extend([
+        overlap.extend_line_markers_for_test([
             PlacedLineMarker {
                 coord: Coord::default(),
                 ending: LineEnding::Fixed('◆'),
@@ -4605,10 +4667,10 @@ mod tests {
         assert!(overlap.clone_move_lift(Direction::Right, 1));
         assert!(overlap.confirm_move_lift());
         assert_eq!(line_contents(&overlap), vec!["AAB"]);
-        assert_eq!(overlap.line_markers.len(), 3);
+        assert_eq!(overlap.line_markers_for_test().len(), 3);
         assert_eq!(
             overlap
-                .line_markers
+                .line_markers_for_test()
                 .iter()
                 .map(|marker| marker.coord.column)
                 .collect::<Vec<_>>(),
@@ -4622,7 +4684,7 @@ mod tests {
         state
             .selection
             .select(Coord::default(), Coord { line: 0, column: 2 });
-        state.line_markers.push(PlacedLineMarker {
+        state.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 1, column: 1 },
             ending: LineEnding::Fixed('◆'),
             base_glyph: "─".into(),
@@ -4638,8 +4700,11 @@ mod tests {
 
         assert!(state.confirm_move_lift());
         assert_eq!(line_contents(&state), vec!["   ", "A─C"]);
-        assert_eq!(state.line_markers.len(), 1);
-        assert_eq!(state.line_markers[0].coord, Coord { line: 1, column: 1 });
+        assert_eq!(state.line_markers_for_test().len(), 1);
+        assert_eq!(
+            state.line_markers_for_test()[0].coord,
+            Coord { line: 1, column: 1 }
+        );
     }
 
     #[test]
@@ -4728,7 +4793,7 @@ mod tests {
         let mut wide = utility_state(&["a界z"], UtilityKind::Push, Coord { line: 0, column: 1 });
         wide.selection
             .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
-        wide.line_markers.push(PlacedLineMarker {
+        wide.push_line_marker_for_test(PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
             ending: LineEnding::Fixed('◆'),
             base_glyph: "界".into(),
@@ -4737,8 +4802,11 @@ mod tests {
         assert!(wide.move_lift(Direction::Down));
         assert!(wide.confirm_move_lift());
         assert_eq!(line_contents(&wide), vec!["a  z", " 界"]);
-        assert_eq!(wide.line_markers.len(), 1);
-        assert_eq!(wide.line_markers[0].coord, Coord { line: 1, column: 1 });
+        assert_eq!(wide.line_markers_for_test().len(), 1);
+        assert_eq!(
+            wide.line_markers_for_test()[0].coord,
+            Coord { line: 1, column: 1 }
+        );
     }
 
     #[test]

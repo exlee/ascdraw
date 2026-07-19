@@ -1,4 +1,4 @@
-use crate::canvas::LineMarker;
+use crate::canvas::LineData;
 use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_for_connection_pair,
     glyph_with_connection_and_corner, is_line_glyph, line_ending_glyph,
@@ -162,16 +162,12 @@ impl Editor {
         }
     }
 
-    fn take_line_marker(&mut self, coord: Coord) -> Option<LineMarker> {
-        let index = self
-            .line_markers
-            .iter()
-            .position(|marker| marker.coord == coord)?;
-        Some(self.line_markers.remove(index))
+    fn take_line_marker(&mut self, coord: Coord) -> Option<LineData> {
+        self.canvas.take_line_at(coord)
     }
 
     pub(super) fn remove_line_marker(&mut self, coord: Coord) {
-        self.line_markers.retain(|marker| marker.coord != coord);
+        self.canvas.remove_line_at(coord);
     }
 
     fn add_connection(
@@ -238,11 +234,14 @@ impl Editor {
             line_ending_glyph(ending, connected_direction, line_style).to_string(),
         );
         if ending != LineEnding::None {
-            self.line_markers.push(LineMarker {
+            self.commit_canvas();
+            self.canvas.set_line_at(
                 coord,
-                ending,
-                base_glyph: base_glyph.to_string(),
-            });
+                LineData {
+                    ending,
+                    base_glyph: base_glyph.to_string(),
+                },
+            );
         }
     }
 

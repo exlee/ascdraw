@@ -239,33 +239,29 @@ impl Editor {
         }
         let mut changed = false;
         self.canvas
-            .for_each_layer_dense_mut(
-                &mut self.grid.lines,
-                &mut self.line_markers,
-                |id, lines, markers| {
-                    let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
-                        return;
-                    };
-                    let before_lines = lines.clone();
-                    let before_markers = markers.clone();
-                    markers.retain(|marker| {
-                        !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
-                            && !destinations.iter().any(|origin| {
-                                lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
-                            })
-                    });
-                    compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
-                    for origin in &destinations {
-                        for mut marker in layer.markers.iter().cloned() {
-                            marker.coord.line = marker.coord.line.saturating_add(origin.line);
-                            marker.coord.column = marker.coord.column.saturating_add(origin.column);
-                            markers.retain(|existing| existing.coord != marker.coord);
-                            markers.push(marker);
-                        }
+            .for_each_layer_dense_mut(&mut self.grid.lines, |id, lines, markers| {
+                let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
+                    return;
+                };
+                let before_lines = lines.clone();
+                let before_markers = markers.clone();
+                markers.retain(|marker| {
+                    !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
+                        && !destinations.iter().any(|origin| {
+                            lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
+                        })
+                });
+                compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
+                for origin in &destinations {
+                    for mut marker in layer.markers.iter().cloned() {
+                        marker.coord.line = marker.coord.line.saturating_add(origin.line);
+                        marker.coord.column = marker.coord.column.saturating_add(origin.column);
+                        markers.retain(|existing| existing.coord != marker.coord);
+                        markers.push(marker);
                     }
-                    changed |= *lines != before_lines || *markers != before_markers;
-                },
-            )
+                }
+                changed |= *lines != before_lines || *markers != before_markers;
+            })
             .expect("editor layers contain valid sparse cells");
         self.cursor_index = index_for_column(
             &self.grid.lines[self.grid.cursor_pos.line],
