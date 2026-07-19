@@ -14,6 +14,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::WindowId;
 
 mod app;
+mod canvas;
 mod diagnostics;
 mod document;
 mod drawing;
@@ -26,6 +27,7 @@ mod icon;
 mod input;
 mod jump;
 mod layout;
+mod legacy_loader;
 #[cfg(target_os = "macos")]
 mod macos;
 mod model;

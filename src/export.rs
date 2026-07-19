@@ -356,12 +356,19 @@ pub fn perform(
 }
 
 fn text_export(state: &Editor, visible_canvas: VisibleCanvasCells) -> String {
-    atoms_text(&canvas_atoms_for_export(state, visible_canvas))
+    let region = canvas_region_for_export(state, visible_canvas);
+    atoms_text(
+        &sparse_composite_region(state, region)
+            .unwrap_or_else(|| canvas_atoms_for_export(state, visible_canvas)),
+    )
 }
 
 fn selected_visible_text(state: &Editor) -> String {
     let region = CanvasRegion::from_selection(state.selection_bounds());
-    atoms_text(&flatten_visible_layers(&visible_layer_atoms(state, region)))
+    atoms_text(
+        &sparse_composite_region(state, region)
+            .unwrap_or_else(|| flatten_visible_layers(&visible_layer_atoms(state, region))),
+    )
 }
 
 fn atoms_text(lines: &[Vec<Atom>]) -> String {
@@ -396,15 +403,14 @@ pub fn plain_text(state: &Editor) -> String {
         .map(|coord| coord.line)
         .max()
         .expect("nonempty content has a maximum line");
-    let rows = flatten_visible_layers(&visible_layer_atoms(
-        state,
-        CanvasRegion {
-            left: i64::try_from(left).unwrap_or(i64::MAX),
-            top: i64::try_from(top).unwrap_or(i64::MAX),
-            width: right.saturating_sub(left).saturating_add(1),
-            height: bottom.saturating_sub(top).saturating_add(1),
-        },
-    ));
+    let region = CanvasRegion {
+        left: i64::try_from(left).unwrap_or(i64::MAX),
+        top: i64::try_from(top).unwrap_or(i64::MAX),
+        width: right.saturating_sub(left).saturating_add(1),
+        height: bottom.saturating_sub(top).saturating_add(1),
+    };
+    let rows = sparse_composite_region(state, region)
+        .unwrap_or_else(|| flatten_visible_layers(&visible_layer_atoms(state, region)));
     rows.iter()
         .map(|row| {
             row.iter()
@@ -415,6 +421,25 @@ pub fn plain_text(state: &Editor) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn sparse_composite_region(state: &Editor, region: CanvasRegion) -> Option<Vec<Vec<Atom>>> {
+    let stack = state.sparse_layer_stack().ok()?;
+    let left = i16::try_from(region.left).ok()?;
+    let top = i16::try_from(region.top).ok()?;
+    let width = i16::try_from(region.width).ok()?;
+    let height = i16::try_from(region.height).ok()?;
+    let mut rows = Vec::with_capacity(usize::from(height.unsigned_abs()));
+    for line_offset in 0..height {
+        let line = top.checked_add(line_offset)?;
+        let mut row = Vec::with_capacity(usize::from(width.unsigned_abs()));
+        for column_offset in 0..width {
+            let column = left.checked_add(column_offset)?;
+            row.push(stack.top_at(line, column).as_ref().clone());
+        }
+        rows.push(row);
+    }
+    Some(rows)
 }
 
 pub fn canvas_region_for_export(
@@ -1152,6 +1177,7 @@ mod tests {
         state.grid.lines = lines_from_text("AAA");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
         state.grid.lines = lines_from_text("  BBB");
         let visible = VisibleCanvasCells {
             origin: (0, 0),
@@ -1181,6 +1207,7 @@ mod tests {
         state.grid.lines = lines_from_text("AAA");
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
         state.grid.lines = lines_from_text("  BBB");
         state.move_to(Coord::default());
         for _ in 0..4 {

@@ -33,7 +33,6 @@ mod state;
 mod text_tool;
 mod utility;
 pub(super) use grid::{adjacent_coord, edited_content_origin};
-pub(crate) use grid::{compact_blank_runs, compacted_blank_runs};
 pub use layers::{LayerStack, LayerView, PersistedLayer};
 use line_preview::LinePreview;
 use line_tool::{ActiveStroke, PlacedLineMarker};
@@ -68,6 +67,7 @@ pub struct Editor {
     canvas_origin: Coord,
     toolbar_document_changed: bool,
     toolbar_viewport_stable: bool,
+    transient_tip: Option<(String, std::time::Instant)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +108,15 @@ impl EditSnapshot {
 }
 
 impl Editor {
+    pub fn sparse_layer_stack(&self) -> anyhow::Result<crate::canvas::LayerStack> {
+        let layers = self
+            .layer_views()
+            .into_iter()
+            .map(|layer| crate::canvas::LayerMap::from_dense(layer.id, layer.visible, layer.lines))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        crate::canvas::LayerStack::new(layers, self.toolbar.multi_layer_mode())
+    }
+
     pub fn layer_summaries(&self) -> Vec<LayerSummary> {
         self.layers.summaries()
     }
@@ -370,7 +379,22 @@ impl Editor {
             canvas_origin: Coord::default(),
             toolbar_document_changed: false,
             toolbar_viewport_stable: false,
+            transient_tip: None,
         }
+    }
+
+    pub fn transient_tip(&self) -> Option<&str> {
+        self.transient_tip
+            .as_ref()
+            .filter(|(_, until)| std::time::Instant::now() < *until)
+            .map(|(tip, _)| tip.as_str())
+    }
+
+    pub(super) fn invalid_text_tip(&mut self) {
+        self.transient_tip = Some((
+            "Invalid text: every cell must be one display-width-1 grapheme".to_owned(),
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        ));
     }
 
     pub fn apply_theme(&mut self, theme: &ThemeConfig) {
@@ -2387,15 +2411,15 @@ mod tests {
     }
 
     #[test]
-    fn erasing_either_display_cell_blanks_a_whole_wide_grapheme() {
+    fn erasing_a_display_cell_preserves_the_row_width() {
         let mut state = state();
-        state.insert("A界B");
-        state.move_to(Coord { line: 0, column: 3 });
+        state.insert("ABC");
+        state.move_to(Coord { line: 0, column: 2 });
 
         assert!(state.erase(Direction::Left));
 
-        assert_eq!(contents(&state.grid.lines[0]), "A   ");
-        assert_eq!(display_width(&state.grid.lines[0]), 4);
+        assert_eq!(contents(&state.grid.lines[0]), "A  ");
+        assert_eq!(display_width(&state.grid.lines[0]), 3);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
@@ -2436,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_shifts_line_markers_by_display_width() {
+    fn insert_shifts_line_markers_by_one_cell() {
         let mut state = state();
         state.insert("a◆");
         state.line_markers.push(PlacedLineMarker {
@@ -2447,10 +2471,10 @@ mod tests {
         state.move_to(Coord::default());
         state.toggle_text_entry();
 
-        state.write_text("界");
+        state.write_text("z");
 
-        assert_eq!(contents(&state.grid.lines[0]), "界a◆");
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 3 });
+        assert_eq!(contents(&state.grid.lines[0]), "za◆");
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
     }
 
     #[test]
@@ -2465,14 +2489,14 @@ mod tests {
         state.move_to(Coord::default());
         state.toggle_replace_mode();
 
-        state.write_text("界");
+        state.write_text("z");
 
-        assert_eq!(contents(&state.grid.lines[0]), "界◆");
-        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 2 });
+        assert_eq!(contents(&state.grid.lines[0]), "z◆");
+        assert_eq!(state.line_markers[0].coord, Coord { line: 0, column: 1 });
 
         state.write_text("x");
 
-        assert_eq!(contents(&state.grid.lines[0]), "界x");
+        assert_eq!(contents(&state.grid.lines[0]), "zx");
         assert!(state.line_markers.is_empty());
     }
 
@@ -2935,9 +2959,9 @@ mod tests {
         let active = state.grid.cursor_pos;
 
         assert!(state.begin_single_replace());
-        state.write_text("界ignored");
+        state.write_text("zignored");
 
-        assert_eq!(state.selected_text(), "界 \n界 ");
+        assert_eq!(state.selected_text(), "zzz\nzzz");
         assert_eq!(state.grid.cursor_pos, active);
         assert_eq!(state.selection.active(), active);
         assert_eq!(state.cursor_mode, CursorMode::Stamp);
@@ -3058,14 +3082,13 @@ mod tests {
     }
 
     #[test]
-    fn cursor_column_tracks_wide_graphemes() {
+    fn invalid_wide_text_is_transactional_and_sets_a_tip() {
         let mut state = state();
+        state.insert("x");
+        let before = state.edit_snapshot();
         state.insert("😀x");
-        assert_eq!(state.grid.cursor_pos.column, 3);
-        state.move_cursor(Direction::Left);
-        assert_eq!(state.grid.cursor_pos.column, 2);
-        state.move_cursor(Direction::Left);
-        assert_eq!(state.grid.cursor_pos.column, 0);
+        assert_eq!(state.edit_snapshot(), before);
+        assert!(state.transient_tip().is_some());
     }
 
     #[test]
@@ -3506,12 +3529,12 @@ mod tests {
     #[test]
     fn clearing_a_cell_preserves_its_canvas_width() {
         let mut state = state();
-        state.insert("😀x");
+        state.insert("abx");
         state.move_to(Coord { line: 0, column: 0 });
 
         state.clear_selection();
 
-        assert_eq!(contents(&state.grid.lines[0]), "  x");
+        assert_eq!(contents(&state.grid.lines[0]), " bx");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 0 });
     }
 

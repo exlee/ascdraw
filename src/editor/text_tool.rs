@@ -1,4 +1,5 @@
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::CursorMode;
 use crate::model::{Atom, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
@@ -7,6 +8,9 @@ use super::{Editor, atom_width, display_width};
 
 impl Editor {
     pub fn insert(&mut self, text: &str) {
+        if !self.validate_text_cells(text) {
+            return;
+        }
         self.end_stroke();
         self.expose_cursor_cells();
         for part in text.split_inclusive('\n') {
@@ -50,6 +54,9 @@ impl Editor {
     }
 
     pub fn write_text(&mut self, text: &str) {
+        if !self.validate_text_cells(text) {
+            return;
+        }
         if self.single_replace_pending {
             self.replace_once(text);
         } else if self.cursor_mode == CursorMode::Replace {
@@ -60,6 +67,9 @@ impl Editor {
     }
 
     pub fn paste_text(&mut self, text: &str) -> bool {
+        if !self.validate_text_cells(text) {
+            return false;
+        }
         if self.single_replace_pending {
             if UnicodeSegmentation::graphemes(text, true).next().is_none() {
                 return false;
@@ -69,6 +79,17 @@ impl Editor {
         } else {
             self.paste_text_rectangle(text)
         }
+    }
+
+    fn validate_text_cells(&mut self, text: &str) -> bool {
+        let valid = text.split('\n').all(|line| {
+            UnicodeSegmentation::graphemes(line, true)
+                .all(|grapheme| UnicodeWidthStr::width(grapheme) == 1)
+        });
+        if !valid {
+            self.invalid_text_tip();
+        }
+        valid
     }
 
     fn replace_once(&mut self, text: &str) {

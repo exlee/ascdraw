@@ -308,13 +308,12 @@ fn render_canvas(
     let max_column = first_column
         .saturating_add(visible_cells.columns)
         .saturating_add(2);
-    let preview_lines = state
-        .preview_render_lines()
+    let line_preview = state.preview_render_lines();
+    let preview_lines = line_preview
         .is_none()
         .then(|| state.lines_with_shape_preview())
         .flatten();
-    let active_lines = state
-        .preview_render_lines()
+    let active_lines = line_preview
         .or(preview_lines.as_deref())
         .unwrap_or(&state.grid.lines);
     let active_layer = state.active_layer_id();
@@ -334,20 +333,42 @@ fn render_canvas(
                 })
         })
         .collect::<Vec<_>>();
-    render_cached_grid_atoms(
-        canvas,
-        &layers,
-        state,
-        metrics,
-        layout,
-        viewport,
-        width,
-        first_row,
-        max_row,
-        first_column,
-        max_column,
-        rendered_atom_cache,
-    );
+    let sparse = if line_preview.is_none() && preview_lines.is_none() && !state.move_lift_active() {
+        state.sparse_layer_stack().ok()
+    } else {
+        None
+    };
+    if let Some(sparse) = sparse.as_ref() {
+        render_cached_sparse_grid_atoms(
+            canvas,
+            sparse,
+            state,
+            metrics,
+            layout,
+            viewport,
+            width,
+            first_row,
+            max_row,
+            first_column,
+            max_column,
+            rendered_atom_cache,
+        );
+    } else {
+        render_cached_grid_atoms(
+            canvas,
+            &layers,
+            state,
+            metrics,
+            layout,
+            viewport,
+            width,
+            first_row,
+            max_row,
+            first_column,
+            max_column,
+            rendered_atom_cache,
+        );
+    }
 
     canvas.save();
     canvas.clip_rect(
@@ -607,6 +628,68 @@ fn render_cached_grid_atoms(
     canvas.restore();
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_cached_sparse_grid_atoms(
+    canvas: &Canvas,
+    layers: &crate::canvas::LayerStack,
+    state: &Editor,
+    metrics: &CellMetrics,
+    layout: LayoutMetrics,
+    viewport: ViewportOffset,
+    width: usize,
+    first_row: usize,
+    max_row: usize,
+    first_column: usize,
+    max_column: usize,
+    cache: &RefCell<RenderedAtomCache>,
+) {
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_xywh(
+            0.0,
+            layout.grid_top,
+            width as f32,
+            (layout.grid_bottom - layout.grid_top).max(0.0),
+        ),
+        None,
+        false,
+    );
+    canvas.translate((viewport.x as f32, viewport.y as f32));
+    let row_start = i16::try_from(first_row).unwrap_or(i16::MAX);
+    let row_end = i16::try_from(max_row).unwrap_or(i16::MAX);
+    let column_start = i16::try_from(first_column).unwrap_or(i16::MAX);
+    let column_end = i16::try_from(max_column).unwrap_or(i16::MAX);
+    let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+    for layer in layers
+        .effective_layers()
+        .iter()
+        .filter(|layer| layer.visible)
+    {
+        for (&row, cells) in layer.rows().range(row_start..row_end) {
+            for (&column, data) in cells.range(column_start..column_end) {
+                canvas.save();
+                canvas.translate((f32::from(column) * metrics.cell_width, 0.0));
+                render_cached_overlay_line(
+                    canvas,
+                    usize::try_from(row).unwrap_or(0),
+                    std::slice::from_ref(data.atom.as_ref()),
+                    &state.grid.default_face,
+                    &state.theme,
+                    root_face,
+                    0..1,
+                    metrics,
+                    DrawOrigin::Grid {
+                        top_padding: layout.grid_top,
+                    },
+                    cache,
+                );
+                canvas.restore();
+            }
+        }
+    }
+    canvas.restore();
+}
+
 fn render_cached_overlay_line(
     canvas: &Canvas,
     row: usize,
@@ -841,7 +924,10 @@ fn render_bottom_tooltip(
     }
     let max_columns =
         (width.saturating_sub(PADDING * 2) as f32 / metrics.cell_width.max(1.0)) as usize;
-    let spans = crate::toolbar::tooltip_spans(state.tooltip(), max_columns);
+    let spans = state.transient_tip().map_or_else(
+        || crate::toolbar::tooltip_spans(state.tooltip(), max_columns),
+        |tip| crate::toolbar::error_tip_spans(tip, max_columns),
+    );
     render_toolbar_span_contents(
         canvas,
         0,

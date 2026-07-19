@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 fn default_color() -> String {
     "default".to_string()
@@ -28,6 +30,22 @@ impl Default for Face {
 pub struct Atom {
     pub face: Face,
     pub contents: String,
+}
+
+impl Atom {
+    pub fn validate_cell(&self) -> anyhow::Result<()> {
+        let mut graphemes = UnicodeSegmentation::graphemes(self.contents.as_str(), true);
+        let Some(grapheme) = graphemes.next() else {
+            anyhow::bail!("cell atom cannot be empty");
+        };
+        if graphemes.next().is_some() {
+            anyhow::bail!("cell atom must contain exactly one grapheme");
+        }
+        if UnicodeWidthStr::width(grapheme) != 1 {
+            anyhow::bail!("cell atom must have display width 1");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -214,6 +214,24 @@ pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
     }]
 }
 
+pub fn error_tip_spans(text: &str, width: usize) -> Vec<ToolbarSpan> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let (contents, _) = clipped_to_width(text, width);
+    vec![ToolbarSpan {
+        contents,
+        bold_prefix: 0,
+        selected: false,
+        highlighted: false,
+        tooltip: true,
+        action: None,
+        shift_action: None,
+        right_aligned: false,
+        foreground: Some(crate::model::BASE_COLORS[1].to_owned()),
+    }]
+}
+
 fn push_clipped_spans(
     target: &mut Vec<ToolbarSpan>,
     spans: &[ToolbarSpan],
