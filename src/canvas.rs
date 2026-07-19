@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Face, LayerId};
+use crate::drawing::LineEnding;
+use crate::model::{Atom, Coord, Face, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
+use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle, overwrite_rectangle};
 
 pub type Raster = Rc<Atom>;
 
@@ -34,6 +36,13 @@ pub struct LineData {
     pub connections: u8,
     pub ending: Option<String>,
     pub base_glyph: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LineMarker {
+    pub(crate) coord: Coord,
+    pub(crate) ending: LineEnding,
+    pub(crate) base_glyph: String,
 }
 
 #[derive(Debug)]
@@ -69,6 +78,8 @@ pub struct LayerMap {
     pub visible: bool,
     rows: BTreeMap<i16, BTreeMap<i16, CoordData>>,
     bounds: Option<LayerBounds>,
+    line_markers: Vec<LineMarker>,
+    dense_widths: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +97,8 @@ impl LayerMap {
             visible,
             rows: BTreeMap::new(),
             bounds: None,
+            line_markers: Vec::new(),
+            dense_widths: vec![0],
         }
     }
 
@@ -105,6 +118,10 @@ impl LayerMap {
 
     pub fn bounds(&self) -> Option<LayerBounds> {
         self.bounds
+    }
+
+    pub(crate) fn line_markers(&self) -> &[LineMarker] {
+        &self.line_markers
     }
 
     pub fn set_at(&mut self, x: i16, y: i16, atom: Atom, face: &Face) -> Result<()> {
@@ -127,6 +144,32 @@ impl LayerMap {
         Ok(())
     }
 
+    pub fn matches_dense(&self, lines: &[Vec<Atom>]) -> bool {
+        Self::from_dense(self.id, self.visible, lines).is_ok_and(|dense| dense == *self)
+    }
+
+    pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<Atom>> {
+        (0..region.height)
+            .map(|row_offset| {
+                let line = region
+                    .top
+                    .saturating_add(i64::try_from(row_offset).unwrap_or(i64::MAX));
+                (0..region.width)
+                    .map(|column_offset| {
+                        let column = region
+                            .left
+                            .saturating_add(i64::try_from(column_offset).unwrap_or(i64::MAX));
+                        let (Ok(line), Ok(column)) = (i16::try_from(line), i16::try_from(column))
+                        else {
+                            return default_blank();
+                        };
+                        self.at(column, line).as_ref().clone()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     pub fn delete_at(&mut self, x: i16, y: i16) -> bool {
         let mut removed = false;
         let remove_row = self.rows.get_mut(&y).is_some_and(|row| {
@@ -147,27 +190,97 @@ impl LayerMap {
     }
 
     pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<Atom>]) -> Result<Self> {
+        for atom in lines.iter().flatten() {
+            for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
+                if UnicodeWidthStr::width(grapheme) != 1 {
+                    bail!("atom {grapheme:?} has display width other than 1");
+                }
+            }
+        }
+        Self::from_dense_with_markers(id, visible, lines, &[])
+    }
+
+    pub(crate) fn from_dense_with_markers(
+        id: LayerId,
+        visible: bool,
+        lines: &[Vec<Atom>],
+        line_markers: &[LineMarker],
+    ) -> Result<Self> {
         let mut map = Self::new(id, visible);
+        map.dense_widths = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|atom| UnicodeWidthStr::width(atom.contents.as_str()).max(1))
+                    .fold(0usize, usize::saturating_add)
+            })
+            .collect();
+        if map.dense_widths.is_empty() {
+            map.dense_widths.push(0);
+        }
         for (line_index, row) in lines.iter().enumerate() {
             let line = i16::try_from(line_index).context("canvas line exceeds signed i16 range")?;
             let mut column = 0i16;
             for atom in row {
                 for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
-                    if UnicodeWidthStr::width(grapheme) != 1 {
-                        bail!("atom {grapheme:?} has display width other than 1");
+                    let width = UnicodeWidthStr::width(grapheme);
+                    if width == 0 {
+                        bail!("atom {grapheme:?} has display width zero");
                     }
                     let cell_atom = Atom {
                         face: atom.face.clone(),
                         contents: grapheme.to_owned(),
                     };
-                    map.set_at(column, line, cell_atom, &atom.face)?;
+                    if atom.face != Face::default()
+                        || !cell_atom.contents.chars().all(char::is_whitespace)
+                    {
+                        map.set_data(
+                            line,
+                            column,
+                            CoordData {
+                                face: Rc::new(atom.face.clone()),
+                                atom: Rc::new(cell_atom),
+                                raster_cache: RefCell::new(None),
+                                line: None,
+                            },
+                        );
+                    }
                     column = column
-                        .checked_add(1)
+                        .checked_add(i16::try_from(width).context("atom width exceeds i16")?)
                         .context("canvas column exceeds signed i16 range")?;
                 }
             }
         }
+        map.line_markers = line_markers.to_vec();
         Ok(map)
+    }
+
+    fn prepend_line(&mut self) {
+        self.rows = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(|(line, row)| (line.saturating_add(1), row))
+            .collect();
+        for marker in &mut self.line_markers {
+            marker.coord.line = marker.coord.line.saturating_add(1);
+        }
+        self.dense_widths.insert(0, 0);
+        self.recalculate_bounds();
+    }
+
+    fn prepend_column(&mut self) {
+        for row in self.rows.values_mut() {
+            *row = std::mem::take(row)
+                .into_iter()
+                .map(|(column, data)| (column.saturating_add(1), data))
+                .collect();
+        }
+        for marker in &mut self.line_markers {
+            marker.coord.column = marker.coord.column.saturating_add(1);
+        }
+        for width in &mut self.dense_widths {
+            *width = width.saturating_add(1);
+        }
+        self.recalculate_bounds();
     }
 
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
@@ -179,6 +292,16 @@ impl LayerMap {
     }
 
     fn set_data(&mut self, y: i16, x: i16, data: CoordData) {
+        if let (Ok(line), Ok(column)) = (usize::try_from(y), usize::try_from(x)) {
+            if self.dense_widths.len() <= line {
+                self.dense_widths.resize(line + 1, 0);
+            }
+            self.dense_widths[line] =
+                self.dense_widths[line]
+                    .max(column.saturating_add(
+                        UnicodeWidthStr::width(data.atom.contents.as_str()).max(1),
+                    ));
+        }
         self.rows.entry(y).or_default().insert(x, data);
         self.bounds = Some(match self.bounds {
             Some(bounds) => LayerBounds {
@@ -216,48 +339,61 @@ impl LayerMap {
     }
 
     pub fn to_dense(&self) -> Vec<Vec<Atom>> {
-        let Some(max_line) = self.rows.keys().copied().filter(|line| *line >= 0).max() else {
-            return vec![Vec::new()];
-        };
-        let mut lines = vec![Vec::new(); usize::try_from(max_line).unwrap_or(0) + 1];
-        for (&line, row) in &self.rows {
-            let Ok(line) = usize::try_from(line) else {
-                continue;
-            };
-            let Some(max_column) = row.keys().copied().filter(|column| *column >= 0).max() else {
-                continue;
-            };
-            let mut atoms = vec![default_blank(); usize::try_from(max_column).unwrap_or(0) + 1];
-            for (&column, data) in row {
-                if let Ok(column) = usize::try_from(column) {
-                    atoms[column] = data.atom.as_ref().clone();
-                    atoms[column].face = data.face.as_ref().clone();
+        self.dense_widths
+            .iter()
+            .enumerate()
+            .map(|(line, &width)| {
+                let row = i16::try_from(line)
+                    .ok()
+                    .and_then(|line| self.rows.get(&line));
+                let mut atoms = Vec::new();
+                let mut column = 0usize;
+                while column < width {
+                    let data = i16::try_from(column)
+                        .ok()
+                        .and_then(|column| row.and_then(|row| row.get(&column)));
+                    if let Some(data) = data {
+                        let mut atom = data.atom.as_ref().clone();
+                        atom.face = data.face.as_ref().clone();
+                        column = column
+                            .saturating_add(UnicodeWidthStr::width(atom.contents.as_str()).max(1));
+                        atoms.push(atom);
+                    } else {
+                        atoms.push(default_blank());
+                        column += 1;
+                    }
                 }
-            }
-            while atoms.last().is_some_and(is_default_blank) {
-                atoms.pop();
-            }
-            lines[line] = atoms;
-        }
-        lines
+                atoms
+            })
+            .collect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerStack {
     layers: Vec<LayerMap>,
+    active: usize,
     enabled: bool,
     bounds: Option<LayerBounds>,
 }
 
 impl LayerStack {
     pub fn new(layers: Vec<LayerMap>, enabled: bool) -> Result<Self> {
+        Self::with_active(layers, LayerId(0), enabled)
+    }
+
+    pub fn with_active(layers: Vec<LayerMap>, active_id: LayerId, enabled: bool) -> Result<Self> {
         if layers.is_empty() {
             bail!("layer stack cannot be empty");
         }
+        let active = layers
+            .iter()
+            .position(|layer| layer.id == active_id)
+            .context("active layer is not present in the layer stack")?;
         let bounds = combined_bounds(&layers);
         Ok(Self {
             layers,
+            active,
             enabled,
             bounds,
         })
@@ -265,6 +401,260 @@ impl LayerStack {
 
     pub fn layers(&self) -> &[LayerMap] {
         &self.layers
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    pub fn active_id(&self) -> LayerId {
+        self.layers[self.active].id
+    }
+
+    pub fn summaries(&self) -> Vec<LayerSummary> {
+        self.layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| LayerSummary {
+                id: layer.id,
+                visible: layer.visible,
+                active: index == self.active,
+            })
+            .collect()
+    }
+
+    pub fn index_of(&self, id: LayerId) -> Option<usize> {
+        self.layers.iter().position(|layer| layer.id == id)
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn has_legacy_wide_atoms(&self) -> bool {
+        self.layers.iter().any(|layer| {
+            layer.rows.values().any(|row| {
+                row.values()
+                    .any(|data| UnicodeWidthStr::width(data.atom.contents.as_str()) != 1)
+            })
+        })
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub(crate) fn commit_active(
+        &mut self,
+        lines: &[Vec<Atom>],
+        markers: &[LineMarker],
+    ) -> Result<()> {
+        let layer = &self.layers[self.active];
+        self.layers[self.active] =
+            LayerMap::from_dense_with_markers(layer.id, layer.visible, lines, markers)?;
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn activate(
+        &mut self,
+        index: usize,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+    ) -> Result<bool> {
+        if index >= self.layers.len() || index == self.active {
+            return Ok(false);
+        }
+        self.commit_active(active_lines, active_markers)?;
+        self.active = index;
+        *active_lines = self.layers[index].to_dense();
+        *active_markers = self.layers[index].line_markers.clone();
+        Ok(true)
+    }
+
+    pub(crate) fn add_above(
+        &mut self,
+        index: usize,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+    ) -> Result<Option<LayerId>> {
+        if self.layers.len() >= MAX_LAYERS || index >= self.layers.len() {
+            return Ok(None);
+        }
+        self.commit_active(active_lines, active_markers)?;
+        let id = (0..LAYER_SYMBOLS.len())
+            .map(|value| LayerId(value as u8))
+            .find(|candidate| self.index_of(*candidate).is_none())
+            .context("no unused layer id")?;
+        let new_index = index + 1;
+        self.layers.insert(new_index, LayerMap::new(id, true));
+        self.active = new_index;
+        *active_lines = vec![Vec::new()];
+        active_markers.clear();
+        self.recalculate_bounds();
+        Ok(Some(id))
+    }
+
+    pub fn toggle_visibility(&mut self, index: usize) -> bool {
+        let Some(layer) = self.layers.get_mut(index) else {
+            return false;
+        };
+        layer.visible = !layer.visible;
+        true
+    }
+
+    pub fn move_up(&mut self, index: usize) -> bool {
+        if index == 0 || index + 1 >= self.layers.len() {
+            return false;
+        }
+        self.layers.swap(index, index + 1);
+        self.active = match self.active {
+            active if active == index => index + 1,
+            active if active == index + 1 => index,
+            active => active,
+        };
+        true
+    }
+
+    pub fn move_down(&mut self, index: usize) -> bool {
+        if index <= 1 || index >= self.layers.len() {
+            return false;
+        }
+        self.layers.swap(index - 1, index);
+        self.active = match self.active {
+            active if active == index => index - 1,
+            active if active == index - 1 => index,
+            active => active,
+        };
+        true
+    }
+
+    pub(crate) fn merge_into(
+        &mut self,
+        index: usize,
+        target: usize,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+    ) -> Result<bool> {
+        if index == 0
+            || index >= self.layers.len()
+            || target >= self.layers.len()
+            || index.abs_diff(target) != 1
+        {
+            return Ok(false);
+        }
+        self.commit_active(active_lines, active_markers)?;
+        let source = self.layers.remove(index);
+        let target = target.saturating_sub(usize::from(target > index));
+        let target_layer = &mut self.layers[target];
+        let mut target_lines = target_layer.to_dense();
+        let source_lines = source.to_dense();
+        let covered = overlay_nonblank_atoms(&mut target_lines, &source_lines);
+        target_layer
+            .line_markers
+            .retain(|marker| !covered.iter().any(|bounds| bounds.contains(marker.coord)));
+        for marker in source.line_markers {
+            target_layer
+                .line_markers
+                .retain(|existing| existing.coord != marker.coord);
+            target_layer.line_markers.push(marker);
+        }
+        let id = target_layer.id;
+        let visible = target_layer.visible;
+        let markers = target_layer.line_markers.clone();
+        self.layers[target] =
+            LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
+        self.active = target;
+        *active_lines = target_lines;
+        *active_markers = markers;
+        self.recalculate_bounds();
+        Ok(true)
+    }
+
+    pub(crate) fn delete(
+        &mut self,
+        index: usize,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+    ) -> Result<bool> {
+        if index == 0 || index >= self.layers.len() {
+            return Ok(false);
+        }
+        self.commit_active(active_lines, active_markers)?;
+        self.layers.remove(index);
+        if index == self.active {
+            self.active = index - 1;
+            *active_lines = self.layers[self.active].to_dense();
+            *active_markers = self.layers[self.active].line_markers.clone();
+        } else if index < self.active {
+            self.active -= 1;
+        }
+        self.recalculate_bounds();
+        Ok(true)
+    }
+
+    pub(crate) fn for_each_layer_dense_mut(
+        &mut self,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+        mut apply: impl FnMut(LayerId, &mut Vec<Vec<Atom>>, &mut Vec<LineMarker>),
+    ) -> Result<()> {
+        self.commit_active(active_lines, active_markers)?;
+        let active_id = self.active_id();
+        for layer in &mut self.layers {
+            let mut lines = layer.to_dense();
+            let mut markers = std::mem::take(&mut layer.line_markers);
+            apply(layer.id, &mut lines, &mut markers);
+            *layer = LayerMap::from_dense_with_markers(layer.id, layer.visible, &lines, &markers)?;
+            if layer.id == active_id {
+                *active_lines = lines;
+                *active_markers = markers;
+            }
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn prepend_line_to_inactive(&mut self) {
+        for (index, layer) in self.layers.iter_mut().enumerate() {
+            if index != self.active {
+                layer.prepend_line();
+            }
+        }
+        self.recalculate_bounds();
+    }
+
+    pub(crate) fn prepend_column_to_inactive(&mut self) {
+        for (index, layer) in self.layers.iter_mut().enumerate() {
+            if index != self.active {
+                layer.prepend_column();
+            }
+        }
+        self.recalculate_bounds();
+    }
+
+    pub(crate) fn clear_contents(
+        &mut self,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<LineMarker>,
+        cursor: Coord,
+    ) {
+        for layer in &mut self.layers {
+            *layer = LayerMap::new(layer.id, layer.visible);
+        }
+        *active_lines = (0..=cursor.line).map(|_| Vec::new()).collect();
+        active_lines[cursor.line] = (0..cursor.column).map(|_| default_blank()).collect();
+        active_markers.clear();
+        self.bounds = None;
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new(vec![LayerMap::new(LayerId(0), true)], self.enabled)
+            .expect("the default stack has a base layer");
+    }
+
+    pub fn recalculate_bounds(&mut self) {
+        self.bounds = combined_bounds(&self.layers);
     }
 
     pub fn bounds(&self) -> Option<LayerBounds> {
@@ -309,6 +699,24 @@ impl LayerStack {
             .next_back()
             .unwrap_or_else(blank_atom)
     }
+
+    pub fn composite_region(&self, region: CanvasRegion) -> Option<Vec<Vec<Atom>>> {
+        let left = i16::try_from(region.left).ok()?;
+        let top = i16::try_from(region.top).ok()?;
+        let width = i16::try_from(region.width).ok()?;
+        let height = i16::try_from(region.height).ok()?;
+        let mut rows = Vec::with_capacity(region.height);
+        for line_offset in 0..height {
+            let line = top.checked_add(line_offset)?;
+            let mut row = Vec::with_capacity(region.width);
+            for column_offset in 0..width {
+                let column = left.checked_add(column_offset)?;
+                row.push(self.top_at(line, column).as_ref().clone());
+            }
+            rows.push(row);
+        }
+        Some(rows)
+    }
 }
 
 fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
@@ -323,15 +731,45 @@ fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
         })
 }
 
+fn overlay_nonblank_atoms(
+    target: &mut Vec<Vec<Atom>>,
+    source: &[Vec<Atom>],
+) -> Vec<SelectionBounds> {
+    let mut covered = Vec::new();
+    for (line, atoms) in source.iter().enumerate() {
+        let mut column = 0usize;
+        for atom in atoms {
+            let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
+            if atom.contents.chars().all(char::is_whitespace) {
+                column = column.saturating_add(width);
+                continue;
+            }
+            let bounds = SelectionBounds {
+                left: column,
+                right: column.saturating_add(width.saturating_sub(1)),
+                top: line,
+                bottom: line,
+            };
+            overwrite_rectangle(
+                target,
+                Coord { line, column },
+                &TextRectangle {
+                    rows: vec![vec![atom.clone()]],
+                    width,
+                },
+            );
+            covered.push(bounds);
+            column = column.saturating_add(width);
+        }
+    }
+    covered
+}
+
 fn default_blank() -> Atom {
     Atom {
         face: Face::default(),
         contents: " ".to_owned(),
     }
-}
-
-fn is_default_blank(atom: &Atom) -> bool {
-    atom.face == Face::default() && atom.contents == " "
 }
 
 #[cfg(test)]

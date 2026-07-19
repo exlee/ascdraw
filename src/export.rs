@@ -12,7 +12,9 @@ use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Atom, Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
-use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle, region_atoms};
+#[cfg(test)]
+use crate::selection::region_atoms;
+use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle};
 use crate::toolbar::DurableMenuSelections;
 
 const PROJECT_FORMAT: &str = "ascdraw";
@@ -424,22 +426,10 @@ pub fn plain_text(state: &Editor) -> String {
 }
 
 fn sparse_composite_region(state: &Editor, region: CanvasRegion) -> Option<Vec<Vec<Atom>>> {
-    let stack = state.sparse_layer_stack().ok()?;
-    let left = i16::try_from(region.left).ok()?;
-    let top = i16::try_from(region.top).ok()?;
-    let width = i16::try_from(region.width).ok()?;
-    let height = i16::try_from(region.height).ok()?;
-    let mut rows = Vec::with_capacity(usize::from(height.unsigned_abs()));
-    for line_offset in 0..height {
-        let line = top.checked_add(line_offset)?;
-        let mut row = Vec::with_capacity(usize::from(width.unsigned_abs()));
-        for column_offset in 0..width {
-            let column = left.checked_add(column_offset)?;
-            row.push(stack.top_at(line, column).as_ref().clone());
-        }
-        rows.push(row);
+    if !state.canvas_is_current() {
+        return None;
     }
-    Some(rows)
+    state.canvas().composite_region(region)
 }
 
 pub fn canvas_region_for_export(
@@ -474,11 +464,20 @@ pub fn canvas_layers_for_export(
 }
 
 fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<Atom>>> {
+    if !state.canvas_is_current() {
+        return state
+            .layer_views()
+            .into_iter()
+            .filter(|layer| layer.visible)
+            .map(|layer| crate::selection::region_atoms(&layer.lines, region))
+            .collect();
+    }
     state
-        .layer_views()
-        .into_iter()
+        .canvas()
+        .layers()
+        .iter()
         .filter(|layer| layer.visible)
-        .map(|layer| region_atoms(layer.lines, region))
+        .map(|layer| layer.atoms_in_region(region))
         .collect()
 }
 

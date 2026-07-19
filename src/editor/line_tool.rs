@@ -1,3 +1,4 @@
+use crate::canvas::LineMarker;
 use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_for_connection_pair,
     glyph_with_connection_and_corner, is_line_glyph, line_ending_glyph,
@@ -13,13 +14,6 @@ pub(super) struct ActiveStroke {
     pub(super) moving_ending: LineEnding,
     pub(super) incoming_connection: Direction,
     pub(super) end_was_existing_line: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PlacedLineMarker {
-    pub(super) coord: Coord,
-    pub(super) ending: LineEnding,
-    pub(super) base_glyph: String,
 }
 
 impl Editor {
@@ -168,7 +162,7 @@ impl Editor {
         }
     }
 
-    fn take_line_marker(&mut self, coord: Coord) -> Option<PlacedLineMarker> {
+    fn take_line_marker(&mut self, coord: Coord) -> Option<LineMarker> {
         let index = self
             .line_markers
             .iter()
@@ -244,7 +238,7 @@ impl Editor {
             line_ending_glyph(ending, connected_direction, line_style).to_string(),
         );
         if ending != LineEnding::None {
-            self.line_markers.push(PlacedLineMarker {
+            self.line_markers.push(LineMarker {
                 coord,
                 ending,
                 base_glyph: base_glyph.to_string(),

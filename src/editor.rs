@@ -32,10 +32,11 @@ mod shape_tool;
 mod state;
 mod text_tool;
 mod utility;
+use crate::canvas::LineMarker as PlacedLineMarker;
 pub(super) use grid::{adjacent_coord, edited_content_origin};
-pub use layers::{LayerStack, LayerView, PersistedLayer};
+pub use layers::{LayerView, PersistedLayer};
 use line_preview::LinePreview;
-use line_tool::{ActiveStroke, PlacedLineMarker};
+use line_tool::ActiveStroke;
 use move_tool::MoveLift;
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,7 @@ pub struct Editor {
     cursor_index: usize,
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
-    layers: LayerStack,
+    canvas: crate::canvas::LayerStack,
     line_preview: Option<LinePreview>,
     shape_preview: Option<ShapePreview>,
     move_lift: Option<MoveLift>,
@@ -80,7 +81,7 @@ fn reverse_theme_colors(theme: &mut ThemeConfig) {
     std::mem::swap(&mut theme.default.fg, &mut theme.default.bg);
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EditSnapshot {
     lines: Vec<Vec<Atom>>,
     cursor_pos: Coord,
@@ -89,15 +90,30 @@ pub struct EditSnapshot {
     active_stroke: Option<ActiveStroke>,
     line_markers: Vec<PlacedLineMarker>,
     canvas_origin: Coord,
-    layers: LayerStack,
+    canvas: crate::canvas::LayerStack,
 }
+
+impl PartialEq for EditSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.lines == other.lines
+            && self.cursor_pos == other.cursor_pos
+            && self.cursor_index == other.cursor_index
+            && self.selection == other.selection
+            && self.active_stroke == other.active_stroke
+            && self.line_markers == other.line_markers
+            && self.canvas_origin == other.canvas_origin
+            && self.canvas == other.canvas
+    }
+}
+
+impl Eq for EditSnapshot {}
 
 impl EditSnapshot {
     pub fn same_document(&self, other: &Self) -> bool {
         self.lines == other.lines
             && self.line_markers == other.line_markers
             && self.canvas_origin == other.canvas_origin
-            && self.layers == other.layers
+            && self.canvas == other.canvas
     }
 
     #[cfg(test)]
@@ -108,38 +124,74 @@ impl EditSnapshot {
 }
 
 impl Editor {
-    pub fn sparse_layer_stack(&self) -> anyhow::Result<crate::canvas::LayerStack> {
-        let layers = self
-            .layer_views()
-            .into_iter()
-            .map(|layer| crate::canvas::LayerMap::from_dense(layer.id, layer.visible, layer.lines))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        crate::canvas::LayerStack::new(layers, self.toolbar.multi_layer_mode())
+    pub(crate) fn commit_canvas_mutations(&mut self) -> anyhow::Result<()> {
+        if self
+            .canvas
+            .commit_active(&self.grid.lines, &self.line_markers)
+            .is_err()
+        {
+            // Legacy dense documents can still contain wide atoms. They remain
+            // on the compatibility path until the document is edited into
+            // one-cell atoms; sparse storage itself never accepts them.
+            return Ok(());
+        };
+        self.canvas.set_enabled(self.toolbar.multi_layer_mode());
+        Ok(())
+    }
+
+    fn commit_canvas(&mut self) {
+        self.commit_canvas_mutations()
+            .expect("editor mutations preserve one-cell sparse canvas atoms");
+    }
+
+    pub fn canvas(&self) -> &crate::canvas::LayerStack {
+        &self.canvas
+    }
+
+    pub fn canvas_is_current(&self) -> bool {
+        self.canvas.layers()[self.canvas.active_index()].matches_dense(&self.grid.lines)
+            && self.canvas.enabled() == self.toolbar.multi_layer_mode()
+            && !self.canvas.has_legacy_wide_atoms()
     }
 
     pub fn layer_summaries(&self) -> Vec<LayerSummary> {
-        self.layers.summaries()
+        self.canvas.summaries()
     }
 
-    pub fn layer_views(&self) -> Vec<LayerView<'_>> {
-        self.layers
+    pub fn layer_views(&self) -> Vec<LayerView> {
+        self.canvas
             .layers()
             .iter()
             .enumerate()
             .map(|(index, layer)| LayerView {
                 id: layer.id,
                 visible: layer.visible,
-                lines: if index == self.layers.active_index() {
-                    &self.grid.lines
+                lines: if index == self.canvas.active_index() {
+                    self.grid.lines.clone()
                 } else {
-                    &layer.lines
+                    layer.to_dense()
                 },
             })
             .collect()
     }
 
+    fn layer_contents(&self) -> Vec<(LayerId, Vec<Vec<Atom>>, Vec<PlacedLineMarker>)> {
+        self.canvas
+            .layers()
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| {
+                if index == self.canvas.active_index() {
+                    (layer.id, self.grid.lines.clone(), self.line_markers.clone())
+                } else {
+                    (layer.id, layer.to_dense(), layer.line_markers().to_vec())
+                }
+            })
+            .collect()
+    }
+
     pub fn active_layer_id(&self) -> LayerId {
-        self.layers.active_id()
+        self.canvas.active_id()
     }
 
     pub fn persisted_layers(&self) -> Vec<PersistedLayer> {
@@ -148,7 +200,7 @@ impl Editor {
             .map(|layer| PersistedLayer {
                 id: layer.id,
                 visible: layer.visible,
-                lines: layer.lines.to_vec(),
+                lines: layer.lines,
             })
             .collect()
     }
@@ -158,11 +210,26 @@ impl Editor {
         layers: Vec<PersistedLayer>,
         active_layer: LayerId,
     ) -> anyhow::Result<()> {
-        let (stack, lines) = LayerStack::from_persisted(layers, active_layer)?;
-        self.layers = stack;
-        self.toolbar.sync_layer_count(self.layers.layers().len());
-        self.grid.lines = lines;
-        self.line_markers.clear();
+        let maps = layers
+            .into_iter()
+            .map(|layer| {
+                crate::canvas::LayerMap::from_dense_with_markers(
+                    layer.id,
+                    layer.visible,
+                    &layer.lines,
+                    &[],
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.canvas = crate::canvas::LayerStack::with_active(
+            maps,
+            active_layer,
+            self.toolbar.multi_layer_mode(),
+        )?;
+        self.toolbar.sync_layer_count(self.canvas.layers().len());
+        let active = &self.canvas.layers()[self.canvas.active_index()];
+        self.grid.lines = active.to_dense();
+        self.line_markers = active.line_markers().to_vec();
         Ok(())
     }
 
@@ -179,91 +246,114 @@ impl Editor {
     }
 
     pub fn select_layer(&mut self, id: LayerId) -> bool {
-        let Some(index) = self.layers.index_of(id) else {
+        let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
         let changed = self
-            .layers
-            .activate(index, &mut self.grid.lines, &mut self.line_markers);
+            .canvas
+            .activate(index, &mut self.grid.lines, &mut self.line_markers)
+            .expect("editor layers contain valid sparse cells");
         if changed {
-            self.toolbar.sync_layer_count(self.layers.layers().len());
+            self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
+            self.commit_canvas();
         }
         changed
     }
 
     pub fn add_layer_above(&mut self, id: LayerId) -> bool {
-        let Some(index) = self.layers.index_of(id) else {
+        let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
         let changed = self
-            .layers
+            .canvas
             .add_above(index, &mut self.grid.lines, &mut self.line_markers)
+            .expect("editor layers contain valid sparse cells")
             .is_some();
         if changed {
-            self.toolbar.sync_layer_count(self.layers.layers().len());
+            self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
+            self.commit_canvas();
         }
         changed
     }
 
     pub fn toggle_layer_visibility(&mut self, id: LayerId) -> bool {
-        self.layers
+        let changed = self
+            .canvas
             .index_of(id)
-            .is_some_and(|index| self.layers.toggle_visibility(index))
+            .is_some_and(|index| self.canvas.toggle_visibility(index));
+        if changed {
+            self.commit_canvas();
+        }
+        changed
     }
 
     pub fn move_layer_up(&mut self, id: LayerId) -> bool {
-        self.layers
+        let changed = self
+            .canvas
             .index_of(id)
-            .is_some_and(|index| self.layers.move_up(index))
+            .is_some_and(|index| self.canvas.move_up(index));
+        if changed {
+            self.commit_canvas();
+        }
+        changed
     }
 
     pub fn move_layer_down(&mut self, id: LayerId) -> bool {
-        self.layers
+        let changed = self
+            .canvas
             .index_of(id)
-            .is_some_and(|index| self.layers.move_down(index))
+            .is_some_and(|index| self.canvas.move_down(index));
+        if changed {
+            self.commit_canvas();
+        }
+        changed
     }
 
     pub fn merge_layer_up(&mut self, id: LayerId) -> bool {
-        let Some(index) = self.layers.index_of(id) else {
+        let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
         self.merge_layer_into(index, index.saturating_sub(1))
     }
 
     pub fn merge_layer_down(&mut self, id: LayerId) -> bool {
-        let Some(index) = self.layers.index_of(id) else {
+        let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
         self.merge_layer_into(index, index.saturating_add(1))
     }
 
     fn merge_layer_into(&mut self, index: usize, target: usize) -> bool {
-        let changed =
-            self.layers
-                .merge_into(index, target, &mut self.grid.lines, &mut self.line_markers);
+        let changed = self
+            .canvas
+            .merge_into(index, target, &mut self.grid.lines, &mut self.line_markers)
+            .expect("editor layers contain valid sparse cells");
         if changed {
-            self.toolbar.sync_layer_count(self.layers.layers().len());
+            self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
+            self.commit_canvas();
         }
         changed
     }
 
     pub fn delete_layer(&mut self, id: LayerId) -> bool {
-        let Some(index) = self.layers.index_of(id) else {
+        let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
         let changed = self
-            .layers
-            .delete(index, &mut self.grid.lines, &mut self.line_markers);
+            .canvas
+            .delete(index, &mut self.grid.lines, &mut self.line_markers)
+            .expect("editor layers contain valid sparse cells");
         if changed {
-            self.toolbar.sync_layer_count(self.layers.layers().len());
+            self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
+            self.commit_canvas();
         }
         changed
     }
@@ -322,6 +412,10 @@ impl Editor {
                     self.canvas_origin,
                 )
             };
+        let mut canvas = self.canvas.clone();
+        canvas
+            .commit_active(&lines, &line_markers)
+            .expect("editor layers contain valid sparse cells");
         EditSnapshot {
             lines,
             cursor_pos,
@@ -330,7 +424,7 @@ impl Editor {
             active_stroke: self.active_stroke.clone(),
             line_markers,
             canvas_origin,
-            layers: self.layers.clone(),
+            canvas,
         }
     }
 
@@ -342,8 +436,8 @@ impl Editor {
         self.active_stroke = snapshot.active_stroke;
         self.line_markers = snapshot.line_markers;
         self.canvas_origin = snapshot.canvas_origin;
-        self.layers = snapshot.layers;
-        self.toolbar.sync_layer_count(self.layers.layers().len());
+        self.canvas = snapshot.canvas;
+        self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -351,9 +445,13 @@ impl Editor {
     }
 
     pub fn new(theme: &ThemeConfig, window_title: impl Into<String>) -> Self {
-        let layers = LayerStack::default();
+        let canvas = crate::canvas::LayerStack::new(
+            vec![crate::canvas::LayerMap::new(LayerId(0), true)],
+            false,
+        )
+        .expect("the initial canvas has a base layer");
         let mut toolbar = ToolbarState::default();
-        toolbar.sync_layer_count(layers.layers().len());
+        toolbar.sync_layer_count(canvas.layers().len());
         Self {
             grid: GridState {
                 lines: vec![Vec::new()],
@@ -369,7 +467,7 @@ impl Editor {
             cursor_index: 0,
             active_stroke: None,
             line_markers: Vec::new(),
-            layers,
+            canvas,
             line_preview: None,
             shape_preview: None,
             move_lift: None,
@@ -414,8 +512,9 @@ impl Editor {
         self.single_replace_pending = false;
         self.collapse_selection();
         self.toolbar.restore_durable_selections(selections);
-        self.toolbar.sync_layer_count(self.layers.layers().len());
+        self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.sync_cursor_mode_with_toolbar();
+        self.commit_canvas();
     }
 
     pub fn tooltip(&self) -> Tooltip {
@@ -486,6 +585,7 @@ impl Editor {
         self.shape_preview = None;
         self.toolbar.select_custom_stamp(atom.contents.clone());
         self.sync_cursor_mode_with_toolbar();
+        self.commit_canvas();
         true
     }
 
@@ -996,14 +1096,16 @@ impl Editor {
             return;
         }
         let bounds = self.selection.bounds();
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                markers.retain(|marker| !bounds.contains(marker.coord));
-                replace_range(lines, bounds, None);
-            },
-        );
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    markers.retain(|marker| !bounds.contains(marker.coord));
+                    replace_range(lines, bounds, None);
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.restore_active_cursor_index();
     }
 
@@ -1130,8 +1232,8 @@ impl Editor {
 
     pub fn replace_canvas(&mut self, mut lines: Vec<Vec<Atom>>) {
         truncate_canvas_lines(&mut lines);
-        self.layers.reset();
-        self.toolbar.sync_layer_count(self.layers.layers().len());
+        self.canvas.reset();
+        self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.grid.lines = if lines.is_empty() {
             vec![Vec::new()]
         } else {
@@ -1150,6 +1252,7 @@ impl Editor {
         self.toolbar.cancel_shortcut();
         self.selection.collapse(Coord::default());
         self.sync_cursor_mode_with_toolbar();
+        self.commit_canvas();
     }
 
     pub fn restore_project(
@@ -1164,7 +1267,7 @@ impl Editor {
         self.canvas_origin = self
             .layer_views()
             .into_iter()
-            .filter_map(|layer| edited_content_origin(layer.lines))
+            .filter_map(|layer| edited_content_origin(&layer.lines))
             .reduce(|origin, candidate| Coord {
                 line: origin.line.min(candidate.line),
                 column: origin.column.min(candidate.column),
@@ -1192,7 +1295,7 @@ impl Editor {
     pub fn clear_canvas(&mut self) {
         self.cancel_line_preview();
         let cursor = self.grid.cursor_pos;
-        self.layers
+        self.canvas
             .clear_contents(&mut self.grid.lines, &mut self.line_markers, cursor);
 
         self.grid.cursor_pos = cursor;
@@ -1207,6 +1310,7 @@ impl Editor {
         self.toolbar.cancel_shortcut();
         self.selection.collapse(cursor);
         self.sync_cursor_mode_with_toolbar();
+        self.commit_canvas();
     }
 
     pub fn preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
@@ -1266,7 +1370,7 @@ impl Editor {
             .layer_views()
             .into_iter()
             .filter(|layer| layer.visible)
-            .flat_map(|layer| grid::content_cells(layer.lines))
+            .flat_map(|layer| grid::content_cells(&layer.lines))
             .collect::<Vec<_>>();
         cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
         cells.dedup();
@@ -1277,7 +1381,7 @@ impl Editor {
         let mut cells = self
             .layer_views()
             .into_iter()
-            .flat_map(|layer| grid::content_cells(layer.lines))
+            .flat_map(|layer| grid::content_cells(&layer.lines))
             .collect::<Vec<_>>();
         cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
         cells.dedup();
@@ -1313,7 +1417,7 @@ impl Editor {
         if self.canvas_height() >= MAX_CANVAS_HEIGHT {
             return false;
         }
-        self.layers.prepend_line_to_inactive();
+        self.canvas.prepend_line_to_inactive();
         self.grid.lines.insert(0, Vec::new());
         self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
         self.selection.shift(0, 1);
@@ -1336,7 +1440,7 @@ impl Editor {
         if self.canvas_width() >= MAX_CANVAS_WIDTH {
             return false;
         }
-        self.layers.prepend_column_to_inactive();
+        self.canvas.prepend_column_to_inactive();
         for line in &mut self.grid.lines {
             line.insert(0, blank_atom());
         }
@@ -1379,7 +1483,7 @@ impl Editor {
             .layer_views()
             .into_iter()
             .flat_map(|layer| layer.lines)
-            .map(|line| display_width(line))
+            .map(|line| display_width(&line))
             .max()
             .unwrap_or(0);
         stored_width.max(

@@ -4,11 +4,13 @@ use crate::toolbar::UtilityKind;
 
 impl Editor {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, _| super::grid::expand_blank_runs(lines),
-        );
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, _| super::grid::expand_blank_runs(lines),
+            )
+            .expect("editor layers contain valid sparse cells");
         match self.toolbar.utility_kind() {
             UtilityKind::Push => self.push_blank(direction),
             UtilityKind::Pull => self.pull_all(direction),
@@ -66,25 +68,27 @@ impl Editor {
         }) {
             return false;
         }
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                lines.resize_with(height, Vec::new);
-                for line in lines {
-                    let index = boundary_index(line, column)
-                        .expect("all layer boundaries were validated before mutation");
-                    let width = display_width(line);
-                    line.extend((width..column).map(|_| blank_atom()));
-                    line.insert(index + column.saturating_sub(width), blank_atom());
-                }
-                for marker in markers {
-                    if marker.coord.column >= column {
-                        marker.coord.column = marker.coord.column.saturating_add(1);
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    lines.resize_with(height, Vec::new);
+                    for line in lines {
+                        let index = boundary_index(line, column)
+                            .expect("all layer boundaries were validated before mutation");
+                        let width = display_width(line);
+                        line.extend((width..column).map(|_| blank_atom()));
+                        line.insert(index + column.saturating_sub(width), blank_atom());
                     }
-                }
-            },
-        );
+                    for marker in markers {
+                        if marker.coord.column >= column {
+                            marker.coord.column = marker.coord.column.saturating_add(1);
+                        }
+                    }
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.map_global_coordinate_state(|mut coord| {
             if coord.column >= column {
                 coord.column = coord.column.saturating_add(1);
@@ -98,21 +102,23 @@ impl Editor {
         if self.canvas_height() >= MAX_CANVAS_HEIGHT {
             return false;
         }
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                while lines.len() < line {
-                    lines.push(Vec::new());
-                }
-                lines.insert(line, Vec::new());
-                for marker in markers {
-                    if marker.coord.line >= line {
-                        marker.coord.line = marker.coord.line.saturating_add(1);
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    while lines.len() < line {
+                        lines.push(Vec::new());
                     }
-                }
-            },
-        );
+                    lines.insert(line, Vec::new());
+                    for marker in markers {
+                        if marker.coord.line >= line {
+                            marker.coord.line = marker.coord.line.saturating_add(1);
+                        }
+                    }
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.map_global_coordinate_state(|mut coord| {
             if coord.line >= line {
                 coord.line = coord.line.saturating_add(1);
@@ -153,31 +159,33 @@ impl Editor {
             return false;
         }
 
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                for (row, line) in lines.iter_mut().enumerate() {
-                    if !removed.get(row).copied().unwrap_or(false) {
-                        continue;
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    for (row, line) in lines.iter_mut().enumerate() {
+                        if !removed.get(row).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        if let CellSlot::Exact(index) = cell_slot(line, column) {
+                            line.remove(index);
+                        }
                     }
-                    if let CellSlot::Exact(index) = cell_slot(line, column) {
-                        line.remove(index);
+                    markers.retain(|marker| {
+                        !(removed.get(marker.coord.line).copied().unwrap_or(false)
+                            && marker.coord.column == column)
+                    });
+                    for marker in markers {
+                        if removed.get(marker.coord.line).copied().unwrap_or(false)
+                            && marker.coord.column > column
+                        {
+                            marker.coord.column -= 1;
+                        }
                     }
-                }
-                markers.retain(|marker| {
-                    !(removed.get(marker.coord.line).copied().unwrap_or(false)
-                        && marker.coord.column == column)
-                });
-                for marker in markers {
-                    if removed.get(marker.coord.line).copied().unwrap_or(false)
-                        && marker.coord.column > column
-                    {
-                        marker.coord.column -= 1;
-                    }
-                }
-            },
-        );
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.remap_after_pull(
             |coord| removed.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -217,32 +225,34 @@ impl Editor {
             return false;
         }
 
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                for (row, line) in lines.iter_mut().enumerate() {
-                    if !affected.get(row).copied().unwrap_or(false) || line.is_empty() {
-                        continue;
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    for (row, line) in lines.iter_mut().enumerate() {
+                        if !affected.get(row).copied().unwrap_or(false) || line.is_empty() {
+                            continue;
+                        }
+                        if let CellSlot::Exact(index) = cell_slot(line, column) {
+                            line.remove(index);
+                        }
+                        line.insert(0, blank_atom());
                     }
-                    if let CellSlot::Exact(index) = cell_slot(line, column) {
-                        line.remove(index);
+                    markers.retain(|marker| {
+                        !(affected.get(marker.coord.line).copied().unwrap_or(false)
+                            && marker.coord.column == column)
+                    });
+                    for marker in markers {
+                        if affected.get(marker.coord.line).copied().unwrap_or(false)
+                            && marker.coord.column < column
+                        {
+                            marker.coord.column = marker.coord.column.saturating_add(1);
+                        }
                     }
-                    line.insert(0, blank_atom());
-                }
-                markers.retain(|marker| {
-                    !(affected.get(marker.coord.line).copied().unwrap_or(false)
-                        && marker.coord.column == column)
-                });
-                for marker in markers {
-                    if affected.get(marker.coord.line).copied().unwrap_or(false)
-                        && marker.coord.column < column
-                    {
-                        marker.coord.column = marker.coord.column.saturating_add(1);
-                    }
-                }
-            },
-        );
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.remap_after_pull(
             |coord| affected.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -264,21 +274,23 @@ impl Editor {
         {
             return false;
         }
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                if target < lines.len() {
-                    lines.remove(target);
-                }
-                markers.retain(|marker| marker.coord.line != target);
-                for marker in markers {
-                    if marker.coord.line > target {
-                        marker.coord.line -= 1;
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    if target < lines.len() {
+                        lines.remove(target);
                     }
-                }
-            },
-        );
+                    markers.retain(|marker| marker.coord.line != target);
+                    for marker in markers {
+                        if marker.coord.line > target {
+                            marker.coord.line -= 1;
+                        }
+                    }
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {
@@ -299,8 +311,7 @@ impl Editor {
                 .into_iter()
                 .any(|layer| layer.lines.iter().any(|line| !line.is_empty()));
             let has_markers = self
-                .layers
-                .layer_contents(&self.grid.lines, &self.line_markers)
+                .layer_contents()
                 .into_iter()
                 .any(|(_, _, markers)| !markers.is_empty());
             if !has_content && !has_markers && self.active_stroke.is_none() {
@@ -322,30 +333,31 @@ impl Editor {
                 .any(|line| !line.is_empty())
         });
         let has_markers = self
-            .layers
-            .layer_contents(&self.grid.lines, &self.line_markers)
+            .layer_contents()
             .into_iter()
             .flat_map(|(_, _, markers)| markers)
             .any(|marker| marker.coord.line <= target);
         if !has_content && !has_markers {
             return false;
         }
-        self.layers.for_each_layer_mut(
-            &mut self.grid.lines,
-            &mut self.line_markers,
-            |_, lines, markers| {
-                if target < lines.len() {
-                    lines.remove(target);
-                }
-                lines.insert(0, Vec::new());
-                markers.retain(|marker| marker.coord.line != target);
-                for marker in markers {
-                    if marker.coord.line < target {
-                        marker.coord.line = marker.coord.line.saturating_add(1);
+        self.canvas
+            .for_each_layer_dense_mut(
+                &mut self.grid.lines,
+                &mut self.line_markers,
+                |_, lines, markers| {
+                    if target < lines.len() {
+                        lines.remove(target);
                     }
-                }
-            },
-        );
+                    lines.insert(0, Vec::new());
+                    markers.retain(|marker| marker.coord.line != target);
+                    for marker in markers {
+                        if marker.coord.line < target {
+                            marker.coord.line = marker.coord.line.saturating_add(1);
+                        }
+                    }
+                },
+            )
+            .expect("editor layers contain valid sparse cells");
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {

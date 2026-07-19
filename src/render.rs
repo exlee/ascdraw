@@ -317,9 +317,9 @@ fn render_canvas(
         .or(preview_lines.as_deref())
         .unwrap_or(&state.grid.lines);
     let active_layer = state.active_layer_id();
-    let layers = state
-        .layer_views()
-        .into_iter()
+    let layer_views = state.layer_views();
+    let layers = layer_views
+        .iter()
         .filter(|layer| layer.visible)
         .map(|layer| {
             state
@@ -328,20 +328,19 @@ fn render_canvas(
                     if layer.id == active_layer {
                         active_lines
                     } else {
-                        layer.lines
+                        &layer.lines
                     }
                 })
         })
         .collect::<Vec<_>>();
-    let sparse = if line_preview.is_none() && preview_lines.is_none() && !state.move_lift_active() {
-        state.sparse_layer_stack().ok()
-    } else {
-        None
-    };
-    if let Some(sparse) = sparse.as_ref() {
+    if line_preview.is_none()
+        && preview_lines.is_none()
+        && !state.move_lift_active()
+        && state.canvas_is_current()
+    {
         render_cached_sparse_grid_atoms(
             canvas,
-            sparse,
+            state.canvas(),
             state,
             metrics,
             layout,

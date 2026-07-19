@@ -922,10 +922,11 @@ impl EditorWindow {
     pub fn capture_canvas(&self, path: &Path, config: &AppConfig) -> Result<(usize, usize)> {
         let layers = self
             .state
-            .layer_views()
-            .into_iter()
+            .canvas()
+            .effective_layers()
+            .iter()
             .filter(|layer| layer.visible)
-            .map(|layer| layer.lines.to_vec())
+            .map(crate::canvas::LayerMap::to_dense)
             .collect::<Vec<_>>();
         let image = render_canvas_layers_image(
             &self.renderer,
@@ -1119,12 +1120,18 @@ impl EditorWindow {
 
     fn finish_state_change_in_group(
         &mut self,
-        previous_state: Editor,
+        mut previous_state: Editor,
         previous_viewport: ViewportOffset,
         document_changed: bool,
         group: Option<HistoryGroup>,
         viewport_policy: StateChangeViewportPolicy,
     ) -> bool {
+        previous_state
+            .commit_canvas_mutations()
+            .expect("editor cells remain valid at history boundaries");
+        self.state
+            .commit_canvas_mutations()
+            .expect("editor cells remain valid at history boundaries");
         let previous = HistorySnapshot {
             edit: previous_state.edit_snapshot(),
             viewport: previous_viewport,
