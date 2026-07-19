@@ -932,6 +932,16 @@ impl Editor {
         let Some(rectangle) = TextRectangle::from_text(text) else {
             return false;
         };
+        if !self.selection.is_collapsed()
+            && rectangle.width == 1
+            && let [row] = rectangle.rows.as_slice()
+            && let [atom] = row.as_slice()
+        {
+            self.end_stroke();
+            self.shape_preview = None;
+            self.replace_selection_literal(Some(&atom.contents));
+            return true;
+        }
         let origin = Coord {
             line: self.selection.bounds().top,
             column: self.selection.bounds().left,
@@ -2424,6 +2434,23 @@ mod tests {
         assert_eq!(state.selection.active(), Coord { line: 1, column: 2 });
         assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
         assert_eq!(state.selected_text(), "x \nYZ");
+    }
+
+    #[test]
+    fn single_cell_paste_fills_the_current_selection() {
+        let mut state = state();
+        state.insert("abcd\nefgh");
+        state.move_to(Coord { line: 1, column: 2 });
+        state.extend_selection(Direction::Left);
+        state.extend_selection(Direction::Up);
+
+        assert!(state.paste_text("x"));
+
+        assert_eq!(contents(&state.grid.lines[0]), "axxd");
+        assert_eq!(contents(&state.grid.lines[1]), "exxh");
+        assert_eq!(state.selection_bounds().width(), 2);
+        assert_eq!(state.selection_bounds().height(), 2);
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
     #[test]
