@@ -1038,8 +1038,6 @@ fn render_hollow_drawing_cursor(
     cell_resolved: &ResolvedFace,
     cursor_resolved: &ResolvedFace,
 ) {
-    render_cursor_base_cell(canvas, column, top, cell, metrics, cell_resolved);
-
     let outline = drawing_cursor_outline(column, top, metrics);
     let color = visible_drawing_cursor_color(cell, cell_resolved, cursor_resolved.fg);
     let mut paint = Paint::default();
@@ -2035,6 +2033,72 @@ mod tests {
             contrast_ratio(adapted, cell_resolved.fg)
                 > contrast_ratio(cursor_resolved.fg, cell_resolved.fg)
         );
+    }
+
+    #[test]
+    fn hollow_drawing_cursor_preserves_pixels_inside_its_outline() {
+        let config = AppConfig::default();
+        let cell_resolved = resolve_root_face(&config.theme.default, FALLBACK_FG, FALLBACK_BG);
+        let cursor_resolved = resolve_derived_face(
+            &config.theme.default,
+            &config.theme.cursor_drawing,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        );
+        let cell = CursorCell {
+            face: config.theme.default,
+            text: Some(" ".to_string()),
+        };
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: 8.0,
+            cell_height: 16.0,
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        let top = 2.0;
+        let width = PADDING * 2 + metrics.cell_width as usize;
+        let height = top as usize + metrics.cell_height as usize + 2;
+        let underlying = [0x33, 0x22, 0x11, 0xff];
+        let mut pixels = underlying.repeat(width * height);
+        let image_info = ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::BGRA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface =
+            surfaces::wrap_pixels(&image_info, pixels.as_mut_slice(), width * 4, None)
+                .expect("test surface");
+
+        render_hollow_drawing_cursor(
+            surface.canvas(),
+            0,
+            top,
+            &cell,
+            &metrics,
+            &cell_resolved,
+            &cursor_resolved,
+        );
+        drop(surface);
+
+        let center_x = PADDING + metrics.cell_width as usize / 2;
+        let center_y = top as usize + metrics.cell_height as usize / 2;
+        let center = (center_y * width + center_x) * 4;
+        let outline = (top as usize * width + center_x) * 4;
+        let cursor_color = visible_drawing_cursor_color(&cell, &cell_resolved, cursor_resolved.fg);
+        assert_eq!(
+            &pixels[outline..outline + 4],
+            &[
+                cursor_color.b,
+                cursor_color.g,
+                cursor_color.r,
+                cursor_color.a,
+            ]
+        );
+        assert_eq!(&pixels[center..center + 4], &underlying);
     }
 
     #[test]
