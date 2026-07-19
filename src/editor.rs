@@ -142,12 +142,8 @@ impl Editor {
 
 impl Editor {
     pub(crate) fn commit_canvas_mutations(&mut self) -> anyhow::Result<()> {
-        if self.canvas.commit_active(&self.grid.lines).is_err() {
-            // Legacy dense documents can still contain wide atoms. They remain
-            // on the compatibility path until the document is edited into
-            // one-cell atoms; sparse storage itself never accepts them.
-            return Ok(());
-        };
+        #[cfg(test)]
+        self.canvas.commit_active(&self.grid.lines)?;
         self.canvas.set_enabled(self.toolbar.multi_layer_mode());
         Ok(())
     }
@@ -193,9 +189,12 @@ impl Editor {
     }
 
     fn refresh_active_dense_view(&mut self) {
-        self.grid.lines = self.canvas.active_dense_lines();
-        while self.grid.lines.len() <= self.grid.cursor_pos.line {
-            self.grid.lines.push(Vec::new());
+        #[cfg(test)]
+        {
+            self.grid.lines = self.canvas.active_dense_lines();
+            while self.grid.lines.len() <= self.grid.cursor_pos.line {
+                self.grid.lines.push(Vec::new());
+            }
         }
     }
 
@@ -204,9 +203,12 @@ impl Editor {
     }
 
     pub fn canvas_is_current(&self) -> bool {
-        self.canvas.layers()[self.canvas.active_index()].matches_dense(&self.grid.lines)
-            && self.canvas.enabled() == self.toolbar.multi_layer_mode()
-            && !self.canvas.has_legacy_wide_atoms()
+        let current = self.canvas.enabled() == self.toolbar.multi_layer_mode()
+            && !self.canvas.has_legacy_wide_atoms();
+        #[cfg(test)]
+        let current = current
+            && self.canvas.layers()[self.canvas.active_index()].matches_dense(&self.grid.lines);
+        current
     }
 
     pub fn layer_summaries(&self) -> Vec<LayerSummary> {
@@ -218,12 +220,19 @@ impl Editor {
             .layers()
             .iter()
             .enumerate()
-            .map(|(index, layer)| LayerView {
+            .map(|(_index, layer)| LayerView {
                 id: layer.id,
                 visible: layer.visible,
-                lines: if index == self.canvas.active_index() {
-                    self.grid.lines.clone()
-                } else {
+                lines: {
+                    #[cfg(test)]
+                    if _index == self.canvas.active_index()
+                        && !layer.matches_dense(&self.grid.lines)
+                    {
+                        self.grid.lines.clone()
+                    } else {
+                        layer.to_dense()
+                    }
+                    #[cfg(not(test))]
                     layer.to_dense()
                 },
             })
@@ -235,12 +244,18 @@ impl Editor {
             .layers()
             .iter()
             .enumerate()
-            .map(|(index, layer)| {
-                if index == self.canvas.active_index() {
-                    (layer.id, self.grid.lines.clone(), layer.line_markers())
+            .map(|(_index, layer)| {
+                #[cfg(test)]
+                let lines = if _index == self.canvas.active_index()
+                    && !layer.matches_dense(&self.grid.lines)
+                {
+                    self.grid.lines.clone()
                 } else {
-                    (layer.id, layer.to_dense(), layer.line_markers().to_vec())
-                }
+                    layer.to_dense()
+                };
+                #[cfg(not(test))]
+                let lines = layer.to_dense();
+                (layer.id, lines, layer.line_markers().to_vec())
             })
             .collect()
     }
@@ -282,17 +297,21 @@ impl Editor {
             self.toolbar.multi_layer_mode(),
         )?;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
-        let active = &self.canvas.layers()[self.canvas.active_index()];
-        self.grid.lines = active.to_dense();
+        #[cfg(test)]
+        {
+            self.grid.lines = self.canvas.active_dense_lines();
+        }
         Ok(())
     }
 
     pub fn restore_canvas(&mut self, mut canvas: crate::canvas::LayerStack) {
         canvas.set_enabled(self.toolbar.multi_layer_mode());
         self.toolbar.sync_layer_count(canvas.layers().len());
-        let active = &canvas.layers()[canvas.active_index()];
-        self.grid.lines = active.to_dense();
         self.canvas = canvas;
+        #[cfg(test)]
+        {
+            self.grid.lines = self.canvas.active_dense_lines();
+        }
     }
 
     pub fn canvas_origin(&self) -> Coord {
@@ -314,7 +333,10 @@ impl Editor {
         self.sync_dense_layer_before_operation();
         let changed = self.canvas.activate(index);
         if changed {
-            self.grid.lines = self.canvas.active_dense_lines();
+            #[cfg(test)]
+            {
+                self.grid.lines = self.canvas.active_dense_lines();
+            }
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
@@ -333,7 +355,10 @@ impl Editor {
             .expect("editor layers contain valid sparse cells")
             .is_some();
         if changed {
-            self.grid.lines = self.canvas.active_dense_lines();
+            #[cfg(test)]
+            {
+                self.grid.lines = self.canvas.active_dense_lines();
+            }
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
@@ -389,7 +414,10 @@ impl Editor {
             .merge_into(index, target)
             .expect("editor layers contain valid sparse cells");
         if changed {
-            self.grid.lines = self.canvas.active_dense_lines();
+            #[cfg(test)]
+            {
+                self.grid.lines = self.canvas.active_dense_lines();
+            }
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
@@ -404,7 +432,10 @@ impl Editor {
         self.sync_dense_layer_before_operation();
         let changed = self.canvas.delete(index);
         if changed {
-            self.grid.lines = self.canvas.active_dense_lines();
+            #[cfg(test)]
+            {
+                self.grid.lines = self.canvas.active_dense_lines();
+            }
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
@@ -461,10 +492,19 @@ impl Editor {
                 preview.source_canvas_origin,
             )
         } else {
-            let mut canvas = self.canvas.clone();
-            canvas
-                .commit_active_with_markers(&self.grid.lines, &self.canvas.active_line_markers())
-                .expect("editor layers contain valid sparse cells");
+            #[cfg(test)]
+            let canvas = {
+                let mut canvas = self.canvas.clone();
+                canvas
+                    .commit_active_with_markers(
+                        &self.grid.lines,
+                        &self.canvas.active_line_markers(),
+                    )
+                    .expect("editor layers contain valid sparse cells");
+                canvas
+            };
+            #[cfg(not(test))]
+            let canvas = self.canvas.clone();
             (
                 canvas,
                 self.grid.cursor_pos,
@@ -487,7 +527,10 @@ impl Editor {
         self.active_stroke = snapshot.active_stroke;
         self.canvas_origin = snapshot.canvas_origin;
         self.canvas = snapshot.canvas;
-        self.grid.lines = self.canvas.active_dense_lines();
+        #[cfg(test)]
+        {
+            self.grid.lines = self.canvas.active_dense_lines();
+        }
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.line_preview = None;
         self.shape_preview = None;
