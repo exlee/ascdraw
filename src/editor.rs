@@ -2500,6 +2500,20 @@ mod tests {
     }
 
     #[test]
+    fn moving_to_a_drag_start_collapses_a_previous_selection() {
+        let mut state = state();
+        state.grid.lines = lines_from_text("abcdef");
+        state.move_to(Coord { line: 0, column: 5 });
+        state.extend_selection_to(Coord { line: 0, column: 1 });
+
+        state.move_to(Coord { line: 0, column: 3 });
+
+        assert!(state.selection.is_collapsed());
+        assert_eq!(state.selection.anchor(), Coord { line: 0, column: 3 });
+        assert_eq!(state.selection.active(), Coord { line: 0, column: 3 });
+    }
+
+    #[test]
     fn range_clear_is_rectangular_across_short_rows_and_wide_graphemes() {
         let mut state = state();
         state.grid.lines = vec![

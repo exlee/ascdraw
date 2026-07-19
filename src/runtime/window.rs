@@ -541,7 +541,7 @@ impl EditorWindow {
                 .is_some_and(|bounds| !bounds.contains(target))
                 && self.state.confirm_move_lift();
             if extending_selection {
-                self.state.extend_selection_to(target);
+                self.state.move_to(target);
                 self.request_redraw();
             } else if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
                 self.finish_history_transaction();
