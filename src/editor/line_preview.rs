@@ -5,7 +5,7 @@ use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
 
 use super::routing::{RouteStep, route_steps};
-use super::{Editor, adjacent_coord, blank_atom};
+use super::{Editor, adjacent_coord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutedSegment {
@@ -20,11 +20,11 @@ pub(super) struct LinePreview {
     start: Coord,
     segments: Vec<RoutedSegment>,
     end: Coord,
-    pub(super) source_lines: Vec<Vec<Atom>>,
     pub(super) source_canvas: crate::canvas::LayerStack,
     pub(super) source_cursor: Coord,
     pub(super) source_selection: CanvasSelection,
     pub(super) source_canvas_origin: Coord,
+    #[cfg(test)]
     rendered_lines: Vec<Vec<Atom>>,
     rendered_canvas: crate::canvas::LayerStack,
     prepended_columns: usize,
@@ -125,11 +125,11 @@ impl Editor {
             start: self.grid.cursor_pos,
             segments: Vec::new(),
             end: self.grid.cursor_pos,
-            source_lines: self.grid.lines.clone(),
             source_canvas: self.canvas.clone(),
             source_cursor: self.grid.cursor_pos,
             source_selection,
             source_canvas_origin: self.canvas_origin,
+            #[cfg(test)]
             rendered_lines: self.grid.lines.clone(),
             rendered_canvas: self.canvas.clone(),
             prepended_columns: 0,
@@ -160,9 +160,6 @@ impl Editor {
     }
 
     fn set_line_preview_end(&mut self, target: Coord) {
-        while self.grid.lines.len() <= target.line {
-            self.grid.lines.push(Vec::new());
-        }
         self.grid.cursor_pos = target;
         self.selection.collapse(target);
         self.line_preview
@@ -202,7 +199,10 @@ impl Editor {
         };
         if preview.segments.is_empty() {
             let preview = self.line_preview.take().expect("preview exists");
-            self.grid.lines = preview.source_lines;
+            #[cfg(test)]
+            {
+                self.grid.lines = preview.source_canvas.active_dense_lines();
+            }
             self.canvas = preview.source_canvas;
             self.grid.cursor_pos = preview.source_cursor;
             self.selection = preview.source_selection;
@@ -222,22 +222,33 @@ impl Editor {
     }
 
     pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<Atom>>> {
-        self.line_preview
-            .as_ref()
-            .map(|preview| preview.rendered_lines.clone())
+        #[cfg(test)]
+        {
+            return self
+                .line_preview
+                .as_ref()
+                .map(|preview| preview.rendered_lines.clone());
+        }
+        #[cfg(not(test))]
+        None
     }
 
     pub(super) fn line_preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
-        self.line_preview
-            .as_ref()
-            .map(|preview| preview.rendered_lines.as_slice())
+        #[cfg(test)]
+        {
+            return self
+                .line_preview
+                .as_ref()
+                .map(|preview| preview.rendered_lines.as_slice());
+        }
+        #[cfg(not(test))]
+        None
     }
 
     pub(crate) fn line_preview_render_canvas(&self) -> Option<&crate::canvas::LayerStack> {
         self.line_preview
             .as_ref()
             .map(|preview| &preview.rendered_canvas)
-            .filter(|canvas| !canvas.has_legacy_wide_atoms())
     }
 
     pub(super) fn refresh_line_preview_render(&mut self) {
@@ -245,7 +256,10 @@ impl Editor {
             return;
         };
         if let Some(preview) = self.line_preview.as_mut() {
-            preview.rendered_lines = composed.grid.lines;
+            #[cfg(test)]
+            {
+                preview.rendered_lines = composed.grid.lines.clone();
+            }
             preview.rendered_canvas = composed.canvas;
         }
     }
@@ -254,8 +268,11 @@ impl Editor {
         let Some(composed) = self.composed_line_preview_state(include_active) else {
             return false;
         };
-        let changed = self.grid.lines != composed.grid.lines || self.canvas != composed.canvas;
-        self.grid.lines = composed.grid.lines;
+        let changed = self.canvas != composed.canvas;
+        #[cfg(test)]
+        {
+            self.grid.lines = composed.grid.lines;
+        }
         self.grid.cursor_pos = composed.grid.cursor_pos;
         self.selection.collapse(self.grid.cursor_pos);
         self.canvas = composed.canvas;
@@ -283,25 +300,17 @@ impl Editor {
         composed.shape_preview = None;
         composed.move_lift = None;
         composed.active_stroke = None;
-        composed.grid.lines = preview.source_lines.clone();
         composed.canvas = preview.source_canvas.clone();
         for _ in 0..lines {
-            composed.grid.lines.insert(0, Vec::new());
+            composed.canvas.prepend_line_in_all_layers();
         }
-        for line in &mut composed.grid.lines {
-            for _ in 0..columns {
-                line.insert(0, blank_atom());
-            }
+        for _ in 0..columns {
+            composed.canvas.prepend_column_in_all_layers();
         }
-        let mut markers = composed.canvas.active_line_markers();
-        for marker in &mut markers {
-            marker.coord.line = marker.coord.line.saturating_add(lines);
-            marker.coord.column = marker.coord.column.saturating_add(columns);
+        #[cfg(test)]
+        {
+            composed.grid.lines = composed.canvas.active_dense_lines();
         }
-        composed
-            .canvas
-            .commit_active_with_markers(&composed.grid.lines, &markers)
-            .expect("line preview contains valid sparse cells");
         composed.canvas_origin = Coord {
             line: preview.source_canvas_origin.line.saturating_add(lines),
             column: preview.source_canvas_origin.column.saturating_add(columns),
@@ -367,6 +376,10 @@ impl Editor {
             );
         }
         composed.end_stroke();
+        #[cfg(test)]
+        {
+            composed.grid.lines = composed.canvas.active_dense_lines();
+        }
         Some(composed)
     }
 }

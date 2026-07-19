@@ -4,11 +4,7 @@ use crate::toolbar::UtilityKind;
 
 impl Editor {
     pub fn apply_utility(&mut self, direction: Direction) -> bool {
-        self.canvas
-            .for_each_layer_dense_mut(&mut self.grid.lines, |_, lines, _| {
-                super::grid::expand_blank_runs(lines)
-            })
-            .expect("editor layers contain valid sparse cells");
+        self.commit_canvas();
         match self.toolbar.utility_kind() {
             UtilityKind::Push => self.push_blank(direction),
             UtilityKind::Pull => self.pull_all(direction),

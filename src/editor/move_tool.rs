@@ -29,6 +29,7 @@ struct LiftedLayer {
     id: LayerId,
     edited_atoms: Vec<LiftedAtom>,
     markers: Vec<PlacedLineMarker>,
+    #[cfg(test)]
     rendered_lines: Vec<Vec<Atom>>,
 }
 
@@ -59,52 +60,28 @@ impl Editor {
         self.shape_preview = None;
         self.toolbar.cancel_shortcut();
         let source_snapshot = self.edit_snapshot();
+        self.canvas = source_snapshot.canvas.clone();
         let source_selection = self.selection;
         let source_bounds = source_selection.bounds();
         let source_origin = Coord {
             line: source_bounds.top,
             column: source_bounds.left,
         };
-        let layers = if source_snapshot.canvas.has_legacy_wide_atoms() {
-            self.layer_contents()
-                .into_iter()
-                .filter(|(id, _, _)| {
-                    source_snapshot
-                        .canvas
-                        .layers()
-                        .iter()
-                        .any(|layer| layer.id == *id && layer.visible)
-                })
-                .map(|(id, lines, markers)| {
-                    lifted_layer(
-                        id,
-                        crate::selection::selected_atoms(&lines, source_bounds),
-                        markers,
-                        lines,
-                        source_origin,
-                        source_bounds,
-                    )
-                })
-                .collect()
-        } else {
-            source_snapshot
-                .canvas
-                .layers()
-                .iter()
-                .filter(|layer| layer.visible)
-                .map(|layer| {
-                    let lines = layer.to_dense();
-                    lifted_layer(
-                        layer.id,
-                        layer.selected_atoms(source_bounds),
-                        layer.line_markers(),
-                        lines,
-                        source_origin,
-                        source_bounds,
-                    )
-                })
-                .collect()
-        };
+        let layers = source_snapshot
+            .canvas
+            .layers()
+            .iter()
+            .filter(|layer| layer.visible)
+            .map(|layer| {
+                lifted_layer(
+                    layer.id,
+                    layer.selected_atoms(source_bounds),
+                    layer.line_markers(),
+                    source_origin,
+                    source_bounds,
+                )
+            })
+            .collect();
         self.move_lift = Some(MoveLift {
             source_snapshot,
             source_selection,
@@ -237,50 +214,15 @@ impl Editor {
             return false;
         }
         let mut changed = false;
-        let legacy_wide = lift
-            .layers
-            .iter()
-            .flat_map(|layer| &layer.edited_atoms)
-            .any(|atom| atom.width != 1);
-        if legacy_wide {
-            self.canvas
-                .for_each_layer_dense_mut(&mut self.grid.lines, |id, lines, markers| {
-                    let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
-                        return;
-                    };
-                    let before_lines = lines.clone();
-                    let before_markers = markers.clone();
-                    markers.retain(|marker| {
-                        !lifted_atoms_cover(&layer.edited_atoms, source_origin, marker.coord)
-                            && !destinations.iter().any(|origin| {
-                                lifted_atoms_cover(&layer.edited_atoms, *origin, marker.coord)
-                            })
-                    });
-                    compose_sparse_move(lines, source_origin, &destinations, &layer.edited_atoms);
-                    for origin in &destinations {
-                        for mut marker in layer.markers.iter().cloned() {
-                            marker.coord.line = marker.coord.line.saturating_add(origin.line);
-                            marker.coord.column = marker.coord.column.saturating_add(origin.column);
-                            markers.retain(|existing| existing.coord != marker.coord);
-                            markers.push(marker);
-                        }
-                    }
-                    changed |= *lines != before_lines || *markers != before_markers;
-                })
-                .expect("legacy move remains inside the canvas");
-        } else {
-            self.canvas
-                .for_each_layer_mut(&self.grid.lines, |id, map| {
-                    let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
-                        return;
-                    };
-                    let before = map.clone();
-                    apply_sparse_move(map, source_origin, &destinations, layer);
-                    changed |= *map != before;
-                })
-                .expect("move remains inside the sparse canvas");
-            self.refresh_active_dense_view();
-        }
+        self.canvas.mutate_layers(|id, map| {
+            let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) else {
+                return;
+            };
+            let before = map.clone();
+            apply_sparse_move(map, source_origin, &destinations, layer);
+            changed |= *map != before;
+        });
+        self.refresh_active_dense_view();
         changed
     }
 
@@ -299,10 +241,16 @@ impl Editor {
     }
 
     pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<crate::model::Atom>>> {
+        #[cfg(not(test))]
+        return None;
+        #[cfg(test)]
         self.move_lift_render_lines().map(<[_]>::to_vec)
     }
 
     pub(super) fn move_lift_render_lines(&self) -> Option<&[Vec<crate::model::Atom>]> {
+        #[cfg(not(test))]
+        return None;
+        #[cfg(test)]
         self.move_lift_render_lines_for_layer(self.active_layer_id())
     }
 
@@ -310,6 +258,9 @@ impl Editor {
         &self,
         id: LayerId,
     ) -> Option<&[Vec<crate::model::Atom>]> {
+        #[cfg(not(test))]
+        return None;
+        #[cfg(test)]
         self.move_lift.as_ref().and_then(|lift| {
             lift.layers
                 .iter()
@@ -333,26 +284,19 @@ impl Editor {
             column: lift.source_bounds.left,
         };
         let destinations = move_lift_destinations(lift);
+        let mut rendered_canvas = self.canvas.clone();
+        rendered_canvas.mutate_layers(|id, map| {
+            if let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) {
+                apply_sparse_move(map, source_origin, &destinations, layer);
+            }
+        });
+        #[cfg(test)]
         let contents = self.layer_contents();
-        let mut rendered_canvas = (!lift
-            .layers
-            .iter()
-            .flat_map(|layer| &layer.edited_atoms)
-            .any(|atom| atom.width != 1))
-        .then(|| self.canvas.clone());
-        if let Some(canvas) = rendered_canvas.as_mut() {
-            canvas
-                .for_each_layer_mut(&self.grid.lines, |id, map| {
-                    if let Some(layer) = lift.layers.iter().find(|layer| layer.id == id) {
-                        apply_sparse_move(map, source_origin, &destinations, layer);
-                    }
-                })
-                .expect("move preview remains inside the sparse canvas");
-        }
         let lift = self
             .move_lift
             .as_mut()
             .expect("move lift remains active while composing");
+        #[cfg(test)]
         for layer in &mut lift.layers {
             let Some((_, lines, _)) = contents.iter().find(|(id, _, _)| *id == layer.id) else {
                 continue;
@@ -365,7 +309,7 @@ impl Editor {
                 &layer.edited_atoms,
             );
         }
-        lift.rendered_canvas = rendered_canvas;
+        lift.rendered_canvas = Some(rendered_canvas);
     }
 
     fn restore_move_lift_source(&mut self, lift: MoveLift) {
@@ -382,7 +326,6 @@ fn lifted_layer(
     id: LayerId,
     rows: Vec<Vec<Atom>>,
     markers: Vec<PlacedLineMarker>,
-    rendered_lines: Vec<Vec<Atom>>,
     source_origin: Coord,
     source_bounds: SelectionBounds,
 ) -> LiftedLayer {
@@ -404,7 +347,8 @@ fn lifted_layer(
         id,
         edited_atoms,
         markers,
-        rendered_lines,
+        #[cfg(test)]
+        rendered_lines: Vec::new(),
     }
 }
 

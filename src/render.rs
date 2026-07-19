@@ -309,7 +309,6 @@ fn render_canvas(
     let max_column = first_column
         .saturating_add(visible_cells.columns)
         .saturating_add(2);
-    let line_preview = state.preview_render_lines();
     let sparse_move_preview = state.move_lift_render_canvas();
     let sparse_line_preview = sparse_move_preview
         .is_none()
@@ -321,64 +320,21 @@ fn render_canvas(
     let sparse_preview_canvas = sparse_move_preview
         .or(sparse_line_preview)
         .or(shape_preview_canvas.as_ref());
-    let preview_lines = (sparse_preview_canvas.is_none() && line_preview.is_none())
-        .then(|| state.lines_with_shape_preview())
-        .flatten();
-    let active_lines = line_preview
-        .or(preview_lines.as_deref())
-        .unwrap_or(&state.grid.lines);
-    let sparse_render_canvas = preview_lines.is_none().then(|| {
-        sparse_preview_canvas.or_else(|| state.canvas_is_current().then(|| state.canvas()))
-    });
-    let sparse_render_canvas = sparse_render_canvas.flatten();
-    if let Some(render_canvas) = sparse_render_canvas {
-        render_cached_sparse_grid_atoms(
-            canvas,
-            render_canvas,
-            state,
-            metrics,
-            layout,
-            viewport,
-            width,
-            first_row,
-            max_row,
-            first_column,
-            max_column,
-            rendered_atom_cache,
-        );
-    } else {
-        let active_layer = state.active_layer_id();
-        let layer_views = state.layer_views();
-        let layers = layer_views
-            .iter()
-            .filter(|layer| layer.visible)
-            .map(|layer| {
-                state
-                    .move_lift_render_lines_for_layer(layer.id)
-                    .unwrap_or_else(|| {
-                        if layer.id == active_layer {
-                            active_lines
-                        } else {
-                            &layer.lines
-                        }
-                    })
-            })
-            .collect::<Vec<_>>();
-        render_cached_grid_atoms(
-            canvas,
-            &layers,
-            state,
-            metrics,
-            layout,
-            viewport,
-            width,
-            first_row,
-            max_row,
-            first_column,
-            max_column,
-            rendered_atom_cache,
-        );
-    }
+    let sparse_render_canvas = sparse_preview_canvas.unwrap_or_else(|| state.canvas());
+    render_cached_sparse_grid_atoms(
+        canvas,
+        sparse_render_canvas,
+        state,
+        metrics,
+        layout,
+        viewport,
+        width,
+        first_row,
+        max_row,
+        first_column,
+        max_column,
+        rendered_atom_cache,
+    );
 
     canvas.save();
     canvas.clip_rect(
@@ -398,7 +354,6 @@ fn render_canvas(
         render_grid_cursor(
             canvas,
             state,
-            active_lines,
             sparse_render_canvas,
             &config.display.cursor_shape,
             grid_layout,
@@ -583,60 +538,6 @@ fn render_cached_toolbar(
     let image = surface.image_snapshot();
     canvas.draw_image(&image, (0.0, 0.0), None);
     *cache.borrow_mut() = Some(ToolbarCache { key, image });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_cached_grid_atoms(
-    canvas: &Canvas,
-    layers: &[&[Vec<Atom>]],
-    state: &Editor,
-    metrics: &CellMetrics,
-    layout: LayoutMetrics,
-    viewport: ViewportOffset,
-    width: usize,
-    first_row: usize,
-    max_row: usize,
-    first_column: usize,
-    max_column: usize,
-    cache: &RefCell<RenderedAtomCache>,
-) {
-    canvas.save();
-    canvas.clip_rect(
-        Rect::from_xywh(
-            0.0,
-            layout.grid_top,
-            width as f32,
-            (layout.grid_bottom - layout.grid_top).max(0.0),
-        ),
-        None,
-        false,
-    );
-    canvas.translate((viewport.x as f32, viewport.y as f32));
-    let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
-    for lines in layers {
-        for (row_index, line) in lines
-            .iter()
-            .enumerate()
-            .skip(first_row)
-            .take(max_row.saturating_sub(first_row))
-        {
-            render_cached_overlay_line(
-                canvas,
-                row_index,
-                line,
-                &state.grid.default_face,
-                &state.theme,
-                root_face,
-                first_column..max_column,
-                metrics,
-                DrawOrigin::Grid {
-                    top_padding: layout.grid_top,
-                },
-                cache,
-            );
-        }
-    }
-    canvas.restore();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1362,8 +1263,7 @@ fn render_line_at(
 fn render_grid_cursor(
     canvas: &Canvas,
     state: &Editor,
-    rendered_lines: &[Vec<Atom>],
-    rendered_canvas: Option<&crate::canvas::LayerStack>,
+    rendered_canvas: &crate::canvas::LayerStack,
     cursor_shape_config: &CursorShapeConfig,
     layout: LayoutMetrics,
     metrics: &CellMetrics,
@@ -1385,15 +1285,7 @@ fn render_grid_cursor(
         face: grid.default_face.clone(),
         text: Some(" ".to_string()),
     };
-    let cell = if let Some(rendered_canvas) = rendered_canvas {
-        sparse_cursor_cell(rendered_canvas, cursor).unwrap_or_else(default_cell)
-    } else {
-        cursor_cell(
-            rendered_lines.get(cursor.line).map(Vec::as_slice),
-            cursor.column,
-        )
-        .unwrap_or_else(default_cell)
-    };
+    let cell = sparse_cursor_cell(rendered_canvas, cursor).unwrap_or_else(default_cell);
 
     let cell_resolved =
         resolve_derived_face(&grid.default_face, &cell.face, FALLBACK_FG, FALLBACK_BG);
@@ -1693,36 +1585,6 @@ fn render_cursor_base_cell(
         draw_text_cluster(canvas, column, top, text, &font, metrics, &fg_paint);
     }
     draw_text_decorations(canvas, column, top, 1, metrics, resolved);
-}
-
-fn cursor_cell(line: Option<&[Atom]>, target_column: usize) -> Option<CursorCell> {
-    let line = line?;
-    let mut column = 0;
-
-    for atom in line {
-        for cluster in text_clusters(&atom.contents) {
-            if cluster == "\n" {
-                if column == target_column {
-                    return Some(CursorCell {
-                        face: atom.face.clone(),
-                        text: Some(" ".to_string()),
-                    });
-                }
-                continue;
-            }
-
-            let span = cluster_display_width(cluster);
-            if target_column >= column && target_column < column + span {
-                return Some(CursorCell {
-                    face: atom.face.clone(),
-                    text: Some(cluster.to_string()),
-                });
-            }
-            column += span;
-        }
-    }
-
-    None
 }
 
 fn sparse_cursor_cell(
@@ -2553,47 +2415,6 @@ mod tests {
     }
 
     #[test]
-    fn cursor_cell_uses_visible_placeholder_at_end_of_line() {
-        let cursor_face = Face {
-            fg: "#000000".into(),
-            bg: "#ffffff".into(),
-            underline: "default".into(),
-            attributes: Vec::new(),
-        };
-        let line = vec![Atom {
-            face: cursor_face.clone(),
-            contents: "\n".into(),
-        }];
-
-        let cursor = cursor_cell(Some(&line), 0).expect("cursor cell should exist");
-        assert_eq!(cursor.face.bg, "#ffffff");
-        assert_eq!(cursor.text, Some(" ".to_string()));
-    }
-
-    #[test]
-    fn cursor_cell_finds_character_under_cursor() {
-        let line = vec![
-            Atom {
-                face: Face::default(),
-                contents: "ab".into(),
-            },
-            Atom {
-                face: Face {
-                    fg: "#000000".into(),
-                    bg: "#ffffff".into(),
-                    underline: "default".into(),
-                    attributes: Vec::new(),
-                },
-                contents: "c".into(),
-            },
-        ];
-
-        let cursor = cursor_cell(Some(&line), 2).expect("cursor cell should exist");
-        assert_eq!(cursor.text, Some("c".to_string()));
-        assert_eq!(cursor.face.bg, "#ffffff");
-    }
-
-    #[test]
     fn sparse_cursor_cell_reads_active_coordinate_data() {
         let face = Face {
             bg: "#ffffff".into(),
@@ -2733,12 +2554,9 @@ mod tests {
         state.toggle_shape_preview();
         state.move_cursor(Direction::Right);
 
-        let preview = state.lines_with_shape_preview().expect("preview is active");
-        let cell = cursor_cell(
-            preview.get(state.grid.cursor_pos.line).map(Vec::as_slice),
-            state.grid.cursor_pos.column,
-        )
-        .expect("preview cell exists beneath the cursor");
+        let preview = state.shape_preview_canvas().expect("preview is active");
+        let cell = sparse_cursor_cell(&preview, state.grid.cursor_pos)
+            .expect("preview cell exists beneath the cursor");
 
         assert_eq!(cell.text, Some("┐".to_string()));
     }

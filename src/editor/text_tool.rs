@@ -159,7 +159,7 @@ impl Editor {
     pub fn newline(&mut self) {
         self.end_stroke();
         self.commit_canvas();
-        if self.grid.lines.len() >= MAX_CANVAS_HEIGHT {
+        if self.canvas_height() >= MAX_CANVAS_HEIGHT {
             return;
         }
         self.newline_sparse();
@@ -214,7 +214,7 @@ impl Editor {
             self.canvas
                 .remove_cells(line, column, 1)
                 .expect("delete remains inside the sparse canvas");
-        } else if line + 1 < self.grid.lines.len() {
+        } else if self.canvas.active_row_exists(line + 1) {
             if width.saturating_add(self.canvas.active_row_width(line + 1)) > MAX_CANVAS_WIDTH {
                 return;
             }

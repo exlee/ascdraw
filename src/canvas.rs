@@ -1045,6 +1045,12 @@ impl LayerStack {
         self.layers[self.active].row_width(line)
     }
 
+    pub(crate) fn active_row_exists(&self, line: usize) -> bool {
+        i16::try_from(line)
+            .ok()
+            .is_some_and(|line| self.layers[self.active].rows().contains_key(&line))
+    }
+
     pub(crate) fn ensure_active_row_width(&mut self, line: usize, width: usize) {
         self.layers[self.active].ensure_row_width(line, width);
     }
@@ -1257,11 +1263,25 @@ impl LayerStack {
         Ok(())
     }
 
+    pub(crate) fn mutate_layers(&mut self, mut apply: impl FnMut(LayerId, &mut LayerMap)) {
+        for layer in &mut self.layers {
+            apply(layer.id, layer);
+        }
+        self.recalculate_bounds();
+    }
+
     pub(crate) fn prepend_line_to_inactive(&mut self) {
         for (index, layer) in self.layers.iter_mut().enumerate() {
             if index != self.active {
                 layer.prepend_line();
             }
+        }
+        self.recalculate_bounds();
+    }
+
+    pub(crate) fn prepend_line_in_all_layers(&mut self) {
+        for layer in &mut self.layers {
+            layer.prepend_line();
         }
         self.recalculate_bounds();
     }
@@ -1275,12 +1295,17 @@ impl LayerStack {
         self.recalculate_bounds();
     }
 
-    pub(crate) fn clear_contents(&mut self, active_lines: &mut Vec<Vec<Atom>>, cursor: Coord) {
+    pub(crate) fn prepend_column_in_all_layers(&mut self) {
+        for layer in &mut self.layers {
+            layer.prepend_column();
+        }
+        self.recalculate_bounds();
+    }
+
+    pub(crate) fn clear_contents(&mut self) {
         for layer in &mut self.layers {
             *layer = LayerMap::new(layer.id, layer.visible);
         }
-        *active_lines = (0..=cursor.line).map(|_| Vec::new()).collect();
-        active_lines[cursor.line] = (0..cursor.column).map(|_| default_blank()).collect();
         self.bounds = None;
     }
 

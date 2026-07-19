@@ -4,8 +4,7 @@ use crate::drawing::{LineStyle, glyph_with_connection};
 use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::ShapeKind;
 
-use super::color_tool::color_atom_at;
-use super::{Editor, ShapePreview, atom_width, replace_cell};
+use super::{Editor, ShapePreview};
 
 impl Editor {
     pub fn toggle_shape_preview(&mut self) {
@@ -76,22 +75,6 @@ impl Editor {
         let Some(preview) = self.shape_preview.take() else {
             return;
         };
-        if self.canvas.has_legacy_wide_atoms()
-            || self
-                .grid
-                .lines
-                .iter()
-                .flatten()
-                .any(|atom| atom_width(atom) != 1)
-        {
-            for (coord, contents) in self.shape_cells(preview) {
-                self.remove_line_marker(coord);
-                replace_cell(&mut self.grid.lines, coord, contents);
-                self.color_written_cell(coord);
-            }
-            self.commit_canvas();
-            return;
-        }
         let face = self.write_face();
         for (coord, contents) in self.shape_cells(preview) {
             self.remove_line_marker(coord);
@@ -107,26 +90,23 @@ impl Editor {
     }
 
     pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
-        if let Some(lines) = self.lines_with_move_lift_preview() {
-            return Some(lines);
+        #[cfg(not(test))]
+        return None;
+        #[cfg(test)]
+        {
+            if let Some(lines) = self.lines_with_move_lift_preview() {
+                return Some(lines);
+            }
+            if let Some(lines) = self.lines_with_line_preview() {
+                return Some(lines);
+            }
+            self.shape_preview_canvas()
+                .map(|canvas| canvas.active_dense_lines())
         }
-        if let Some(lines) = self.lines_with_line_preview() {
-            return Some(lines);
-        }
-        let preview = self.shape_preview?;
-        let mut lines = self.grid.lines.clone();
-        for (coord, contents) in self.shape_cells(preview) {
-            replace_cell(&mut lines, coord, contents);
-            color_atom_at(&mut lines, coord, self.write_face().fg.as_str());
-        }
-        Some(lines)
     }
 
     pub(crate) fn shape_preview_canvas(&self) -> Option<LayerStack> {
         let preview = self.shape_preview?;
-        if !self.canvas_is_current() {
-            return None;
-        }
         let face = self.write_face();
         let mut canvas = self.canvas.clone();
         for (coord, contents) in self.shape_cells(preview) {
