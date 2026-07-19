@@ -53,7 +53,7 @@ use input::{
     ClipboardCommand, EditCommand, HistoryCommand, cursor_direction_for_key, edit_command,
     edit_direction_command, line_preview_command, move_selection_command,
     move_selection_direction_command, ordered_direction_command_for_direction,
-    pointer_position_to_coord, pointer_position_to_toolbar_position, view_command,
+    pointer_position_to_canvas_coord, pointer_position_to_toolbar_position, view_command,
 };
 #[cfg(test)]
 use input::{clipboard_command, history_command};
@@ -829,7 +829,7 @@ fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
             config,
             &editor.state.toolbar,
         );
-        editor.mouse_cell = pointer_position_to_coord(
+        editor.mouse_cell = pointer_position_to_canvas_coord(
             (x, y),
             viewport_width,
             &editor.renderer,

@@ -565,7 +565,7 @@ fn arrow_direction_for_key(key: &Key) -> Option<Direction> {
     }
 }
 
-pub fn pointer_position_to_coord(
+pub fn pointer_position_to_canvas_coord(
     position: (f64, f64),
     viewport_width: usize,
     renderer: &Renderer,
@@ -573,7 +573,7 @@ pub fn pointer_position_to_coord(
     config: &AppConfig,
     toolbar: &ToolbarState,
     viewport: ViewportOffset,
-) -> Option<Coord> {
+) -> Option<(i64, i64)> {
     let metrics = renderer.metrics(scale_factor);
     let toolbar_metrics = renderer.title_metrics(scale_factor);
     let box_width = (viewport_width.saturating_sub(PADDING * 2) as f32
@@ -589,7 +589,7 @@ pub fn pointer_position_to_coord(
     {
         return None;
     }
-    pointer_position_to_coord_with_metrics(
+    pointer_position_to_canvas_coord_with_metrics(
         position.0,
         position.1,
         grid_top,
@@ -607,17 +607,36 @@ fn pointer_position_to_coord_with_metrics(
     cell_height: f32,
     viewport: ViewportOffset,
 ) -> Option<Coord> {
+    let (line, column) = pointer_position_to_canvas_coord_with_metrics(
+        x,
+        y,
+        grid_top,
+        cell_width,
+        cell_height,
+        viewport,
+    )?;
+    Some(Coord {
+        line: usize::try_from(line).ok()?,
+        column: usize::try_from(column).ok()?,
+    })
+}
+
+fn pointer_position_to_canvas_coord_with_metrics(
+    x: f64,
+    y: f64,
+    grid_top: f32,
+    cell_width: f32,
+    cell_height: f32,
+    viewport: ViewportOffset,
+) -> Option<(i64, i64)> {
     if y < grid_top as f64 {
         return None;
     }
     let grid_x = x - PADDING as f64 - viewport.x as f64;
     let grid_y = y - grid_top as f64 - viewport.y as f64;
-    if grid_x < 0.0 || grid_y < 0.0 {
-        return None;
-    }
-    let column = (grid_x / cell_width.max(1.0) as f64).floor() as usize;
-    let line = (grid_y / cell_height.max(1.0) as f64).floor() as usize;
-    Some(Coord { line, column })
+    let column = (grid_x / cell_width.max(1.0) as f64).floor() as i64;
+    let line = (grid_y / cell_height.max(1.0) as f64).floor() as i64;
+    Some((line, column))
 }
 
 pub fn pointer_position_to_toolbar_position(

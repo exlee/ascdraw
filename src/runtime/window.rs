@@ -154,7 +154,7 @@ pub struct EditorWindow {
     pub modifiers: ModifiersState,
     pub ordered_modifiers: OrderedModifierTracker,
     pub mouse_position: Option<(f64, f64)>,
-    pub mouse_cell: Option<Coord>,
+    pub mouse_cell: Option<(i64, i64)>,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_toolbar_hotspot: Option<usize>,
     mouse_drag: Option<MouseDrag>,
@@ -486,7 +486,7 @@ impl EditorWindow {
         self.window.id()
     }
 
-    pub fn begin_mouse_drag(&mut self, coord: Coord) {
+    pub fn begin_mouse_drag(&mut self, pointer: (i64, i64)) {
         self.state.cancel_jump();
         let input_override = if self.modifiers == ModifiersState::empty() {
             match (self.state.toolbar.main_mode(), self.state.cursor_mode) {
@@ -504,6 +504,7 @@ impl EditorWindow {
         };
         let previous_state = self.state.clone();
         let previous_viewport = self.viewport;
+        let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
         let target = self.state.cursor_target_for_coord(coord);
         let mut line_preview_was_active = false;
         let mut confirmed_move = false;
@@ -561,9 +562,10 @@ impl EditorWindow {
     }
 
     pub fn continue_mouse_drag(&mut self) {
-        let Some(coord) = self.mouse_cell else {
+        let Some(pointer) = self.mouse_cell else {
             return;
         };
+        let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
         let target = self.state.cursor_target_for_coord(coord);
         let Some(mut drag) = self.mouse_drag.take() else {
             return;
@@ -699,7 +701,11 @@ impl EditorWindow {
     pub fn continue_passive_line_preview(&mut self) {
         if self.mouse_drag.is_none()
             && self.modifiers == ModifiersState::empty()
-            && let Some(coord) = self.mouse_cell
+            && let Some((line, column)) = self.mouse_cell
+            && let Some(coord) = usize::try_from(line)
+                .ok()
+                .zip(usize::try_from(column).ok())
+                .map(|(line, column)| Coord { line, column })
             && self.state.move_line_preview_to(coord)
         {
             self.request_redraw();
@@ -1932,7 +1938,7 @@ pub fn create_editor_window(
         modifiers: ModifiersState::empty(),
         ordered_modifiers: OrderedModifierTracker::default(),
         mouse_position: None,
-        mouse_cell: Some(Coord::default()),
+        mouse_cell: Some((0, 0)),
         mouse_toolbar_position: None,
         mouse_toolbar_hotspot: None,
         mouse_drag: None,

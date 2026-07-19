@@ -730,6 +730,25 @@ impl Editor {
         self.grid.lines.len() != old_line_count || coord.column > old_width
     }
 
+    pub fn resolve_pointer_coord(&mut self, line: i64, column: i64) -> Coord {
+        let prepend_lines = (line < 0)
+            .then(|| usize::try_from(line.saturating_neg()).unwrap_or(usize::MAX))
+            .unwrap_or(0);
+        let prepend_columns = (column < 0)
+            .then(|| usize::try_from(column.saturating_neg()).unwrap_or(usize::MAX))
+            .unwrap_or(0);
+        for _ in 0..prepend_lines {
+            self.prepend_line();
+        }
+        for _ in 0..prepend_columns {
+            self.prepend_column();
+        }
+        Coord {
+            line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
+            column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
+        }
+    }
+
     pub fn extend_selection_to(&mut self, coord: Coord) {
         let anchor = self.selection.anchor();
         self.cancel_line_preview();
