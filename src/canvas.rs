@@ -437,6 +437,26 @@ impl LayerMap {
         Ok(true)
     }
 
+    pub(crate) fn replace_bounds(
+        &mut self,
+        bounds: SelectionBounds,
+        replacement: Option<(Atom, Face)>,
+    ) -> Result<()> {
+        for line in bounds.top..=bounds.bottom {
+            self.ensure_row_width(line, bounds.right.saturating_add(1));
+            let y = i16::try_from(line).context("selection line exceeds signed range")?;
+            for column in bounds.left..=bounds.right {
+                let x = i16::try_from(column).context("selection column exceeds signed range")?;
+                self.delete_at(x, y);
+                if let Some((atom, face)) = &replacement {
+                    self.set_at(x, y, atom.clone(), face)?;
+                }
+            }
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
     pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<Atom>]) -> Result<Self> {
         for atom in lines.iter().flatten() {
             for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
@@ -711,6 +731,16 @@ impl LayerStack {
 
     pub(crate) fn active_dense_lines(&self) -> Vec<Vec<Atom>> {
         self.layers[self.active].to_dense()
+    }
+
+    pub(crate) fn replace_active_bounds(
+        &mut self,
+        bounds: SelectionBounds,
+        replacement: Option<(Atom, Face)>,
+    ) -> Result<()> {
+        self.layers[self.active].replace_bounds(bounds, replacement)?;
+        self.recalculate_bounds();
+        Ok(())
     }
 
     pub(crate) fn active_row_width(&self, line: usize) -> usize {

@@ -1428,12 +1428,42 @@ impl Editor {
 
     fn replace_selection_literal(&mut self, replacement: Option<&str>) {
         let bounds = self.selection.bounds();
-        self.canvas
-            .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
-        replace_range(&mut self.grid.lines, bounds, replacement);
-        if replacement.is_some() {
-            self.color_written_bounds(bounds);
+        let legacy_wide = self.canvas.has_legacy_wide_atoms()
+            || self
+                .grid
+                .lines
+                .iter()
+                .flatten()
+                .any(|atom| atom_width(atom) != 1);
+        if legacy_wide {
+            self.canvas
+                .remap_active_line_data(|coord| (!bounds.contains(coord)).then_some(coord));
+            replace_range(&mut self.grid.lines, bounds, replacement);
+            if replacement.is_some() {
+                self.color_written_bounds(bounds);
+            }
+            self.restore_active_cursor_index();
+            self.commit_canvas();
+            return;
         }
+        let replacement = replacement.map(|contents| {
+            let face = if contents.chars().all(char::is_whitespace) {
+                Face::default()
+            } else {
+                self.write_face()
+            };
+            (
+                Atom {
+                    face: face.clone(),
+                    contents: contents.to_owned(),
+                },
+                face,
+            )
+        });
+        self.canvas
+            .replace_active_bounds(bounds, replacement)
+            .expect("literal selection replacements contain one-cell atoms");
+        self.refresh_active_dense_view();
         self.restore_active_cursor_index();
     }
 
