@@ -66,6 +66,7 @@ pub struct Renderer {
     content_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
     fixed_metrics_cache: RefCell<Option<(u64, CellMetrics)>>,
     toolbar_cache: RefCell<Option<ToolbarCache>>,
+    grid_cache: RefCell<Option<GridCache>>,
 }
 
 #[derive(Clone)]
@@ -118,6 +119,7 @@ struct RenderFrame<'a> {
     toolbar_hotspot_hovered: bool,
     content: CanvasContent<'a>,
     toolbar_cache: &'a RefCell<Option<ToolbarCache>>,
+    grid_cache: &'a RefCell<Option<GridCache>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +146,27 @@ struct ToolbarCacheKey {
 #[derive(Clone)]
 struct ToolbarCache {
     key: ToolbarCacheKey,
+    image: skia_safe::Image,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GridCacheKey {
+    layers: Vec<Vec<Vec<Atom>>>,
+    default_face: Face,
+    theme: ThemeConfig,
+    viewport: ViewportOffset,
+    width: usize,
+    grid_top_bits: u32,
+    grid_bottom_bits: u32,
+    cell_width_bits: u32,
+    cell_height_bits: u32,
+    baseline_offset_bits: u32,
+    underline_offset_bits: u32,
+}
+
+#[derive(Clone)]
+struct GridCache {
+    key: GridCacheKey,
     image: skia_safe::Image,
 }
 
@@ -216,6 +239,7 @@ pub fn render(
             toolbar_hotspot_hovered,
             content,
             toolbar_cache: &renderer.toolbar_cache,
+            grid_cache: &renderer.grid_cache,
         },
     );
     let rasterization = raster_started.elapsed();
@@ -251,6 +275,7 @@ fn render_canvas(
         toolbar_hotspot_hovered,
         content,
         toolbar_cache,
+        grid_cache,
     } = frame;
     let default_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     canvas.clear(default_face.bg.to_color());
@@ -282,6 +307,47 @@ fn render_canvas(
     let max_column = first_column
         .saturating_add(visible_cells.columns)
         .saturating_add(2);
+    let preview_lines = state
+        .preview_render_lines()
+        .is_none()
+        .then(|| state.lines_with_shape_preview())
+        .flatten();
+    let active_lines = state
+        .preview_render_lines()
+        .or(preview_lines.as_deref())
+        .unwrap_or(&state.grid.lines);
+    let active_layer = state.active_layer_id();
+    let layers = state
+        .layer_views()
+        .into_iter()
+        .filter(|layer| layer.visible)
+        .map(|layer| {
+            state
+                .move_lift_render_lines_for_layer(layer.id)
+                .unwrap_or_else(|| {
+                    if layer.id == active_layer {
+                        active_lines
+                    } else {
+                        layer.lines
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    render_cached_grid(
+        canvas,
+        &layers,
+        state,
+        metrics,
+        layout,
+        viewport,
+        width,
+        first_row,
+        max_row,
+        first_column,
+        max_column,
+        grid_cache,
+    );
+
     canvas.save();
     canvas.clip_rect(
         Rect::from_xywh(
@@ -294,51 +360,6 @@ fn render_canvas(
         false,
     );
     canvas.translate((viewport.x as f32, viewport.y as f32));
-
-    let preview_lines = state
-        .preview_render_lines()
-        .is_none()
-        .then(|| state.lines_with_shape_preview())
-        .flatten();
-    let active_lines = state
-        .preview_render_lines()
-        .or(preview_lines.as_deref())
-        .unwrap_or(&state.grid.lines);
-    let active_layer = state.active_layer_id();
-    for layer in state
-        .layer_views()
-        .into_iter()
-        .filter(|layer| layer.visible)
-    {
-        let lines = state
-            .move_lift_render_lines_for_layer(layer.id)
-            .unwrap_or_else(|| {
-                if layer.id == active_layer {
-                    active_lines
-                } else {
-                    layer.lines
-                }
-            });
-        for (row_index, line) in lines
-            .iter()
-            .enumerate()
-            .skip(first_row)
-            .take(max_row.saturating_sub(first_row))
-        {
-            render_overlay_line(
-                canvas,
-                row_index,
-                line,
-                &state.grid.default_face,
-                first_column..max_column,
-                metrics,
-                DrawOrigin::Grid {
-                    top_padding: layout.grid_top,
-                },
-            );
-        }
-    }
-
     render_canvas_selection(canvas, state, metrics, layout.grid_top);
     jump::render_jump_overlay(canvas, state, metrics, layout.grid_top);
     if grid_cursor_is_visible(state) {
@@ -529,6 +550,88 @@ fn render_cached_toolbar(
     let image = surface.image_snapshot();
     canvas.draw_image(&image, (0.0, 0.0), None);
     *cache.borrow_mut() = Some(ToolbarCache { key, image });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_cached_grid(
+    canvas: &Canvas,
+    layers: &[&[Vec<Atom>]],
+    state: &Editor,
+    metrics: &CellMetrics,
+    layout: LayoutMetrics,
+    viewport: ViewportOffset,
+    width: usize,
+    first_row: usize,
+    max_row: usize,
+    first_column: usize,
+    max_column: usize,
+    cache: &RefCell<Option<GridCache>>,
+) {
+    let key = GridCacheKey {
+        layers: layers.iter().map(|lines| lines.to_vec()).collect(),
+        default_face: state.grid.default_face.clone(),
+        theme: state.theme.clone(),
+        viewport,
+        width,
+        grid_top_bits: layout.grid_top.to_bits(),
+        grid_bottom_bits: layout.grid_bottom.to_bits(),
+        cell_width_bits: metrics.cell_width.to_bits(),
+        cell_height_bits: metrics.cell_height.to_bits(),
+        baseline_offset_bits: metrics.baseline_offset.to_bits(),
+        underline_offset_bits: metrics.underline_offset.to_bits(),
+    };
+    if let Some(image) = cache
+        .borrow()
+        .as_ref()
+        .filter(|cached| cached.key == key)
+        .map(|cached| &cached.image)
+    {
+        canvas.draw_image(image, (0.0, 0.0), None);
+        return;
+    }
+
+    let height = layout.grid_bottom.ceil().max(1.0) as i32;
+    let Some(mut surface) = surfaces::raster_n32_premul((width.max(1) as i32, height)) else {
+        return;
+    };
+    let grid_canvas = surface.canvas();
+    grid_canvas.clear(skia_safe::Color::TRANSPARENT);
+    grid_canvas.save();
+    grid_canvas.clip_rect(
+        Rect::from_xywh(
+            0.0,
+            layout.grid_top,
+            width as f32,
+            (layout.grid_bottom - layout.grid_top).max(0.0),
+        ),
+        None,
+        false,
+    );
+    grid_canvas.translate((viewport.x as f32, viewport.y as f32));
+    for lines in layers {
+        for (row_index, line) in lines
+            .iter()
+            .enumerate()
+            .skip(first_row)
+            .take(max_row.saturating_sub(first_row))
+        {
+            render_overlay_line(
+                grid_canvas,
+                row_index,
+                line,
+                &state.grid.default_face,
+                first_column..max_column,
+                metrics,
+                DrawOrigin::Grid {
+                    top_padding: layout.grid_top,
+                },
+            );
+        }
+    }
+    grid_canvas.restore();
+    let image = surface.image_snapshot();
+    canvas.draw_image(&image, (0.0, 0.0), None);
+    *cache.borrow_mut() = Some(GridCache { key, image });
 }
 
 fn render_toolbar(
@@ -1586,6 +1689,7 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
         content_metrics_cache: RefCell::new(None),
         fixed_metrics_cache: RefCell::new(None),
         toolbar_cache: RefCell::new(None),
+        grid_cache: RefCell::new(None),
     }
 }
 
@@ -1600,6 +1704,7 @@ impl Renderer {
         self.logical_font_size
             .set((self.default_logical_font_size + zoom as f32).max(MIN_FONT_SIZE));
         self.content_metrics_cache.borrow_mut().take();
+        self.toolbar_cache.borrow_mut().take();
     }
 
     pub fn apply_config(&mut self, config: &AppConfig) {
@@ -1611,6 +1716,7 @@ impl Renderer {
             .set((config.font_size + font_size_delta).max(6.0));
         self.content_metrics_cache.borrow_mut().take();
         self.fixed_metrics_cache.borrow_mut().take();
+        self.toolbar_cache.borrow_mut().take();
     }
 
     pub fn adjust_font_size(&self, delta: f32) -> bool {
@@ -1623,6 +1729,7 @@ impl Renderer {
 
         self.logical_font_size.set(next);
         self.content_metrics_cache.borrow_mut().take();
+        self.toolbar_cache.borrow_mut().take();
         true
     }
 
@@ -1633,6 +1740,7 @@ impl Renderer {
 
         self.logical_font_size.set(self.default_logical_font_size);
         self.content_metrics_cache.borrow_mut().take();
+        self.toolbar_cache.borrow_mut().take();
         true
     }
 
@@ -1765,7 +1873,7 @@ mod tests {
     use crate::app::{AppConfig, CursorMode, CursorShape, ThemeConfig};
     use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::{ColorId, Coord, Direction, LayerId};
+    use crate::model::{Atom, ColorId, Coord, Direction, LayerId};
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 
@@ -1798,7 +1906,7 @@ mod tests {
         );
         let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
         let state = Editor::new(&config.theme, "test");
-        let cache = RefCell::new(None);
+        let toolbar_cache = RefCell::new(None);
         let background = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG).bg;
 
         render_cached_toolbar(
@@ -1809,10 +1917,10 @@ mod tests {
             width,
             false,
             config.transparent_menubar,
-            &cache,
+            &toolbar_cache,
             background,
         );
-        let original = cache.borrow().as_ref().unwrap().image.unique_id();
+        let original = toolbar_cache.borrow().as_ref().unwrap().image.unique_id();
         render_cached_toolbar(
             surface.canvas(),
             &state,
@@ -1821,10 +1929,13 @@ mod tests {
             width,
             false,
             config.transparent_menubar,
-            &cache,
+            &toolbar_cache,
             background,
         );
-        assert_eq!(cache.borrow().as_ref().unwrap().image.unique_id(), original);
+        assert_eq!(
+            toolbar_cache.borrow().as_ref().unwrap().image.unique_id(),
+            original
+        );
 
         let mut changed = state;
         changed.grid.cursor_pos.column = 1;
@@ -1836,10 +1947,82 @@ mod tests {
             width,
             false,
             config.transparent_menubar,
-            &cache,
+            &toolbar_cache,
             background,
         );
-        assert_ne!(cache.borrow().as_ref().unwrap().image.unique_id(), original);
+        assert_ne!(
+            toolbar_cache.borrow().as_ref().unwrap().image.unique_id(),
+            original
+        );
+    }
+
+    #[test]
+    fn grid_image_cache_reuses_and_invalidates_document_and_viewport() {
+        let config = AppConfig::default();
+        let renderer = load_renderer(&config);
+        let metrics = renderer.metrics(1.0);
+        let toolbar_metrics = renderer.title_metrics(1.0);
+        let width = 800;
+        let height = 600;
+        let layout = layout_metrics(
+            width,
+            height,
+            &metrics,
+            (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+            &ToolbarState::default(),
+            config.transparent_menubar,
+            1.0,
+        );
+        let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
+        let mut state = Editor::new(&config.theme, "test");
+        state.grid.lines = vec![vec![Atom {
+            face: Face::default(),
+            contents: " ".to_owned(),
+        }]];
+        let toolbar_cache = RefCell::new(None);
+        let grid_cache = RefCell::new(None);
+        let background = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG).bg;
+        render_cached_toolbar(
+            surface.canvas(),
+            &state,
+            &toolbar_metrics,
+            layout,
+            width,
+            false,
+            config.transparent_menubar,
+            &toolbar_cache,
+            background,
+        );
+
+        let mut render_grid = |state: &Editor, viewport| {
+            render_cached_grid(
+                surface.canvas(),
+                &[&state.grid.lines],
+                state,
+                &metrics,
+                layout,
+                viewport,
+                width,
+                0,
+                100,
+                0,
+                100,
+                &grid_cache,
+            );
+            grid_cache.borrow().as_ref().unwrap().image.unique_id()
+        };
+
+        let original = render_grid(&state, ViewportOffset::default());
+        assert_eq!(render_grid(&state, ViewportOffset::default()), original);
+
+        let mut changed = state.clone();
+        changed.grid.lines[0][0].contents = "x".to_owned();
+        let document_changed = render_grid(&changed, ViewportOffset::default());
+        assert_ne!(document_changed, original);
+        assert_ne!(
+            render_grid(&changed, ViewportOffset { x: -1, y: 0 }),
+            document_changed
+        );
     }
 
     #[test]

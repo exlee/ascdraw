@@ -146,6 +146,7 @@ impl MetalRenderer {
                 toolbar_hotspot_hovered,
                 content,
                 toolbar_cache: &renderer.toolbar_cache,
+                grid_cache: &renderer.grid_cache,
             },
         );
         self.skia.flush_and_submit();
