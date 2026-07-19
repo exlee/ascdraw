@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Direction, LayerId};
+use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_atoms,
@@ -132,7 +132,9 @@ impl Editor {
         });
         match prepend {
             Some((1, 0)) => {
-                self.prepend_column();
+                if !self.prepend_column() {
+                    return false;
+                }
                 self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
                 self.move_lift
                     .as_mut()
@@ -140,7 +142,9 @@ impl Editor {
                     .shift(1, 0);
             }
             Some((0, 1)) => {
-                self.prepend_line();
+                if !self.prepend_line() {
+                    return false;
+                }
                 self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
                 self.move_lift
                     .as_mut()
@@ -154,6 +158,12 @@ impl Editor {
         let Some(lift) = self.move_lift.as_mut() else {
             return false;
         };
+        let bounds = lift.rectangle.bounds_at(lift.origin);
+        if direction == Direction::Right && bounds.right.saturating_add(1) >= MAX_CANVAS_WIDTH
+            || direction == Direction::Down && bounds.bottom.saturating_add(1) >= MAX_CANVAS_HEIGHT
+        {
+            return false;
+        }
         let next = match direction {
             Direction::Up => lift.origin.line.checked_sub(1).map(|line| Coord {
                 line,

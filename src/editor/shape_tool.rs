@@ -1,6 +1,6 @@
 use crate::app::CursorMode;
 use crate::drawing::{LineStyle, glyph_with_connection};
-use crate::model::{Atom, Coord, Direction};
+use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::ShapeKind;
 
 use super::color_tool::color_atom_at;
@@ -40,11 +40,16 @@ impl Editor {
         }
         if had_selection {
             let bounds = self.selection.bounds();
-            if bounds.top == 0 {
-                self.prepend_line();
+            if bounds.right.saturating_add(1) >= MAX_CANVAS_WIDTH
+                || bounds.bottom.saturating_add(1) >= MAX_CANVAS_HEIGHT
+            {
+                return false;
             }
-            if bounds.left == 0 {
-                self.prepend_column();
+            if bounds.top == 0 && !self.prepend_line() {
+                return false;
+            }
+            if bounds.left == 0 && !self.prepend_column() {
+                return false;
             }
             let bounds = self.selection.bounds();
             self.shape_preview = Some(ShapePreview {

@@ -43,7 +43,9 @@ impl Editor {
         selected_start: LineEnding,
         selected_end: LineEnding,
     ) -> bool {
-        let prepended = self.prepare_adjacent(direction);
+        let Some(prepended) = self.prepare_adjacent(direction) else {
+            return false;
+        };
         let from = self.grid.cursor_pos;
         let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
         let line_style = self.toolbar.line_style();

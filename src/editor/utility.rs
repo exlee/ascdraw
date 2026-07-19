@@ -1,5 +1,5 @@
 use super::{Editor, atom_width, blank_atom, display_width, index_for_column};
-use crate::model::{Atom, Coord, Direction};
+use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::UtilityKind;
 
 impl Editor {
@@ -18,14 +18,8 @@ impl Editor {
 
     fn push_blank(&mut self, direction: Direction) -> bool {
         match direction {
-            Direction::Left if self.grid.cursor_pos.column == 0 => {
-                self.prepend_column();
-                true
-            }
-            Direction::Up if self.grid.cursor_pos.line == 0 => {
-                self.prepend_line();
-                true
-            }
+            Direction::Left if self.grid.cursor_pos.column == 0 => self.prepend_column(),
+            Direction::Up if self.grid.cursor_pos.line == 0 => self.prepend_line(),
             Direction::Left | Direction::Right => {
                 let column = if direction == Direction::Left {
                     self.grid.cursor_pos.column - 1
@@ -55,6 +49,9 @@ impl Editor {
     }
 
     fn insert_blank_column(&mut self, column: usize) -> bool {
+        if self.canvas_width() >= MAX_CANVAS_WIDTH {
+            return false;
+        }
         let height = self
             .layer_views()
             .into_iter()
@@ -98,6 +95,9 @@ impl Editor {
     }
 
     fn insert_blank_line(&mut self, line: usize) -> bool {
+        if self.canvas_height() >= MAX_CANVAS_HEIGHT {
+            return false;
+        }
         self.layers.for_each_layer_mut(
             &mut self.grid.lines,
             &mut self.line_markers,
@@ -306,7 +306,9 @@ impl Editor {
             if !has_content && !has_markers && self.active_stroke.is_none() {
                 return false;
             }
-            self.prepend_line();
+            if !self.prepend_line() {
+                return false;
+            }
             self.shape_preview = None;
             return true;
         }

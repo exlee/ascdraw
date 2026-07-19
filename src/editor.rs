@@ -8,7 +8,9 @@ use crate::app::{CursorMode, ThemeConfig};
 use crate::drawing::LineEnding;
 use crate::drawing::is_line_glyph;
 use crate::jump::JumpMode;
-use crate::model::{Atom, Coord, Direction, Face, LayerId, LayerSummary};
+use crate::model::{
+    Atom, Coord, Direction, Face, LayerId, LayerSummary, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH,
+};
 use crate::selection::{
     CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
     selected_text,
@@ -160,7 +162,8 @@ impl Editor {
     }
 
     pub fn restore_canvas_position(&mut self, cursor: Coord, canvas_origin: Coord) {
-        self.canvas_origin = canvas_origin;
+        let cursor = clamp_canvas_coord(cursor);
+        self.canvas_origin = clamp_canvas_coord(canvas_origin);
         self.grid.cursor_pos = cursor;
         self.sync_cursor_to_active_layer();
         self.selection.collapse(cursor);
@@ -713,6 +716,7 @@ impl Editor {
     }
 
     pub fn move_to(&mut self, coord: Coord) -> bool {
+        let coord = clamp_canvas_coord(coord);
         self.cancel_line_preview();
         self.cancel_move_lift();
         let old_line_count = self.grid.lines.len();
@@ -738,15 +742,19 @@ impl Editor {
             .then(|| usize::try_from(column.saturating_neg()).unwrap_or(usize::MAX))
             .unwrap_or(0);
         for _ in 0..prepend_lines {
-            self.prepend_line();
+            if !self.prepend_line() {
+                break;
+            }
         }
         for _ in 0..prepend_columns {
-            self.prepend_column();
+            if !self.prepend_column() {
+                break;
+            }
         }
-        Coord {
+        clamp_canvas_coord(Coord {
             line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
             column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
-        }
+        })
     }
 
     pub fn extend_selection_to(&mut self, coord: Coord) {
@@ -777,14 +785,15 @@ impl Editor {
         self.end_stroke();
         self.cancel_line_preview();
         self.cancel_move_lift();
-        self.move_to_without_ending_stroke(Coord {
+        self.move_to_without_ending_stroke(clamp_canvas_coord(Coord {
             line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
             column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
-        });
+        }));
         self.collapse_selection();
     }
 
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
+        let coord = clamp_canvas_coord(coord);
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
         }
@@ -876,7 +885,9 @@ impl Editor {
     pub fn extend_selection(&mut self, direction: Direction) -> bool {
         self.cancel_line_preview();
         self.cancel_move_lift();
-        let prepended = self.prepare_adjacent(direction);
+        let Some(prepended) = self.prepare_adjacent(direction) else {
+            return false;
+        };
         let to = adjacent_coord(self.grid.cursor_pos, direction)
             .expect("canvas edge was structurally extended");
         self.end_stroke();
@@ -892,7 +903,9 @@ impl Editor {
     pub fn erase(&mut self, direction: Direction) -> bool {
         self.cancel_line_preview();
         self.cancel_move_lift();
-        self.prepare_adjacent(direction);
+        if self.prepare_adjacent(direction).is_none() {
+            return false;
+        }
         self.end_stroke();
         self.shape_preview = None;
         let from = self.grid.cursor_pos;
@@ -995,7 +1008,9 @@ impl Editor {
     }
 
     pub fn draw_stamp(&mut self, direction: Direction) {
-        self.prepare_adjacent(direction);
+        if self.prepare_adjacent(direction).is_none() {
+            return;
+        }
         let to = adjacent_coord(self.grid.cursor_pos, direction)
             .expect("canvas edge was structurally extended");
         self.shape_preview = None;
@@ -1034,6 +1049,9 @@ impl Editor {
             column: self.selection.bounds().left,
         };
         let bounds = rectangle.bounds_at(origin);
+        if bounds.right >= MAX_CANVAS_WIDTH || bounds.bottom >= MAX_CANVAS_HEIGHT {
+            return false;
+        }
         self.end_stroke();
         self.shape_preview = None;
         self.line_markers
@@ -1067,6 +1085,9 @@ impl Editor {
 
         let origin = self.grid.cursor_pos;
         let bounds = rectangle.bounds_at(origin);
+        if bounds.right >= MAX_CANVAS_WIDTH || bounds.bottom >= MAX_CANVAS_HEIGHT {
+            return false;
+        }
         let mut lines = self.grid.lines.clone();
         overwrite_rectangle(&mut lines, origin, rectangle);
         let mut line_markers = self.line_markers.clone();
@@ -1083,7 +1104,8 @@ impl Editor {
         true
     }
 
-    pub fn replace_canvas(&mut self, lines: Vec<Vec<Atom>>) {
+    pub fn replace_canvas(&mut self, mut lines: Vec<Vec<Atom>>) {
+        truncate_canvas_lines(&mut lines);
         self.layers.reset();
         self.toolbar.sync_layer_count(self.layers.layers().len());
         self.grid.lines = if lines.is_empty() {
@@ -1125,9 +1147,13 @@ impl Editor {
             })
             .unwrap_or_default();
         self.restore_menu_selections(menu_selections);
+        let cursor = clamp_canvas_coord(cursor);
         self.grid.cursor_pos = cursor;
         self.cursor_index = index_for_column(&self.grid.lines[cursor.line], cursor.column);
-        self.selection = selection;
+        self.selection.select(
+            clamp_canvas_coord(selection.anchor()),
+            clamp_canvas_coord(selection.active()),
+        );
         self.active_stroke = None;
         self.line_markers.clear();
         self.line_preview = None;
@@ -1167,6 +1193,14 @@ impl Editor {
     fn sync_cursor_column(&mut self) {
         self.grid.cursor_pos.column =
             display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
+        if self.grid.cursor_pos.column >= MAX_CANVAS_WIDTH {
+            self.cursor_index = index_for_column(
+                &self.grid.lines[self.grid.cursor_pos.line],
+                MAX_CANVAS_WIDTH - 1,
+            );
+            self.grid.cursor_pos.column =
+                display_width(&self.grid.lines[self.grid.cursor_pos.line][..self.cursor_index]);
+        }
     }
 
     fn collapse_selection(&mut self) {
@@ -1231,23 +1265,30 @@ impl Editor {
         self.expose_cursor_cells();
     }
 
-    fn prepare_adjacent(&mut self, direction: Direction) -> bool {
+    fn prepare_adjacent(&mut self, direction: Direction) -> Option<bool> {
         match direction {
             Direction::Up if self.grid.cursor_pos.line == 0 => {
-                self.prepend_line();
+                if !self.prepend_line() {
+                    return None;
+                }
                 self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
-                true
+                Some(true)
             }
             Direction::Left if self.grid.cursor_pos.column == 0 => {
-                self.prepend_column();
+                if !self.prepend_column() {
+                    return None;
+                }
                 self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
-                true
+                Some(true)
             }
-            _ => false,
+            _ => adjacent_coord(self.grid.cursor_pos, direction).map(|_| false),
         }
     }
 
-    fn prepend_line(&mut self) {
+    fn prepend_line(&mut self) -> bool {
+        if self.canvas_height() >= MAX_CANVAS_HEIGHT {
+            return false;
+        }
         self.layers.prepend_line_to_inactive();
         self.grid.lines.insert(0, Vec::new());
         self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
@@ -1264,9 +1305,13 @@ impl Editor {
             preview.end.line = preview.end.line.saturating_add(1);
         }
         self.pending_prepend.1 = self.pending_prepend.1.saturating_add(1);
+        true
     }
 
-    fn prepend_column(&mut self) {
+    fn prepend_column(&mut self) -> bool {
+        if self.canvas_width() >= MAX_CANVAS_WIDTH {
+            return false;
+        }
         self.layers.prepend_column_to_inactive();
         for line in &mut self.grid.lines {
             line.insert(0, blank_atom());
@@ -1286,6 +1331,66 @@ impl Editor {
             preview.end.column = preview.end.column.saturating_add(1);
         }
         self.pending_prepend.0 = self.pending_prepend.0.saturating_add(1);
+        true
+    }
+
+    fn canvas_height(&self) -> usize {
+        let stored_height = self
+            .layer_views()
+            .into_iter()
+            .map(|layer| layer.lines.len())
+            .max()
+            .unwrap_or(1);
+        stored_height.max(
+            self.selection
+                .bounds()
+                .bottom
+                .max(self.grid.cursor_pos.line)
+                .saturating_add(1),
+        )
+    }
+
+    fn canvas_width(&self) -> usize {
+        let stored_width = self
+            .layer_views()
+            .into_iter()
+            .flat_map(|layer| layer.lines)
+            .map(|line| display_width(line))
+            .max()
+            .unwrap_or(0);
+        stored_width.max(
+            self.selection
+                .bounds()
+                .right
+                .max(self.grid.cursor_pos.column)
+                .saturating_add(1),
+        )
+    }
+}
+
+fn clamp_canvas_coord(coord: Coord) -> Coord {
+    Coord {
+        line: coord.line.min(MAX_CANVAS_HEIGHT - 1),
+        column: coord.column.min(MAX_CANVAS_WIDTH - 1),
+    }
+}
+
+fn truncate_canvas_lines(lines: &mut Vec<Vec<Atom>>) {
+    lines.truncate(MAX_CANVAS_HEIGHT);
+    for line in lines {
+        let mut width: usize = 0;
+        let keep = line
+            .iter()
+            .take_while(|atom| {
+                let next = width.saturating_add(atom_width(atom));
+                if next > MAX_CANVAS_WIDTH {
+                    return false;
+                }
+                width = next;
+                true
+            })
+            .count();
+        line.truncate(keep);
     }
 }
 
@@ -2982,6 +3087,55 @@ mod tests {
         assert_eq!(state.grid.lines.len(), 2);
         assert_eq!(contents(&state.grid.lines[0]), " ");
         assert_eq!(contents(&state.grid.lines[1]), " ");
+    }
+
+    #[test]
+    fn canvas_stops_at_maximum_width_and_height() {
+        let mut state = state();
+        state.move_to(Coord {
+            line: MAX_CANVAS_HEIGHT - 1,
+            column: MAX_CANVAS_WIDTH - 1,
+        });
+        state.insert("xy");
+
+        assert_eq!(state.grid.lines.len(), MAX_CANVAS_HEIGHT);
+        assert_eq!(
+            display_width(state.grid.lines.last().unwrap()),
+            MAX_CANVAS_WIDTH
+        );
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: MAX_CANVAS_HEIGHT - 1,
+                column: MAX_CANVAS_WIDTH - 1,
+            }
+        );
+        assert!(!state.move_cursor(Direction::Right));
+        assert!(!state.move_cursor(Direction::Down));
+
+        state.move_to(Coord::default());
+        assert!(!state.move_cursor(Direction::Left));
+        assert!(!state.move_cursor(Direction::Up));
+        assert_eq!(state.grid.lines.len(), MAX_CANVAS_HEIGHT);
+        assert_eq!(
+            display_width(state.grid.lines.last().unwrap()),
+            MAX_CANVAS_WIDTH
+        );
+    }
+
+    #[test]
+    fn replacing_canvas_truncates_oversized_rows_and_columns() {
+        let mut lines = vec![Vec::new(); MAX_CANVAS_HEIGHT + 1];
+        lines[0].push(Atom {
+            face: Face::default(),
+            contents: "x".repeat(MAX_CANVAS_WIDTH + 1),
+        });
+        let mut state = state();
+
+        state.replace_canvas(lines);
+
+        assert_eq!(state.grid.lines.len(), MAX_CANVAS_HEIGHT);
+        assert!(state.grid.lines[0].is_empty());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::MacosColorSpace;
 use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
-use crate::model::{Atom, Face, LayerId};
+use crate::model::{Atom, Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
 use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle, region_atoms};
 use crate::toolbar::DurableMenuSelections;
@@ -18,7 +18,6 @@ use crate::toolbar::DurableMenuSelections;
 const PROJECT_FORMAT: &str = "ascdraw";
 const PROJECT_VERSION: u32 = 2;
 const LEGACY_SELECTION_VERSION: u32 = 1;
-const MAX_PROJECT_COORDINATE: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportAction {
@@ -774,9 +773,9 @@ fn validate_persisted_layers(layers: &[PersistedLayer], active_layer: LayerId) -
 }
 
 fn validate_coordinate(name: &str, coord: crate::model::Coord) -> Result<()> {
-    if coord.line > MAX_PROJECT_COORDINATE || coord.column > MAX_PROJECT_COORDINATE {
+    if coord.line >= MAX_CANVAS_HEIGHT || coord.column >= MAX_CANVAS_WIDTH {
         bail!(
-            "{name} ({}, {}) exceeds the safe project coordinate limit {MAX_PROJECT_COORDINATE}",
+            "{name} ({}, {}) exceeds the {MAX_CANVAS_WIDTH}x{MAX_CANVAS_HEIGHT} canvas",
             coord.line,
             coord.column
         );
@@ -849,9 +848,19 @@ fn row_atoms(row: &str) -> Vec<Atom> {
 pub fn lines_from_text(text: &str) -> Vec<Vec<Atom>> {
     let mut lines: Vec<Vec<Atom>> = text
         .split('\n')
+        .take(MAX_CANVAS_HEIGHT)
         .map(|line| {
             let line = line.strip_suffix('\r').unwrap_or(line);
+            let mut width: usize = 0;
             UnicodeSegmentation::graphemes(line, true)
+                .take_while(|contents| {
+                    let next = width.saturating_add(UnicodeWidthStr::width(*contents).max(1));
+                    if next > MAX_CANVAS_WIDTH {
+                        return false;
+                    }
+                    width = next;
+                    true
+                })
                 .map(|contents| Atom {
                     face: Face::default(),
                     contents: contents.to_string(),

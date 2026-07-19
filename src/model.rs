@@ -36,6 +36,8 @@ pub struct Coord {
     pub column: usize,
 }
 
+pub const MAX_CANVAS_WIDTH: usize = 10_000;
+pub const MAX_CANVAS_HEIGHT: usize = 10_000;
 pub const MAX_LAYERS: usize = 6;
 pub const LAYER_SYMBOLS: [&str; 10] = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ"];
 pub const BASE_COLORS: [&str; 8] = [

@@ -2,7 +2,10 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
+use crate::model::{
+    Atom, Coord, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH,
+    MAX_LAYERS,
+};
 use crate::selection::{SelectionBounds, TextRectangle, overwrite_rectangle};
 
 use super::{PlacedLineMarker, blank_atom};
@@ -121,6 +124,16 @@ impl LayerStack {
         }
         let mut seen = std::collections::HashSet::new();
         for layer in &persisted {
+            if layer.lines.len() > MAX_CANVAS_HEIGHT
+                || layer.lines.iter().any(|line| {
+                    line.iter()
+                        .map(|atom| UnicodeWidthStr::width(atom.contents.as_str()).max(1))
+                        .fold(0usize, usize::saturating_add)
+                        > MAX_CANVAS_WIDTH
+                })
+            {
+                bail!("project canvas exceeds {MAX_CANVAS_WIDTH}x{MAX_CANVAS_HEIGHT} cells");
+            }
             if !layer.id.is_valid() {
                 bail!(
                     "layer symbol id {} is outside the supported pool",

@@ -1,7 +1,7 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::CursorMode;
-use crate::model::Atom;
+use crate::model::{Atom, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 
 use super::{Editor, atom_width, display_width};
 
@@ -17,6 +17,20 @@ impl Editor {
                     contents: contents.to_string(),
                 })
                 .collect::<Vec<_>>();
+            let available = MAX_CANVAS_WIDTH
+                .saturating_sub(display_width(&self.grid.lines[self.grid.cursor_pos.line]));
+            let mut accepted_width: usize = 0;
+            let atoms = atoms
+                .into_iter()
+                .take_while(|atom| {
+                    let next = accepted_width.saturating_add(atom_width(atom));
+                    if next > available {
+                        return false;
+                    }
+                    accepted_width = next;
+                    true
+                })
+                .collect::<Vec<_>>();
             let inserted_count = atoms.len();
             let inserted_width = display_width(&atoms);
             let line_index = self.grid.cursor_pos.line;
@@ -27,7 +41,7 @@ impl Editor {
                 .len()
                 .min(self.cursor_index + inserted_count);
             self.remap_line_markers_after_edit(line_index, insertion_column, 0, inserted_width);
-            if part.ends_with('\n') {
+            if part.ends_with('\n') && self.grid.lines.len() < MAX_CANVAS_HEIGHT {
                 self.newline();
             }
         }
@@ -82,6 +96,13 @@ impl Editor {
                 let line = &mut self.grid.lines[line_index];
                 let replacement_column = display_width(&line[..self.cursor_index]);
                 let removed_width = line.get(self.cursor_index).map_or(0, atom_width);
+                if display_width(line)
+                    .saturating_sub(removed_width)
+                    .saturating_add(inserted_width)
+                    > MAX_CANVAS_WIDTH
+                {
+                    break;
+                }
                 if self.cursor_index < line.len() {
                     line[self.cursor_index] = atom;
                 } else {
@@ -95,7 +116,7 @@ impl Editor {
                     inserted_width,
                 );
             }
-            if part.ends_with('\n') {
+            if part.ends_with('\n') && self.grid.lines.len() < MAX_CANVAS_HEIGHT {
                 self.newline();
             }
         }
@@ -105,6 +126,9 @@ impl Editor {
 
     pub fn newline(&mut self) {
         self.end_stroke();
+        if self.grid.lines.len() >= MAX_CANVAS_HEIGHT {
+            return;
+        }
         let source_line = self.grid.cursor_pos.line;
         let split_column = display_width(&self.grid.lines[source_line][..self.cursor_index]);
         let remainder = self.grid.lines[source_line].split_off(self.cursor_index);
@@ -128,6 +152,12 @@ impl Editor {
             self.remap_line_markers_after_edit(line_index, removal_column, removed_width, 0);
         } else if self.grid.cursor_pos.line > 0 {
             let removed_line = self.grid.cursor_pos.line;
+            if display_width(&self.grid.lines[removed_line - 1])
+                .saturating_add(display_width(&self.grid.lines[removed_line]))
+                > MAX_CANVAS_WIDTH
+            {
+                return;
+            }
             let current = self.grid.lines.remove(self.grid.cursor_pos.line);
             self.grid.cursor_pos.line -= 1;
             self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
@@ -150,6 +180,12 @@ impl Editor {
             self.remap_line_markers_after_edit(line, removal_column, removed_width, 0);
         } else if line + 1 < self.grid.lines.len() {
             let removed_line = line + 1;
+            if display_width(&self.grid.lines[line])
+                .saturating_add(display_width(&self.grid.lines[removed_line]))
+                > MAX_CANVAS_WIDTH
+            {
+                return;
+            }
             let join_column = display_width(&self.grid.lines[line]);
             let next = self.grid.lines.remove(line + 1);
             self.grid.lines[line].extend(next);

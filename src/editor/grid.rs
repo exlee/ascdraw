@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Direction, Face};
+use crate::model::{Atom, Coord, Direction, Face, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
@@ -81,10 +81,16 @@ pub(crate) fn adjacent_coord(coord: Coord, direction: Direction) -> Option<Coord
         }),
         Direction::Right => Some(Coord {
             line: coord.line,
-            column: coord.column.checked_add(1)?,
+            column: coord
+                .column
+                .checked_add(1)
+                .filter(|column| *column < MAX_CANVAS_WIDTH)?,
         }),
         Direction::Down => Some(Coord {
-            line: coord.line.checked_add(1)?,
+            line: coord
+                .line
+                .checked_add(1)
+                .filter(|line| *line < MAX_CANVAS_HEIGHT)?,
             column: coord.column,
         }),
         Direction::Left => Some(Coord {

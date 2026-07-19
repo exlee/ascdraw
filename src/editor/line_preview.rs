@@ -140,7 +140,9 @@ impl Editor {
         if self.line_preview.is_none() {
             return false;
         }
-        let prepended = self.prepare_adjacent(direction);
+        let Some(prepended) = self.prepare_adjacent(direction) else {
+            return false;
+        };
         let to = adjacent_coord(self.grid.cursor_pos, direction)
             .expect("canvas edge was structurally extended");
         self.set_line_preview_end(to);
@@ -148,6 +150,7 @@ impl Editor {
     }
 
     pub fn move_line_preview_to(&mut self, target: Coord) -> bool {
+        let target = super::clamp_canvas_coord(target);
         if self.line_preview.is_none() || self.grid.cursor_pos == target {
             return false;
         }
