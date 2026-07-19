@@ -1204,6 +1204,26 @@ impl Editor {
 
     fn selection_contains_nonblank(&self) -> bool {
         let bounds = self.selection.bounds();
+        if self.canvas_is_current() {
+            return self.canvas.layers().iter().any(|layer| {
+                layer.rows().iter().any(|(&line, cells)| {
+                    let Ok(line) = usize::try_from(line) else {
+                        return false;
+                    };
+                    line >= bounds.top
+                        && line <= bounds.bottom
+                        && cells.iter().any(|(&column, data)| {
+                            let Ok(column) = usize::try_from(column) else {
+                                return false;
+                            };
+                            let width = atom_width(&data.atom);
+                            column <= bounds.right
+                                && column.saturating_add(width) > bounds.left
+                                && !data.atom.contents.chars().all(char::is_whitespace)
+                        })
+                })
+            });
+        }
         self.layer_views().into_iter().any(|layer| {
             (bounds.top..=bounds.bottom).any(|line_index| {
                 let Some(line) = layer.lines.get(line_index) else {
@@ -1509,6 +1529,9 @@ impl Editor {
     }
 
     pub fn content_cells(&self) -> Vec<Coord> {
+        if self.canvas_is_current() {
+            return self.sparse_content_cells(false);
+        }
         let mut cells = self
             .layer_views()
             .into_iter()
@@ -1521,11 +1544,45 @@ impl Editor {
     }
 
     pub fn content_cells_including_hidden(&self) -> Vec<Coord> {
+        if self.canvas_is_current() {
+            return self.sparse_content_cells(true);
+        }
         let mut cells = self
             .layer_views()
             .into_iter()
             .flat_map(|layer| grid::content_cells(&layer.lines))
             .collect::<Vec<_>>();
+        cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
+        cells.dedup();
+        cells
+    }
+
+    fn sparse_content_cells(&self, include_hidden: bool) -> Vec<Coord> {
+        let mut cells = Vec::new();
+        for layer in self
+            .canvas
+            .layers()
+            .iter()
+            .filter(|layer| include_hidden || layer.visible)
+        {
+            for (&line, row) in layer.rows() {
+                let Ok(line) = usize::try_from(line) else {
+                    continue;
+                };
+                for (&column, data) in row {
+                    if data.atom.contents.chars().all(char::is_whitespace) {
+                        continue;
+                    }
+                    let Ok(column) = usize::try_from(column) else {
+                        continue;
+                    };
+                    cells.extend(
+                        (column..column.saturating_add(atom_width(&data.atom)))
+                            .map(|column| Coord { line, column }),
+                    );
+                }
+            }
+        }
         cells.sort_unstable_by_key(|coord| (coord.line, coord.column));
         cells.dedup();
         cells
@@ -1608,6 +1665,20 @@ impl Editor {
     }
 
     fn canvas_height(&self) -> usize {
+        if self.canvas_is_current() {
+            let stored_height = self
+                .canvas
+                .bounds()
+                .and_then(|bounds| usize::try_from(bounds.max_y).ok())
+                .map_or(1, |bottom| bottom.saturating_add(1));
+            return stored_height.max(
+                self.selection
+                    .bounds()
+                    .bottom
+                    .max(self.grid.cursor_pos.line)
+                    .saturating_add(1),
+            );
+        }
         let stored_height = self
             .layer_views()
             .into_iter()
@@ -1624,6 +1695,20 @@ impl Editor {
     }
 
     fn canvas_width(&self) -> usize {
+        if self.canvas_is_current() {
+            let stored_width = self
+                .canvas
+                .bounds()
+                .and_then(|bounds| usize::try_from(bounds.max_x).ok())
+                .map_or(0, |right| right.saturating_add(1));
+            return stored_width.max(
+                self.selection
+                    .bounds()
+                    .right
+                    .max(self.grid.cursor_pos.column)
+                    .saturating_add(1),
+            );
+        }
         let stored_width = self
             .layer_views()
             .into_iter()
