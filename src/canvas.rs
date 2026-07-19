@@ -219,6 +219,25 @@ impl LayerMap {
         Ok(())
     }
 
+    pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
+        let Some((line, column)) = coord_i16(coord) else {
+            return false;
+        };
+        let Some(data) = self
+            .rows
+            .get_mut(&line)
+            .and_then(|row| row.get_mut(&column))
+        else {
+            return false;
+        };
+        let mut atom = data.atom.as_ref().clone();
+        atom.face = face.clone();
+        data.face = Rc::new(face);
+        data.atom = Rc::new(atom);
+        *data.raster_cache.borrow_mut() = None;
+        true
+    }
+
     pub fn matches_dense(&self, lines: &[Vec<Atom>]) -> bool {
         Self::from_dense(self.id, self.visible, lines).is_ok_and(|dense| dense == *self)
     }
@@ -478,6 +497,28 @@ impl LayerStack {
 
     pub fn active_id(&self) -> LayerId {
         self.layers[self.active].id
+    }
+
+    pub(crate) fn set_at(&mut self, coord: Coord, atom: Atom, face: &Face) -> Result<()> {
+        let (line, column) = coord_i16(coord).context("canvas coordinate exceeds signed range")?;
+        self.layers[self.active].set_at(column, line, atom, face)?;
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
+        self.layers[self.active].set_face_at(coord, face)
+    }
+
+    pub(crate) fn delete_at(&mut self, coord: Coord) -> bool {
+        let Some((line, column)) = coord_i16(coord) else {
+            return false;
+        };
+        let deleted = self.layers[self.active].delete_at(column, line);
+        if deleted {
+            self.recalculate_bounds();
+        }
+        deleted
     }
 
     pub(crate) fn active_line_markers(&self) -> Vec<LineMarker> {

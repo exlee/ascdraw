@@ -181,6 +181,24 @@ impl Editor {
             .expect("line metadata remapping preserves valid sparse cells");
     }
 
+    fn sync_sparse_cell_from_dense(&mut self, coord: Coord) {
+        let Some(line) = self.grid.lines.get(coord.line) else {
+            self.canvas.delete_at(coord);
+            return;
+        };
+        let (index, column) = index_and_column_for_coord(line, coord.column);
+        let Some(atom) = line.get(index).filter(|_| column == coord.column) else {
+            self.canvas.delete_at(coord);
+            return;
+        };
+        if atom_width(atom) != 1 {
+            return;
+        }
+        self.canvas
+            .set_at(coord, atom.clone(), &atom.face)
+            .expect("edited cells contain one display-width-1 grapheme");
+    }
+
     pub fn canvas(&self) -> &crate::canvas::LayerStack {
         &self.canvas
     }
@@ -1113,6 +1131,12 @@ impl Editor {
             .then_some(marker)
         });
         line.splice(index..=index, grid::blank_run(width));
+        for column in start_column..start_column.saturating_add(width) {
+            self.sync_sparse_cell_from_dense(Coord {
+                line: coord.line,
+                column,
+            });
+        }
         true
     }
 

@@ -17,6 +17,18 @@ impl Editor {
     pub(super) fn color_written_cell(&mut self, coord: Coord) {
         let foreground = self.write_face().fg;
         color_atom_at(&mut self.grid.lines, coord, &foreground);
+        let face = self
+            .grid
+            .lines
+            .get(coord.line)
+            .and_then(|line| {
+                let (index, column) = index_and_column_for_coord(line, coord.column);
+                line.get(index).filter(|_| column == coord.column)
+            })
+            .map(|atom| atom.face.clone());
+        if !face.is_some_and(|face| self.canvas.set_face_at(coord, face)) {
+            self.sync_sparse_cell_from_dense(coord);
+        }
     }
 
     pub(super) fn color_written_bounds(&mut self, bounds: SelectionBounds) {

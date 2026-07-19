@@ -146,6 +146,7 @@ impl Editor {
             } else {
                 atom.face.fg = foreground;
             }
+            self.sync_sparse_cell_from_dense(coord);
         }
     }
 
@@ -197,7 +198,9 @@ impl Editor {
             {
                 atom.contents = glyph.to_string();
                 atom.face.fg = foreground;
-                return Some(atom.contents.clone());
+                let contents = atom.contents.clone();
+                self.sync_sparse_cell_from_dense(coord);
+                return Some(contents);
             }
             if grid::is_blank_run(atom) {
                 let contents =
@@ -260,6 +263,7 @@ impl Editor {
             replace_cell(&mut self.grid.lines, coord, contents);
             self.color_written_cell(coord);
         }
+        self.sync_sparse_cell_from_dense(coord);
     }
 
     pub(super) fn write_diagonal_cell(
