@@ -65,10 +65,18 @@ impl Editor {
             line: source_bounds.top,
             column: source_bounds.left,
         };
+        let visible_layers = self
+            .layers
+            .summaries()
+            .into_iter()
+            .filter(|layer| layer.visible)
+            .map(|layer| layer.id)
+            .collect::<Vec<_>>();
         let layers = self
             .layers
             .layer_contents(&self.grid.lines, &self.line_markers)
             .into_iter()
+            .filter(|(id, _, _)| visible_layers.contains(id))
             .map(|(id, lines, markers)| {
                 let rectangle = TextRectangle {
                     rows: selected_atoms(&lines, source_bounds),

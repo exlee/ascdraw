@@ -1607,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_and_move_apply_to_every_layer_without_flattening_the_stack() {
+    fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers() {
         let mut state = state();
         state.grid.lines = lines_from_text("A");
         let base = state.active_layer_id();
@@ -1631,6 +1631,11 @@ mod tests {
 
         assert!(state.select_layer(base));
         state.grid.lines = lines_from_text("A");
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord::default(),
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "A".into(),
+        });
         assert!(state.select_layer(upper));
         state.grid.lines = lines_from_text(" B");
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
@@ -1646,14 +1651,7 @@ mod tests {
         state.extend_selection(Direction::Right);
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
-        assert_eq!(
-            contents(
-                &state
-                    .move_lift_render_lines_for_layer(base)
-                    .expect("base layer preview")[0]
-            ),
-            " A"
-        );
+        assert!(state.move_lift_render_lines_for_layer(base).is_none());
         assert_eq!(
             contents(
                 &state
@@ -1665,10 +1663,14 @@ mod tests {
         assert!(state.confirm_move_lift());
 
         let views = state.layer_views();
-        assert_eq!(contents(&views[0].lines[0]), " A");
+        assert_eq!(contents(&views[0].lines[0]), "A");
         assert_eq!(contents(&views[1].lines[0]), "  B");
         assert_eq!(views[1].lines[0][2].face, upper_face);
         assert_eq!(state.layer_summaries(), summaries);
+        assert!(state.select_layer(base));
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].coord, Coord::default());
+        assert!(state.select_layer(upper));
 
         state.clear_canvas();
         assert_eq!(state.layer_summaries(), summaries);
