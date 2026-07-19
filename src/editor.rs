@@ -1178,12 +1178,27 @@ impl Editor {
             return;
         }
         let bounds = self.selection.bounds();
+        if self
+            .grid
+            .lines
+            .iter()
+            .flatten()
+            .any(|atom| atom_width(atom) != 1)
+        {
+            self.canvas
+                .for_each_layer_dense_mut(&mut self.grid.lines, |_, lines, markers| {
+                    markers.retain(|marker| !bounds.contains(marker.coord));
+                    replace_range(lines, bounds, None);
+                })
+                .expect("legacy selection bounds fit the canvas");
+            self.restore_active_cursor_index();
+            return;
+        }
+        self.commit_canvas();
         self.canvas
-            .for_each_layer_dense_mut(&mut self.grid.lines, |_, lines, markers| {
-                markers.retain(|marker| !bounds.contains(marker.coord));
-                replace_range(lines, bounds, None);
-            })
-            .expect("editor layers contain valid sparse cells");
+            .clear_bounds_in_all_layers(bounds)
+            .expect("selection bounds fit the sparse canvas");
+        self.refresh_active_dense_view();
         self.restore_active_cursor_index();
     }
 

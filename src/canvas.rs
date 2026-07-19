@@ -770,6 +770,14 @@ impl LayerStack {
         Ok(())
     }
 
+    pub(crate) fn clear_bounds_in_all_layers(&mut self, bounds: SelectionBounds) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.replace_bounds(bounds, None)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
     pub(crate) fn overwrite_active_rectangle(
         &mut self,
         origin: Coord,
