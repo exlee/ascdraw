@@ -608,6 +608,32 @@ pub(crate) fn save_project_json(
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
+pub(crate) fn load_project_json(
+    path: &Path,
+    state: &mut Editor,
+    viewport: &mut ViewportOffset,
+) -> Result<bool> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    match project_from_json(&contents)? {
+        LoadedJson::Project(project) => {
+            state.restore_project(
+                project.layers,
+                project.active_layer,
+                project.cursor,
+                project.selection,
+                &project.menu_selections,
+            )?;
+            *viewport = project.viewport;
+            Ok(true)
+        }
+        LoadedJson::Legacy(lines) => {
+            state.replace_canvas(lines);
+            Ok(false)
+        }
+    }
+}
+
 fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
     let rows = match loaded {
         LoadedJson::Project(project) => flatten_visible_layers(

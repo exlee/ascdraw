@@ -803,6 +803,13 @@ fn document_session_from_arg(
         Ok(DocumentSession::Stdin(text))
     } else {
         Ok(match document {
+            Some(path)
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json") =>
+            {
+                DocumentSession::JsonFile(path)
+            }
             Some(path) => DocumentSession::file(path),
             None => DocumentSession::scratchpad(default_path()),
         })
@@ -1372,6 +1379,14 @@ mod tests {
         .unwrap();
         assert!(matches!(file_session, DocumentSession::File(ref path) if path == &file));
         assert_eq!(file_session.window_title(), "ascdraw - diagram.toml");
+
+        let project = std::path::PathBuf::from("drawings/workspace.json");
+        let project_session =
+            document_session_from_arg(Some(project.clone()), std::io::empty(), || {
+                panic!("explicit files must not resolve the scratchpad path")
+            })
+            .unwrap();
+        assert!(matches!(project_session, DocumentSession::JsonFile(ref path) if path == &project));
     }
 
     #[test]

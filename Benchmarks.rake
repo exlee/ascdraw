@@ -39,13 +39,14 @@ module FpsBenchmark
     operations = positive_integer("FPS_OPERATIONS", 300)
     warmup = nonnegative_integer("FPS_WARMUP", 20)
     report_dir = ENV.fetch("FPS_REPORT_DIR", "target/benchmarks/fps")
-    fixture = ENV["FPS_DOCUMENT"]
+    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
     FileUtils.mkdir_p(report_dir)
 
     Dir.mktmpdir("ascdraw-fps") do |temporary_dir|
       socket_path = File.join(temporary_dir, "control.sock")
-      document_path = File.join(temporary_dir, "benchmark.toml")
-      FileUtils.cp(fixture, document_path) if fixture
+      document_path = File.join(temporary_dir, "workspace.json")
+      FileUtils.cp(fixture, "#{document_path}.bz2")
+      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|
