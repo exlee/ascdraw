@@ -154,13 +154,23 @@ module FpsBenchmark
     client.request(command: "key", key: "escape", count: 1)
     client.request(command: "key", key: "1", count: 1)
     client.request(command: "key", key: "2", count: 1)
+    spiral_directions = ["right", "up", "left", "down"]
+    direction_index = 0
+    segment_length = 1
+    steps_in_segment = 0
     reports << measure(client, "#{name_prefix}line", warmup, operations) do
       client.request(
         command: "key",
-        key: "right",
+        key: spiral_directions[direction_index],
         modifiers: { control: true },
         count: 1,
       )
+      steps_in_segment += 1
+      if steps_in_segment == segment_length
+        steps_in_segment = 0
+        direction_index = (direction_index + 1) % spiral_directions.length
+        segment_length += 1
+      end
     end
     reports
   end
