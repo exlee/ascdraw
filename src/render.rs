@@ -671,6 +671,8 @@ fn render_cached_sparse_grid_atoms(
     let column_start = i16::try_from(first_column).unwrap_or(i16::MAX);
     let column_end = i16::try_from(max_column).unwrap_or(i16::MAX);
     let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+    let raster_generation =
+        sparse_raster_generation(&state.grid.default_face, &state.theme, metrics);
     for layer in layers
         .effective_layers()
         .iter()
@@ -678,47 +680,44 @@ fn render_cached_sparse_grid_atoms(
     {
         for (&row, cells) in layer.rows().range(row_start..row_end) {
             for (&column, data) in cells.range(column_start..column_end) {
-                let mut atom = data.atom.as_ref().clone();
-                atom.face = data.face.as_ref().clone();
-                let resolved_face = if face_is_default(&atom.face) {
-                    root_face
-                } else {
-                    resolve_derived_face(
-                        &state.grid.default_face,
-                        &atom.face,
-                        FALLBACK_FG,
-                        FALLBACK_BG,
-                    )
-                };
-                let paints_background = atom.face.bg != "default"
-                    || atom.face.attributes.iter().any(|attribute| {
-                        attribute
-                            .trim_start_matches("final:")
-                            .eq_ignore_ascii_case("reverse")
-                    });
-                let key = rendered_atom_key(
-                    &atom,
-                    resolved_face,
-                    root_face,
-                    paints_background,
-                    &state.grid.default_face,
-                    &state.theme,
-                    metrics,
-                );
-                let mut hasher = DefaultHasher::new();
-                key.hash(&mut hasher);
-                let generation = hasher.finish();
                 let cached_image = {
                     data.raster_cache
                         .borrow()
                         .as_ref()
-                        .filter(|cached| cached.generation == generation)
+                        .filter(|cached| cached.generation == raster_generation)
                         .map(|cached| cached.image.clone())
                 };
                 let image = cached_image.or_else(|| {
+                    let mut atom = data.atom.as_ref().clone();
+                    atom.face = data.face.as_ref().clone();
+                    let resolved_face = if face_is_default(&atom.face) {
+                        root_face
+                    } else {
+                        resolve_derived_face(
+                            &state.grid.default_face,
+                            &atom.face,
+                            FALLBACK_FG,
+                            FALLBACK_BG,
+                        )
+                    };
+                    let paints_background = atom.face.bg != "default"
+                        || atom.face.attributes.iter().any(|attribute| {
+                            attribute
+                                .trim_start_matches("final:")
+                                .eq_ignore_ascii_case("reverse")
+                        });
+                    let key = rendered_atom_key(
+                        &atom,
+                        resolved_face,
+                        root_face,
+                        paints_background,
+                        &state.grid.default_face,
+                        &state.theme,
+                        metrics,
+                    );
                     let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
                     *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
-                        generation,
+                        generation: raster_generation,
                         image: image.clone(),
                     }));
                     Some(image)
@@ -737,6 +736,21 @@ fn render_cached_sparse_grid_atoms(
         }
     }
     canvas.restore();
+}
+
+fn sparse_raster_generation(
+    default_face: &Face,
+    theme: &ThemeConfig,
+    metrics: &CellMetrics,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    default_face.hash(&mut hasher);
+    theme.hash(&mut hasher);
+    metrics.cell_width.to_bits().hash(&mut hasher);
+    metrics.cell_height.to_bits().hash(&mut hasher);
+    metrics.baseline_offset.to_bits().hash(&mut hasher);
+    metrics.underline_offset.to_bits().hash(&mut hasher);
+    hasher.finish()
 }
 
 fn render_cached_overlay_line(
