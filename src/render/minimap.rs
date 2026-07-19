@@ -255,8 +255,8 @@ pub(super) fn render(
         content_panel,
         canvas_bounds,
         required_bounds,
-        border_metrics.cell_width / 4.0,
-        border_metrics.cell_height / 4.0,
+        border_metrics.cell_width / 2.0,
+        border_metrics.cell_height / 2.0,
     ) else {
         return;
     };
