@@ -12,7 +12,7 @@ use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Atom, Face, LayerId};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
-use crate::selection::{CanvasRegion, CanvasSelection, region_atoms};
+use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle, region_atoms};
 use crate::toolbar::DurableMenuSelections;
 
 const PROJECT_FORMAT: &str = "ascdraw";
@@ -29,15 +29,19 @@ pub enum ExportAction {
     SavePng,
     LoadTxt,
     LoadJson,
+    ImportTxt,
+    ImportJson,
     Clear,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportOutcome {
     Unchanged,
     Cancelled,
-    DocumentLoaded,
-    ProjectLoaded,
+    Saved { path: PathBuf, format: FileKind },
+    DocumentLoaded { path: PathBuf, format: FileKind },
+    ProjectLoaded { path: PathBuf },
+    DocumentImported,
     CanvasCleared,
 }
 
@@ -233,16 +237,35 @@ pub fn perform(
             let Some(path) = platform.choose_save_path(FileKind::Txt) else {
                 return Ok(ExportOutcome::Cancelled);
             };
-            fs::write(&path, text_export(state, visible_canvas))
+            let contents = if state.selection.is_collapsed() {
+                plain_text(state)
+            } else {
+                text_export(state, visible_canvas)
+            };
+            fs::write(&path, contents)
                 .with_context(|| format!("failed to write {}", path.display()))?;
-            Ok(ExportOutcome::Unchanged)
+            Ok(if state.selection.is_collapsed() {
+                ExportOutcome::Saved {
+                    path,
+                    format: FileKind::Txt,
+                }
+            } else {
+                ExportOutcome::Unchanged
+            })
         }
         ExportAction::SaveJson => {
             let Some(path) = platform.choose_save_path(FileKind::Json) else {
                 return Ok(ExportOutcome::Cancelled);
             };
             save_project_json(&path, state, *viewport)?;
-            Ok(ExportOutcome::Unchanged)
+            Ok(if state.selection.is_collapsed() {
+                ExportOutcome::Saved {
+                    path,
+                    format: FileKind::Json,
+                }
+            } else {
+                ExportOutcome::Unchanged
+            })
         }
         ExportAction::ClipboardPng => {
             let layers = canvas_layers_for_export(state, visible_canvas);
@@ -267,7 +290,10 @@ pub fn perform(
             let text = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             state.replace_canvas(lines_from_text(&text));
-            Ok(ExportOutcome::DocumentLoaded)
+            Ok(ExportOutcome::DocumentLoaded {
+                path,
+                format: FileKind::Txt,
+            })
         }
         ExportAction::LoadJson => {
             let Some(path) = platform.choose_open_path(FileKind::Json) else {
@@ -287,11 +313,43 @@ pub fn perform(
                     )?;
                     *state = staged;
                     *viewport = project.viewport;
-                    return Ok(ExportOutcome::ProjectLoaded);
+                    return Ok(ExportOutcome::ProjectLoaded { path });
                 }
                 LoadedJson::Legacy(lines) => state.replace_canvas(lines),
             }
-            Ok(ExportOutcome::DocumentLoaded)
+            Ok(ExportOutcome::DocumentLoaded {
+                path,
+                format: FileKind::Json,
+            })
+        }
+        ExportAction::ImportTxt => {
+            let Some(path) = platform.choose_open_path(FileKind::Txt) else {
+                return Ok(ExportOutcome::Cancelled);
+            };
+            let text = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let changed = TextRectangle::from_text(&text)
+                .is_some_and(|rectangle| state.paste_styled_rectangle_at_cursor(&rectangle));
+            Ok(if changed {
+                ExportOutcome::DocumentImported
+            } else {
+                ExportOutcome::Unchanged
+            })
+        }
+        ExportAction::ImportJson => {
+            let Some(path) = platform.choose_open_path(FileKind::Json) else {
+                return Ok(ExportOutcome::Cancelled);
+            };
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let rectangle = imported_json_rectangle(project_from_json(&contents)?);
+            let changed = rectangle
+                .is_some_and(|rectangle| state.paste_styled_rectangle_at_cursor(&rectangle));
+            Ok(if changed {
+                ExportOutcome::DocumentImported
+            } else {
+                ExportOutcome::Unchanged
+            })
         }
         ExportAction::Clear => {
             state.clear_canvas();
@@ -322,25 +380,32 @@ fn atoms_text(lines: &[Vec<Atom>]) -> String {
 }
 
 pub fn plain_text(state: &Editor) -> String {
-    let views = state.layer_views();
-    let height = views
+    let content = state.content_cells();
+    let Some(left) = content.iter().map(|coord| coord.column).min() else {
+        return String::new();
+    };
+    let right = content
         .iter()
-        .map(|layer| layer.lines.len())
+        .map(|coord| coord.column)
         .max()
-        .unwrap_or(1);
-    let width = views
+        .expect("nonempty content has a maximum column");
+    let top = content
         .iter()
-        .flat_map(|layer| layer.lines.iter())
-        .map(|line| display_width(line))
+        .map(|coord| coord.line)
+        .min()
+        .expect("nonempty content has a minimum line");
+    let bottom = content
+        .iter()
+        .map(|coord| coord.line)
         .max()
-        .unwrap_or(0);
+        .expect("nonempty content has a maximum line");
     let rows = flatten_visible_layers(&visible_layer_atoms(
         state,
         CanvasRegion {
-            left: 0,
-            top: 0,
-            width,
-            height,
+            left: i64::try_from(left).unwrap_or(i64::MAX),
+            top: i64::try_from(top).unwrap_or(i64::MAX),
+            width: right.saturating_sub(left).saturating_add(1),
+            height: bottom.saturating_sub(top).saturating_add(1),
         },
     ));
     rows.iter()
@@ -533,10 +598,29 @@ fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument
     }
 }
 
-fn save_project_json(path: &Path, state: &Editor, viewport: ViewportOffset) -> Result<()> {
+pub(crate) fn save_project_json(
+    path: &Path,
+    state: &Editor,
+    viewport: ViewportOffset,
+) -> Result<()> {
     let contents = serde_json::to_string_pretty(&project_document(state, viewport))
         .context("failed to serialize ascdraw project")?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
+    let rows = match loaded {
+        LoadedJson::Project(project) => flatten_visible_layers(
+            &project
+                .layers
+                .into_iter()
+                .filter(|layer| layer.visible)
+                .map(|layer| layer.lines)
+                .collect::<Vec<_>>(),
+        ),
+        LoadedJson::Legacy(lines) => lines,
+    };
+    TextRectangle::from_rows(rows)
 }
 
 fn project_from_json(contents: &str) -> Result<LoadedJson> {
@@ -795,11 +879,19 @@ mod tests {
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
 
     #[test]
-    fn plain_text_preserves_ragged_rows_and_a_trailing_newline_without_padding() {
+    fn plain_text_preserves_ragged_rows_without_blank_canvas_padding() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.replace_canvas(lines_from_text("one\nlonger\n"));
 
-        assert_eq!(plain_text(&state), "one\nlonger\n");
+        assert_eq!(plain_text(&state), "one\nlonger");
+    }
+
+    #[test]
+    fn plain_text_rebases_visible_content_to_its_minimum_coordinates() {
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
+        state.replace_canvas(lines_from_text("\n  ab\n\n   c"));
+
+        assert_eq!(plain_text(&state), "ab\n\n c");
     }
 
     #[derive(Default)]
@@ -1642,6 +1734,77 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_txt_save_exports_the_whole_canvas_and_can_become_active() {
+        let path = temp_path("txt");
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
+        state.grid.lines = lines_from_text("one\ntwo");
+        let mut platform = MockPlatform {
+            save: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform_action(ExportAction::SaveTxt, &mut state, &mut platform).unwrap(),
+            ExportOutcome::Saved {
+                path: path.clone(),
+                format: FileKind::Txt,
+            }
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "one\ntwo");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn imports_paste_at_the_cursor_without_replacing_surrounding_content() {
+        let text_path = temp_path("txt");
+        fs::write(&text_path, "XY\nZ ").unwrap();
+        let mut target = Editor::new(&ThemeConfig::default(), "test");
+        target.grid.lines = lines_from_text("aaaa\nbbbb\ncccc");
+        target.move_to(Coord { line: 1, column: 1 });
+        let mut platform = MockPlatform {
+            open: Some(text_path.clone()),
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform_action(ExportAction::ImportTxt, &mut target, &mut platform).unwrap(),
+            ExportOutcome::DocumentImported
+        );
+        assert_eq!(contents(&target.grid.lines[0]), "aaaa");
+        assert_eq!(contents(&target.grid.lines[1]), "bXYb");
+        assert_eq!(contents(&target.grid.lines[2]), "cZ c");
+        assert_eq!(target.grid.cursor_pos, Coord { line: 1, column: 1 });
+        assert!(target.selection.is_collapsed());
+        let _ = fs::remove_file(text_path);
+    }
+
+    #[test]
+    fn json_import_uses_canvas_data_without_restoring_project_state() {
+        let path = temp_path("json");
+        let mut source = Editor::new(&ThemeConfig::default(), "source");
+        source.grid.lines = lines_from_text("XY");
+        source.move_to(Coord { line: 0, column: 1 });
+        save_project_json(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
+
+        let mut target = Editor::new(&ThemeConfig::default(), "target");
+        target.grid.lines = lines_from_text("aaaa\nbbbb");
+        target.move_to(Coord { line: 1, column: 1 });
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform_action(ExportAction::ImportJson, &mut target, &mut platform).unwrap(),
+            ExportOutcome::DocumentImported
+        );
+        assert_eq!(contents(&target.grid.lines[0]), "aaaa");
+        assert_eq!(contents(&target.grid.lines[1]), "bXYb");
+        assert_eq!(target.grid.cursor_pos, Coord { line: 1, column: 1 });
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn txt_load_replaces_canvas_and_resets_cursor_selection_and_transients() {
         let path = temp_path("txt");
         fs::write(&path, "new\n😀").unwrap();
@@ -1656,7 +1819,10 @@ mod tests {
 
         assert_eq!(
             perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
-            ExportOutcome::DocumentLoaded
+            ExportOutcome::DocumentLoaded {
+                path: path.clone(),
+                format: FileKind::Txt,
+            }
         );
         assert_eq!(state.grid.cursor_pos, Coord::default());
         assert!(state.selection.is_collapsed());
@@ -1712,7 +1878,7 @@ mod tests {
                 &mut platform,
             )
             .unwrap(),
-            ExportOutcome::ProjectLoaded
+            ExportOutcome::ProjectLoaded { path: path.clone() }
         );
         assert_eq!(target.grid.cursor_pos, Coord { line: 2, column: 1 });
         assert_eq!(target.selection.anchor(), Coord { line: 0, column: 2 });

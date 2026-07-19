@@ -16,7 +16,7 @@ use crate::app::{AppCommand, AppConfig};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
-use crate::export::{lines_from_text, plain_text};
+use crate::export::{FileKind, lines_from_text, plain_text, save_project_json};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -41,6 +41,8 @@ const EXPORT_SUCCESS_HIGHLIGHT_DURATION: Duration = Duration::from_millis(650);
 pub enum DocumentSession {
     Scratchpad(PathBuf),
     File(PathBuf),
+    TextFile(PathBuf),
+    JsonFile(PathBuf),
     Stdin(String),
 }
 
@@ -63,7 +65,10 @@ impl DocumentSession {
 
     fn path(&self) -> Option<&Path> {
         match self {
-            Self::Scratchpad(path) | Self::File(path) => Some(path),
+            Self::Scratchpad(path)
+            | Self::File(path)
+            | Self::TextFile(path)
+            | Self::JsonFile(path) => Some(path),
             Self::Stdin(_) => None,
         }
     }
@@ -71,7 +76,7 @@ impl DocumentSession {
     pub(crate) fn window_title(&self) -> String {
         match self {
             Self::Scratchpad(_) => "ascdraw - scratchpad".to_owned(),
-            Self::File(path) => format!(
+            Self::File(path) | Self::TextFile(path) | Self::JsonFile(path) => format!(
                 "ascdraw - {}",
                 path.file_name()
                     .unwrap_or(path.as_os_str())
@@ -83,7 +88,7 @@ impl DocumentSession {
 
     pub(crate) fn explicit_file_path(&self) -> Option<&Path> {
         match self {
-            Self::File(path) => Some(path),
+            Self::File(path) | Self::TextFile(path) | Self::JsonFile(path) => Some(path),
             Self::Scratchpad(_) | Self::Stdin(_) => None,
         }
     }
@@ -99,6 +104,7 @@ struct ViewCursorAnchor {
 enum StateChangeViewportPolicy {
     CursorAndContent,
     CursorOnly,
+    Stable,
 }
 
 impl ViewCursorAnchor {
@@ -154,7 +160,6 @@ pub struct EditorWindow {
     mouse_drag: Option<MouseDrag>,
     last_line_click: Option<(Instant, Coord)>,
     scroll_pan: ScrollPan,
-    pinch_zoom_remainder: f64,
     wheel_zoom_remainder: f64,
     scroll_stats: ScrollStats,
     pub state: Editor,
@@ -308,7 +313,7 @@ impl ScrollStats {
             minimap_time: std::mem::take(&mut self.minimap_time),
         };
         self.started = now;
-        (report.redraws > 0).then_some(report)
+        (report.redraws > 1).then_some(report)
     }
 }
 
@@ -501,6 +506,8 @@ impl EditorWindow {
         let previous_viewport = self.viewport;
         let target = self.state.cursor_target_for_coord(coord);
         let mut line_preview_was_active = false;
+        let mut confirmed_move = false;
+        let extending_selection = self.modifiers.shift_key();
         if input_override == Some(MouseDragOverride::Line) {
             let moves_cursor =
                 !self.state.has_line_preview() && self.state.grid.cursor_pos != target;
@@ -527,7 +534,15 @@ impl EditorWindow {
         } else {
             let preserve_selection =
                 self.modifiers == ModifiersState::ALT && !self.state.selection.is_collapsed();
-            if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
+            confirmed_move = self
+                .state
+                .move_lift_bounds()
+                .is_some_and(|bounds| !bounds.contains(target))
+                && self.state.confirm_move_lift();
+            if extending_selection {
+                self.state.extend_selection_to(target);
+                self.request_redraw();
+            } else if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
                 self.finish_history_transaction();
                 self.state.move_to(coord);
                 self.finish_navigation(origin);
@@ -538,8 +553,8 @@ impl EditorWindow {
             previous_state,
             previous_viewport,
             last_pointer: target,
-            active: false,
-            document_changed: false,
+            active: extending_selection,
+            document_changed: confirmed_move,
             input_override,
             line_preview_was_active,
         });
@@ -638,7 +653,7 @@ impl EditorWindow {
             self.finish_line_mouse_gesture(drag);
             return;
         }
-        if !drag.active {
+        if !drag.active && !drag.document_changed {
             return;
         }
         let finished_document = finish_mouse_drag_state(&mut self.state, drag.input_override);
@@ -894,14 +909,16 @@ impl EditorWindow {
         self.surface.render(
             &self.window,
             &self.state,
-            crate::render::CanvasContent {
-                visible: self.content_index.cells(),
-                including_hidden: self.content_index.cells_including_hidden(),
-            },
             &self.renderer,
             config,
-            self.viewport,
-            toolbar_hotspot_hovered,
+            crate::render::RenderContext {
+                content: crate::render::CanvasContent {
+                    visible: self.content_index.cells(),
+                    including_hidden: self.content_index.cells_including_hidden(),
+                },
+                viewport: self.viewport,
+                toolbar_hotspot_hovered,
+            },
         )
     }
 
@@ -1005,6 +1022,21 @@ impl EditorWindow {
             true,
             None,
             StateChangeViewportPolicy::CursorOnly,
+        )
+    }
+
+    pub fn finish_state_change_with_stable_viewport(
+        &mut self,
+        previous_state: Editor,
+        previous_viewport: ViewportOffset,
+        document_changed: bool,
+    ) -> bool {
+        self.finish_state_change_in_group(
+            previous_state,
+            previous_viewport,
+            document_changed,
+            None,
+            StateChangeViewportPolicy::Stable,
         )
     }
 
@@ -1112,8 +1144,10 @@ impl EditorWindow {
                 viewport_cells
             ));
             debug_assert!(
-                viewport_policy == StateChangeViewportPolicy::CursorOnly
-                    || content.is_empty()
+                matches!(
+                    viewport_policy,
+                    StateChangeViewportPolicy::CursorOnly | StateChangeViewportPolicy::Stable
+                ) || content.is_empty()
                     || content_intersects_inner_screen(origin, viewport_cells, content)
             );
             if !document_changed {
@@ -1263,29 +1297,21 @@ impl EditorWindow {
     pub fn zoom_from_pinch(&mut self, delta: f64, phase: TouchPhase) -> bool {
         self.cancel_scroll_pan();
         self.wheel_zoom_remainder = 0.0;
-        if phase == TouchPhase::Started {
-            self.pinch_zoom_remainder = 0.0;
-        }
-        let units = pinch_zoom_units(delta);
-        let steps = take_zoom_steps(&mut self.pinch_zoom_remainder, units);
-        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-            self.pinch_zoom_remainder = 0.0;
-        }
-        self.zoom_canvas_by(steps)
+        let _ = phase;
+        self.zoom_canvas_by(pinch_zoom_units(delta) as f32)
     }
 
     pub fn zoom_from_mouse_wheel(&mut self, delta: MouseScrollDelta) -> bool {
         self.cancel_scroll_pan();
-        self.pinch_zoom_remainder = 0.0;
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let units = wheel_zoom_units(delta, (metrics.cell_width, metrics.cell_height));
         let steps = take_zoom_steps(&mut self.wheel_zoom_remainder, units);
-        self.zoom_canvas_by(steps)
+        self.zoom_canvas_by(steps as f32)
     }
 
-    fn zoom_canvas_by(&mut self, steps: i64) -> bool {
-        if steps == 0 {
+    fn zoom_canvas_by(&mut self, delta: f32) -> bool {
+        if delta.abs() < f32::EPSILON {
             return false;
         }
         let scale_factor = self.window.scale_factor();
@@ -1300,7 +1326,7 @@ impl EditorWindow {
                 self.viewport,
             )
         });
-        if !self.renderer.adjust_font_size(steps as f32) {
+        if !self.renderer.adjust_font_size(delta) {
             return false;
         }
 
@@ -1415,22 +1441,57 @@ impl EditorWindow {
         let path = self
             .document_session
             .path()
-            .expect("stdin sessions returned before path persistence");
+            .expect("stdin sessions returned before path persistence")
+            .to_path_buf();
+        let format = match self.document_session {
+            DocumentSession::TextFile(_) => Some(FileKind::Txt),
+            DocumentSession::JsonFile(_) => Some(FileKind::Json),
+            DocumentSession::Scratchpad(_) | DocumentSession::File(_) => None,
+            DocumentSession::Stdin(_) => {
+                unreachable!("stdin sessions returned before path persistence")
+            }
+        };
+        let text = (format == Some(FileKind::Txt)).then(|| plain_text(&self.state));
+        let state = (format == Some(FileKind::Json)).then(|| self.state.clone());
+        let viewport = self.viewport;
         let saved = save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
-            path,
+            &path,
             &layers,
             self.state.active_layer_id(),
             &self.state.toolbar.durable_selections(),
-            |path, layers, active_layer, menu_selections| {
-                document::save(path, layers, active_layer, menu_selections, position)
+            |path, layers, active_layer, menu_selections| match format {
+                Some(FileKind::Txt) => std::fs::write(path, text.as_deref().unwrap_or_default())
+                    .with_context(|| format!("failed to write {}", path.display())),
+                Some(FileKind::Json) => save_project_json(
+                    path,
+                    state
+                        .as_ref()
+                        .expect("JSON session cloned its editor state"),
+                    viewport,
+                ),
+                Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
+                None => document::save(path, layers, active_layer, menu_selections, position),
             },
         )?;
         if saved {
             self.saved_canvas_position = position;
         }
         Ok(saved)
+    }
+
+    pub fn activate_export_file(&mut self, path: PathBuf, format: FileKind) {
+        self.document_session = match format {
+            FileKind::Txt => DocumentSession::TextFile(path),
+            FileKind::Json => DocumentSession::JsonFile(path),
+            FileKind::Png => return,
+        };
+        self.window.set_title(&self.document_session.window_title());
+        self.state.window_title = self.document_session.window_title();
+        self.document_dirty = false;
+        self.menu_selections_dirty = false;
+        self.saved_canvas_position = self.canvas_position();
     }
 
     pub fn set_recent_documents(&mut self, files: &[PathBuf]) {
@@ -1806,6 +1867,7 @@ fn resolve_state_change_origin(
             cursor_origin(current.0, cursor.column, viewport.0),
             cursor_origin(current.1, cursor.line, viewport.1),
         )),
+        StateChangeViewportPolicy::Stable => Some(current),
     }
 }
 
@@ -1850,6 +1912,12 @@ pub fn create_editor_window(
                 }
             }
         }
+        DocumentSession::TextFile(document_path) => {
+            let text = std::fs::read_to_string(document_path)
+                .with_context(|| format!("failed to read {}", document_path.display()))?;
+            state.replace_canvas(lines_from_text(&text));
+        }
+        DocumentSession::JsonFile(_) => {}
         DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
     }
     let content_index = ContentIndex::new(&state);
@@ -1865,7 +1933,6 @@ pub fn create_editor_window(
         mouse_drag: None,
         last_line_click: None,
         scroll_pan: ScrollPan::default(),
-        pinch_zoom_remainder: 0.0,
         wheel_zoom_remainder: 0.0,
         scroll_stats: ScrollStats::new(debug, Instant::now()),
         state,
@@ -1926,6 +1993,14 @@ pub fn save_windows_on_exit(windows: &mut HashMap<WindowId, EditorWindow>) {
     save_editor_documents(windows.values_mut(), "application exit");
 }
 
+pub struct CommandContext<'a> {
+    pub elwt: &'a ActiveEventLoop,
+    pub config: &'a AppConfig,
+    pub document_session: &'a DocumentSession,
+    pub recent_documents: &'a [PathBuf],
+    pub debug: bool,
+}
+
 fn should_autosave(dirty: bool, last_keypress: Instant, now: Instant) -> bool {
     dirty && now.saturating_duration_since(last_keypress) > Duration::from_secs(5)
 }
@@ -1934,23 +2009,26 @@ pub fn handle_command(
     command: AppCommand,
     source_window_id: Option<WindowId>,
     windows: &mut HashMap<WindowId, EditorWindow>,
-    elwt: &ActiveEventLoop,
-    config: &AppConfig,
-    document_session: &DocumentSession,
-    recent_documents: &[PathBuf],
-    debug: bool,
+    context: CommandContext<'_>,
 ) {
     let target = source_window_id
         .filter(|window_id| windows.contains_key(window_id))
         .or_else(|| focused_window_id(windows));
 
     match command {
-        AppCommand::WindowNew if document_session.is_stdin() => {}
+        AppCommand::WindowNew if context.document_session.is_stdin() => {}
         AppCommand::WindowNew => {
-            match create_editor_window(elwt, config, document_session, debug) {
+            match create_editor_window(
+                context.elwt,
+                context.config,
+                context.document_session,
+                context.debug,
+            ) {
                 Ok(mut editor) => {
-                    editor.set_document_history_enabled(document_session.allows_document_history());
-                    editor.set_recent_documents(recent_documents);
+                    editor.set_document_history_enabled(
+                        context.document_session.allows_document_history(),
+                    );
+                    editor.set_recent_documents(context.recent_documents);
                     windows.insert(editor.window_id(), editor);
                 }
                 Err(error) => log_error(format!("new window creation failed: {error:#}")),
@@ -1958,17 +2036,17 @@ pub fn handle_command(
         }
         AppCommand::WindowClose => {
             if let Some(window_id) = target {
-                close_window(windows, window_id, elwt);
+                close_window(windows, window_id, context.elwt);
             }
         }
         AppCommand::FontScaleUp => {
-            adjust_font_size(windows, target, FontSizeAction::Increase, config)
+            adjust_font_size(windows, target, FontSizeAction::Increase, context.config)
         }
         AppCommand::FontScaleDown => {
-            adjust_font_size(windows, target, FontSizeAction::Decrease, config)
+            adjust_font_size(windows, target, FontSizeAction::Decrease, context.config)
         }
         AppCommand::FontScaleReset => {
-            adjust_font_size(windows, target, FontSizeAction::Reset, config)
+            adjust_font_size(windows, target, FontSizeAction::Reset, context.config)
         }
     }
 }
@@ -2207,6 +2285,13 @@ mod tests {
         assert_eq!(report.scroll_events, 3);
         assert_eq!(report.redraws, 2);
         assert!(stats.advance(started + Duration::from_secs(2)).is_none());
+
+        assert!(
+            stats
+                .note_redraw(started + Duration::from_secs(2))
+                .is_none()
+        );
+        assert!(stats.advance(started + Duration::from_secs(3)).is_none());
 
         let mut disabled = ScrollStats::new(false, started);
         assert!(disabled.note_scroll_event(started).is_none());
@@ -3268,6 +3353,16 @@ mod tests {
                 &content,
             ),
             None
+        );
+        assert_eq!(
+            resolve_state_change_origin(
+                StateChangeViewportPolicy::Stable,
+                current,
+                cursor,
+                viewport,
+                &content,
+            ),
+            Some(current)
         );
         let origin = resolve_state_change_origin(
             StateChangeViewportPolicy::CursorOnly,

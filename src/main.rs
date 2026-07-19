@@ -66,8 +66,8 @@ use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
 use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 use runtime::window::{
-    DocumentSession, EditorWindow, close_window, create_editor_window, handle_command,
-    modified_wheel_zooms, save_windows_on_exit,
+    CommandContext, DocumentSession, EditorWindow, close_window, create_editor_window,
+    handle_command, modified_wheel_zooms, save_windows_on_exit,
 };
 use toolbar_stamp::{HotspotClick, hotspot_click, styled_toolbar_snapshot, toolbar_hotspot_at};
 use user_keys::{FontSizeAction, UserAction, UserKeys};
@@ -188,11 +188,13 @@ fn try_main() -> Result<ExitCode> {
                     command,
                     None,
                     &mut windows,
-                    elwt,
-                    &config,
-                    &document_session,
-                    recent_documents.files(),
-                    debug,
+                    CommandContext {
+                        elwt,
+                        config: &config,
+                        document_session: &document_session,
+                        recent_documents: recent_documents.files(),
+                        debug,
+                    },
                 );
             }
             Event::UserEvent(AppEvent::Automation(envelope)) => {
@@ -317,6 +319,12 @@ fn try_main() -> Result<ExitCode> {
                                 .state
                                 .toolbar
                                 .set_shift_layer(editor.modifiers.shift_key());
+                            if debug {
+                                diagnostics::log_info(format!(
+                                    "debug: modifiers changed state={:?} shift_layer_changed={shift_layer_changed}",
+                                    editor.modifiers,
+                                ));
+                            }
                             if released_control {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
@@ -364,10 +372,9 @@ fn try_main() -> Result<ExitCode> {
                             let keypress_at = Instant::now();
                             editor.note_keypress(keypress_at);
                             let key_without_modifiers = event.key_without_modifiers();
-                            let command_key = input::direction_key_for_event(
-                                &event.logical_key,
-                                &key_without_modifiers,
-                            );
+                            // Shortcut digits must use their unshifted key value: Shift+4
+                            // reports "$" as the logical key on US layouts.
+                            let command_key = &key_without_modifiers;
                             let key_type = classify_key(
                                 editor.state.state(),
                                 editor.state.cursor_mode.accepts_text(),
@@ -378,6 +385,18 @@ fn try_main() -> Result<ExitCode> {
                                     modifiers: editor.modifiers,
                                 },
                             );
+                            if debug {
+                                diagnostics::log_info(format!(
+                                    "debug: key pressed logical={:?} command={:?} text={:?} repeat={} modifiers={:?} pending={:?} layers={}",
+                                    event.logical_key,
+                                    command_key,
+                                    event.text,
+                                    event.repeat,
+                                    editor.modifiers,
+                                    editor.state.toolbar.pending_shortcut(),
+                                    editor.state.layer_summaries().len(),
+                                ));
+                            }
                             if jump_mode_handles_key(&editor.state, key_type) {
                                 let previous_state = editor.state.clone();
                                 let previous_viewport = editor.viewport;
@@ -551,6 +570,15 @@ fn try_main() -> Result<ExitCode> {
                                         config.jump.inactivity(),
                                         keypress_at,
                                     );
+                                    let viewport_stable = editor.state.take_toolbar_viewport_stable();
+                                    if debug {
+                                        diagnostics::log_info(format!(
+                                            "debug: key dispatched handled={handled:?} pending={:?} layers={} active_layer={:?}",
+                                            editor.state.toolbar.pending_shortcut(),
+                                            editor.state.layer_summaries().len(),
+                                            editor.state.active_layer_id(),
+                                        ));
+                                    }
                                     if let Some(document_changed) = handled {
                                         if history_group.is_none() {
                                             editor.state.end_stroke();
@@ -566,6 +594,12 @@ fn try_main() -> Result<ExitCode> {
                                                 .finish_selection_clear(
                                                     previous_state,
                                                     previous_viewport,
+                                                ),
+                                            None if viewport_stable => editor
+                                                .finish_state_change_with_stable_viewport(
+                                                    previous_state,
+                                                    previous_viewport,
+                                                    document_changed,
                                                 ),
                                             None => editor.finish_state_change(
                                                 previous_state,
@@ -660,11 +694,19 @@ fn try_main() -> Result<ExitCode> {
                                         editor.state.apply_toolbar_action(action);
                                         let document_changed =
                                             editor.state.take_toolbar_document_change();
-                                        editor.finish_state_change(
-                                            previous_state,
-                                            previous_viewport,
-                                            document_changed,
-                                        );
+                                        if editor.state.take_toolbar_viewport_stable() {
+                                            editor.finish_state_change_with_stable_viewport(
+                                                previous_state,
+                                                previous_viewport,
+                                                document_changed,
+                                            );
+                                        } else {
+                                            editor.finish_state_change(
+                                                previous_state,
+                                                previous_viewport,
+                                                document_changed,
+                                            );
+                                        }
                                         perform_pending_export(editor, &config);
                                         perform_pending_document_switch(
                                             editor,
@@ -705,11 +747,13 @@ fn try_main() -> Result<ExitCode> {
                         command,
                         Some(window_id),
                         &mut windows,
-                        elwt,
-                        &config,
-                        &document_session,
-                        recent_documents.files(),
-                        debug,
+                        CommandContext {
+                            elwt,
+                            config: &config,
+                            document_session: &document_session,
+                            recent_documents: recent_documents.files(),
+                            debug,
+                        },
                     );
                 } else if should_close {
                     fail_pending_for_window(
@@ -861,14 +905,22 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
         &mut platform,
     );
     match outcome {
-        Ok(ExportOutcome::DocumentLoaded) => {
+        Ok(ExportOutcome::DocumentLoaded { path, format }) => {
             editor.viewport = layout::ViewportOffset::default();
+            editor.finish_state_change(previous_state, previous_viewport, true);
+            editor.activate_export_file(path, format);
+        }
+        Ok(ExportOutcome::ProjectLoaded { path }) => {
+            editor.finish_project_load(previous_state, previous_viewport);
+            editor.activate_export_file(path, export::FileKind::Json);
+        }
+        Ok(ExportOutcome::Saved { path, format }) => {
+            editor.activate_export_file(path, format);
+        }
+        Ok(ExportOutcome::DocumentImported) => {
             if editor.finish_state_change(previous_state, previous_viewport, true) {
                 editor.mark_document_dirty();
             }
-        }
-        Ok(ExportOutcome::ProjectLoaded) => {
-            editor.finish_project_load(previous_state, previous_viewport);
         }
         Ok(ExportOutcome::CanvasCleared) => {
             if editor.finish_state_change(previous_state, previous_viewport, true) {
@@ -1283,7 +1335,10 @@ mod tests {
 
         match session {
             DocumentSession::Stdin(text) => assert_eq!(text, "one\ntwo\n"),
-            DocumentSession::Scratchpad(path) | DocumentSession::File(path) => {
+            DocumentSession::Scratchpad(path)
+            | DocumentSession::File(path)
+            | DocumentSession::TextFile(path)
+            | DocumentSession::JsonFile(path) => {
                 panic!("unexpected file session: {}", path.display())
             }
         }
@@ -3217,7 +3272,15 @@ mod tests {
                 export::ExportAction::LoadJson,
                 PendingShortcut::ExportOption(2),
             ),
-            (export::ExportAction::Clear, PendingShortcut::ExportFlat(3)),
+            (
+                export::ExportAction::ImportTxt,
+                PendingShortcut::ExportOption(3),
+            ),
+            (
+                export::ExportAction::ImportJson,
+                PendingShortcut::ExportOption(3),
+            ),
+            (export::ExportAction::Clear, PendingShortcut::ExportFlat(4)),
         ] {
             let mut state = Editor::new(&config.theme, "test");
             let durable = state.toolbar.durable_selections();
@@ -3356,7 +3419,7 @@ mod tests {
                 &mut load,
             )
             .unwrap(),
-            ExportOutcome::ProjectLoaded
+            ExportOutcome::ProjectLoaded { path: path.clone() }
         );
         assert_eq!(target.toolbar.durable_selections(), saved_menus);
         assert_eq!(target_viewport, saved_viewport);

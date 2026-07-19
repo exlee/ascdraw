@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use crate::drawing::{ARROWS, CornerStyle, DECORATORS, LINE_ENDINGS, LineEnding, LineStyle};
+#[cfg(test)]
+use crate::drawing::DECORATORS;
+use crate::drawing::{ARROWS, CornerStyle, LINE_ENDINGS, LineEnding, LineStyle};
 use crate::export::ExportAction;
 use crate::model::{LayerId, LayerSummary};
 #[cfg(test)]
@@ -423,16 +425,6 @@ pub struct ToolbarSpan {
     pub foreground: Option<String>,
 }
 
-impl ToolbarSpan {
-    pub fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
-        if shifted {
-            self.shift_action.or(self.action)
-        } else {
-            self.action
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarAction {
     SelectMain(MainMode),
@@ -463,16 +455,17 @@ pub enum DocumentTarget {
     Scratchpad,
 }
 
-const EXPORT_LABELS: [&str; 4] = ["Clipboard", "Save", "Load", "Clear"];
+const EXPORT_LABELS: [&str; 5] = ["Clipboard", "Save", "Load", "Import", "Clear"];
 const EXPORT_MODE_OFFSET: usize = 2;
 const EXPORT_CLEAR_DIGIT: usize = 9;
+const EXPORT_IMPORT_DIGIT: usize = 7;
 const FILES_TOGGLE_DIGIT: usize = 5;
 const LAYERS_DIGIT: usize = 8;
 const COLORS_DIGIT: usize = 9;
 pub(crate) const FILES_TOGGLE_CATEGORY: usize = EXPORT_LABELS.len();
 const HISTORY_CATEGORY: usize = FILES_TOGGLE_CATEGORY + 1;
 const HISTORY_DIGIT: usize = 6;
-const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
+const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 5] = [
     &[
         ("TXT", ExportAction::ClipboardTxt),
         ("PNG", ExportAction::ClipboardPng),
@@ -485,6 +478,10 @@ const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 4] = [
     &[
         ("TXT", ExportAction::LoadTxt),
         ("JSON", ExportAction::LoadJson),
+    ],
+    &[
+        ("TXT", ExportAction::ImportTxt),
+        ("JSON", ExportAction::ImportJson),
     ],
     &[("Clear", ExportAction::Clear)],
 ];
@@ -816,11 +813,10 @@ impl ToolbarState {
             HISTORY_CATEGORY
         } else if digit == EXPORT_CLEAR_DIGIT {
             EXPORT_LABELS.len() - 1
-        } else if let Some(category) = digit
-            .checked_sub(EXPORT_MODE_OFFSET)
-            .filter(|category| *category < EXPORT_LABELS.len() - 1)
-        {
-            category
+        } else if digit == EXPORT_IMPORT_DIGIT {
+            3
+        } else if (EXPORT_MODE_OFFSET..EXPORT_MODE_OFFSET + 3).contains(&digit) {
+            digit - EXPORT_MODE_OFFSET
         } else {
             return;
         };
@@ -1088,6 +1084,67 @@ impl ToolbarState {
                 }
                 pad_spans_to_width(&mut spans, cell_start + cell_width);
             }
+        }
+        if toggles_row {
+            let category = 3;
+            let label = EXPORT_LABELS[category];
+            let mode_number = EXPORT_IMPORT_DIGIT;
+            let path = format!("{mode_number}.");
+            let prefix_width = menu_prefix_width(label, std::iter::once(path.as_str()));
+            let options_width = EXPORT_OPTIONS[category]
+                .iter()
+                .map(|(option, _)| UnicodeWidthStr::width(*option))
+                .sum::<usize>()
+                + EXPORT_OPTIONS[category].len().saturating_sub(1);
+            let cell_width = prefix_width + options_width;
+            if header_row {
+                let label_contents = format!("{label}:");
+                spans.push(ToolbarSpan {
+                    bold_prefix: UnicodeWidthStr::width(label_contents.as_str()),
+                    contents: pad_right_to_width(label_contents, prefix_width),
+                    selected: self.active_export_category == Some(category),
+                    highlighted: false,
+                    tooltip: false,
+                    action: Some(ToolbarAction::SelectExportCategory(category)),
+                    shift_action: None,
+                    right_aligned: false,
+                    foreground: None,
+                });
+            } else {
+                let highlighted_prefix = match self.pending_shortcut() {
+                    Some(PendingShortcut::ExportOption(pending)) if pending == category => {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                };
+                push_shortcut_path(
+                    &mut spans,
+                    &path,
+                    prefix_width,
+                    highlighted_prefix.as_deref(),
+                );
+            }
+            for (position, (option, action)) in EXPORT_OPTIONS[category].iter().enumerate() {
+                if position > 0 {
+                    spans.push(plain_span(" ".to_string()));
+                }
+                spans.push(ToolbarSpan {
+                    contents: if header_row {
+                        aligned_shortcut(position + 1, option)
+                    } else {
+                        (*option).to_string()
+                    },
+                    bold_prefix: 0,
+                    selected: !header_row && self.successful_export_action == Some(*action),
+                    highlighted: false,
+                    tooltip: false,
+                    action: Some(ToolbarAction::RunExport(*action)),
+                    shift_action: None,
+                    right_aligned: false,
+                    foreground: None,
+                });
+            }
+            pad_spans_to_width(&mut spans, cell_width);
         }
         if !spans.is_empty() {
             spans.push(plain_span(GAP.to_string()));
@@ -1586,11 +1643,6 @@ fn submenu_path_for_pages(category: usize, page: usize, page_count: usize) -> St
     }
 }
 
-fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
-    let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
-    submenu_prefix_width_for_pages(label, category, page_count)
-}
-
 fn submenu_prefix_width_for_pages(label: &str, category: usize, page_count: usize) -> usize {
     let paths: Vec<_> = (0..page_count)
         .map(|page| submenu_path_for_pages(category, page, page_count))
@@ -1598,22 +1650,8 @@ fn submenu_prefix_width_for_pages(label: &str, category: usize, page_count: usiz
     menu_prefix_width(label, paths.iter().map(String::as_str))
 }
 
-fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
-    let columns = submenu_option_column_widths(options);
-    submenu_cell_width_for_columns(prefix_width, &columns)
-}
-
 fn submenu_cell_width_for_columns(prefix_width: usize, columns: &[usize]) -> usize {
     prefix_width + columns.iter().sum::<usize>() + columns.len().saturating_sub(1)
-}
-
-fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
-    let mut widths = vec![0; options.len().min(OPTIONS_PER_PAGE)];
-    for (index, option) in options.iter().enumerate() {
-        widths[index % OPTIONS_PER_PAGE] =
-            widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
-    }
-    widths
 }
 
 fn submenu_option_column_widths_for_pages(
@@ -1693,6 +1731,39 @@ fn line_ending(selected: usize) -> LineEnding {
         .get(selected)
         .copied()
         .expect("line ending selection is always normalized")
+}
+
+#[cfg(test)]
+impl ToolbarSpan {
+    pub fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
+        if shifted {
+            self.shift_action.or(self.action)
+        } else {
+            self.action
+        }
+    }
+}
+
+#[cfg(test)]
+fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
+    let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
+    submenu_prefix_width_for_pages(label, category, page_count)
+}
+
+#[cfg(test)]
+fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
+    let columns = submenu_option_column_widths(options);
+    submenu_cell_width_for_columns(prefix_width, &columns)
+}
+
+#[cfg(test)]
+fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
+    let mut widths = vec![0; options.len().min(OPTIONS_PER_PAGE)];
+    for (index, option) in options.iter().enumerate() {
+        widths[index % OPTIONS_PER_PAGE] =
+            widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
+    }
+    widths
 }
 
 #[cfg(test)]
@@ -1848,11 +1919,11 @@ mod tests {
         );
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 2)),
-            ["Togls:"]
+            ["Import:", "Togls:"]
         );
         assert_eq!(
             bold_contents(&toolbar.toolbar_spans(MENU_FIRST_ROW + 3)),
-            ["5."]
+            ["7.", "5."]
         );
     }
 
@@ -2364,7 +2435,7 @@ mod tests {
     #[test]
     fn a_ten_option_category_flattens_and_maps_zero_to_the_tenth_option() {
         assert_eq!(
-            category_shortcut(&[0..OPTIONS_PER_PAGE], 0),
+            category_shortcut(std::slice::from_ref(&(0..OPTIONS_PER_PAGE)), 0),
             Some(CategoryShortcut::Select(9))
         );
         assert_eq!(
@@ -3512,10 +3583,10 @@ mod tests {
         }
         assert_eq!(toolbar.take_export_action(), Some(ExportAction::Clear));
         assert!(toolbar.export_menu_open());
-        assert_eq!(toolbar.active_export_category, Some(3));
+        assert_eq!(toolbar.active_export_category, Some(4));
         assert_eq!(
             toolbar.pending_shortcut(),
-            Some(PendingShortcut::ExportFlat(3))
+            Some(PendingShortcut::ExportFlat(4))
         );
     }
 
@@ -3536,7 +3607,7 @@ mod tests {
             ["TXT", "PNG", "JSON"]
         );
         assert_eq!(EXPORT_OPTIONS[2].len(), 2);
-        assert_eq!(EXPORT_OPTIONS[3], &[("Clear", ExportAction::Clear)]);
+        assert_eq!(EXPORT_OPTIONS[4], &[("Clear", ExportAction::Clear)]);
         for width in 0..48 {
             let boxed = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW), width);
             assert_eq!(UnicodeWidthStr::width(spans_text(&boxed).as_str()), width);
@@ -3740,12 +3811,11 @@ mod tests {
         ] {
             assert!(stamps.contains(&included), "stamp {included:?}");
         }
-        for excluded in ["○"] {
-            assert!(
-                !stamps.contains(&excluded),
-                "excluded decoration {excluded:?}"
-            );
-        }
+        let excluded = "○";
+        assert!(
+            !stamps.contains(&excluded),
+            "excluded decoration {excluded:?}"
+        );
         for ascii in [
             "^", "v", "V", "|", "\"", "-", "_", ">", "<", "=", "+", "/", "\\", "'", "`", "#", "o",
             "O", "*", ".",

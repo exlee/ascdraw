@@ -17,10 +17,10 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 use super::export_png::skia_color_space;
-use super::{CanvasContent, RenderFrame, Renderer, render_canvas};
+use super::{RenderContext, RenderFrame, Renderer, render_canvas};
 use crate::app::{AppConfig, MacosColorSpace};
 use crate::editor::Editor;
-use crate::layout::{ViewportOffset, layout_metrics};
+use crate::layout::layout_metrics;
 use crate::macos::color_space_for_config;
 use crate::perf::FrameTiming;
 
@@ -90,12 +90,15 @@ impl MetalRenderer {
         &mut self,
         window: &Window,
         state: &Editor,
-        content: CanvasContent<'_>,
         renderer: &Renderer,
         config: &AppConfig,
-        viewport: ViewportOffset,
-        toolbar_hotspot_hovered: bool,
+        context: RenderContext<'_>,
     ) -> Result<FrameTiming> {
+        let RenderContext {
+            content,
+            viewport,
+            toolbar_hotspot_hovered,
+        } = context;
         let size = window.inner_size();
         let width = size.width.max(1) as usize;
         let height = size.height.max(1) as usize;

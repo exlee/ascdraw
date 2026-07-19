@@ -28,6 +28,11 @@ struct PanelPlacement {
 }
 
 impl ToolbarState {
+    #[cfg(test)]
+    pub(crate) fn auxiliary_panels_visible(&self) -> bool {
+        !self.export_menu_open() && (self.multi_layer_mode() || self.multi_color_mode())
+    }
+
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
         let layers_visible = self.multi_layer_mode() && !self.export_menu_open();
@@ -159,10 +164,6 @@ impl ToolbarState {
             first.right_aligned = true;
         }
         spans.extend(panels);
-    }
-
-    pub(crate) fn auxiliary_panels_visible(&self) -> bool {
-        !self.export_menu_open() && (self.multi_layer_mode() || self.multi_color_mode())
     }
 
     pub(super) fn auxiliary_panel_row_count_for_width(&self, box_width: usize) -> usize {
@@ -349,15 +350,15 @@ mod tests {
         );
         assert_eq!(
             right_text(&rows[1]),
-            "8.1. α × ▪ ↑ ↓ + ø  9.1. ■ ■ ■ ■ ■ ■ ■ ■"
+            "8.1. α × ▪     + ø  9.1. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[2]),
-            "8.2. β   ▫ ↑ ↓ + ø  9.2. ■ ■ ■ ■ ■ ■ ■ ■"
+            "8.2. β   ▫   ↓ + ø  9.2. ■ ■ ■ ■ ■ ■ ■ ■"
         );
         assert_eq!(
             right_text(&rows[3]),
-            "8.3. γ   ▪ ↑ ↓ + ø                      "
+            "8.3. γ   ▪ ↑   + ø                      "
         );
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
     }
@@ -432,7 +433,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(right_text(&rows[0]), format!("8{}", " ".repeat(17)));
         assert_eq!(right_text(&rows[1]), format!("Lyrs{}", " ".repeat(14)));
-        assert_eq!(right_text(&rows[3]), "8.1. α × ▪ ↑ ↓ + ø");
+        assert_eq!(right_text(&rows[3]), "8.1. α × ▪     + ø");
         assert_eq!(right_text(&rows[6]), format!("9{}", " ".repeat(19)));
         assert_eq!(right_text(&rows[7]), format!("Clrs{}", " ".repeat(16)));
         assert_eq!(right_text(&rows[9]), "9.1. ■ ■ ■ ■ ■ ■ ■ ■");

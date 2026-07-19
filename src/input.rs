@@ -491,14 +491,6 @@ pub fn cursor_direction_for_key(key: &Key, mode: CursorMode) -> Option<Direction
     }
 }
 
-pub fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
-    if direction_for_key(key_without_modifiers).is_some() {
-        key_without_modifiers
-    } else {
-        key
-    }
-}
-
 pub fn edit_direction_command(
     direction: Direction,
     modifiers: ModifiersState,
@@ -678,6 +670,15 @@ fn toolbar_position(
         return None;
     }
     Some((row - 1, column, box_width))
+}
+
+#[cfg(test)]
+pub fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
+    if direction_for_key(key_without_modifiers).is_some() {
+        key_without_modifiers
+    } else {
+        key
+    }
 }
 
 #[cfg(test)]

@@ -5,12 +5,11 @@ use softbuffer::{Context as SoftContext, Surface};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use super::{CanvasContent, Renderer, render, resize_surface};
+use super::{RenderContext, Renderer, render, resize_surface};
 use crate::app::AppConfig;
 #[cfg(target_os = "macos")]
 use crate::diagnostics::log_error;
 use crate::editor::Editor;
-use crate::layout::ViewportOffset;
 use crate::perf::FrameTiming;
 
 pub struct WindowSurface {
@@ -80,33 +79,16 @@ impl WindowSurface {
         &mut self,
         window: &Window,
         state: &Editor,
-        content: CanvasContent<'_>,
         renderer: &Renderer,
         config: &AppConfig,
-        viewport: ViewportOffset,
-        toolbar_hotspot_hovered: bool,
+        context: RenderContext<'_>,
     ) -> Result<FrameTiming> {
         match &mut self.backend {
             #[cfg(target_os = "macos")]
-            Backend::Metal(surface) => surface.render(
-                window,
-                state,
-                content,
-                renderer,
-                config,
-                viewport,
-                toolbar_hotspot_hovered,
-            ),
-            Backend::Softbuffer(surface) => render(
-                window,
-                surface,
-                state,
-                content,
-                renderer,
-                config,
-                viewport,
-                toolbar_hotspot_hovered,
-            ),
+            Backend::Metal(surface) => surface.render(window, state, renderer, config, context),
+            Backend::Softbuffer(surface) => {
+                render(window, surface, state, renderer, config, context)
+            }
         }
     }
 }

@@ -84,28 +84,26 @@ impl ToolbarState {
             layer.id.symbol(),
             if layer.active { "×" } else { " " },
             if layer.visible { "▪" } else { "▫" },
-            if self.shift_layer() { "▲" } else { "↑" },
-            if self.shift_layer() { "▼" } else { "↓" },
+            layer_operation_for_column(self.shift_layer(), 3, index, layers.len())
+                .map_or(" ", layer_operation_glyph),
+            layer_operation_for_column(self.shift_layer(), 4, index, layers.len())
+                .map_or(" ", layer_operation_glyph),
             "+",
             "ø",
         ];
-        let operations = if self.shift_layer() {
-            SHIFT_GRID_OPERATIONS
-        } else {
-            GRID_OPERATIONS
-        };
-        for (column, (glyph, operation)) in glyphs.into_iter().zip(operations).enumerate() {
+        for (column, glyph) in glyphs.into_iter().enumerate() {
             if column > 0 {
                 spans.push(plain_span(" ".to_owned()));
             }
-            let enabled = operation_enabled(operation, index, layers.len());
+            let action_operation =
+                layer_operation_for_column(self.shift_layer(), column, index, layers.len());
             spans.push(ToolbarSpan {
                 contents: glyph.to_owned(),
                 bold_prefix: 0,
                 selected: false,
                 highlighted: false,
                 tooltip: false,
-                action: enabled.then_some(ToolbarAction::Layer {
+                action: action_operation.map(|operation| ToolbarAction::Layer {
                     layer: layer.id,
                     operation,
                 }),
@@ -129,16 +127,32 @@ impl ToolbarState {
         digit: usize,
     ) -> Option<LayerOperation> {
         let index = layers.iter().position(|summary| summary.id == layer)?;
-        let operations = if self.shift_layer() {
-            SHIFT_GRID_OPERATIONS
-        } else {
-            GRID_OPERATIONS
-        };
-        let operation = digit
-            .checked_sub(1)
-            .and_then(|column| operations.get(column))
-            .copied()?;
-        operation_enabled(operation, index, layers.len()).then_some(operation)
+        let column = digit.checked_sub(1)?;
+        layer_operation_for_column(self.shift_layer(), column, index, layers.len())
+    }
+}
+
+fn layer_operation_for_column(
+    shift: bool,
+    column: usize,
+    index: usize,
+    layer_count: usize,
+) -> Option<LayerOperation> {
+    let operation = *(if shift {
+        SHIFT_GRID_OPERATIONS.get(column)
+    } else {
+        GRID_OPERATIONS.get(column)
+    })?;
+    operation_enabled(operation, index, layer_count).then_some(operation)
+}
+
+fn layer_operation_glyph(operation: LayerOperation) -> &'static str {
+    match operation {
+        LayerOperation::MoveUp => "↓",
+        LayerOperation::MoveDown => "↑",
+        LayerOperation::MergeUp => "▲",
+        LayerOperation::MergeDown => "▼",
+        _ => " ",
     }
 }
 
@@ -215,9 +229,9 @@ mod tests {
             rows,
             [
                 "     1 2 3 4 5 6 7",
-                "8.1. α × ▪ ↑ ↓ + ø",
-                "8.2. β   ▫ ↑ ↓ + ø",
-                "8.3. γ   ▫ ↑ ↓ + ø",
+                "8.1. α × ▪     + ø",
+                "8.2. β   ▫   ↓ + ø",
+                "8.3. γ   ▫ ↑   + ø",
             ]
         );
         assert!(
@@ -364,6 +378,24 @@ mod tests {
         let mut toolbar = ToolbarState::default();
         enter_layers(&mut toolbar, &layers);
 
+        for key in ["8", "2"] {
+            assert!(toolbar.handle_shortcut_with_layers(
+                &Key::Character(key.into()),
+                ModifiersState::empty(),
+                &layers,
+            ));
+        }
+        assert!(toolbar.handle_shortcut_with_layers(
+            &Key::Character("4".into()),
+            ModifiersState::SHIFT,
+            &layers,
+        ));
+        assert_eq!(
+            toolbar.take_layer_action(),
+            Some((LayerId(1), LayerOperation::MergeUp))
+        );
+        assert!(toolbar.set_shift_layer(false));
+
         let operation_for = |toolbar: &ToolbarState, row: usize, glyph: &str| {
             toolbar
                 .layer_panel_spans(row, &layers)
@@ -372,11 +404,7 @@ mod tests {
                 .and_then(|span| span.action)
         };
         assert_eq!(operation_for(&toolbar, 2, "↑"), None);
-        let second_row_up = toolbar
-            .layer_panel_spans(2, &layers)
-            .into_iter()
-            .find(|span| span.contents == "↑")
-            .unwrap();
+        let second_row_up = toolbar.layer_panel_spans(2, &layers).remove(8);
         assert_eq!(
             second_row_up.shift_action,
             Some(ToolbarAction::Layer {
@@ -486,7 +514,7 @@ mod tests {
         );
         assert_eq!(
             text(toolbar.layer_panel_spans(6, &layers)),
-            "8.6. ζ   ▪ ↑ ↓ + ø"
+            "8.6. ζ   ▪ ↑   + ø"
         );
         for row in MENU_FIRST_ROW + 1..=MENU_FIRST_ROW + MAX_LAYERS {
             assert!(

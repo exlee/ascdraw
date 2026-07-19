@@ -50,6 +50,12 @@ pub(crate) struct CanvasContent<'a> {
     pub(crate) including_hidden: &'a [Coord],
 }
 
+pub(crate) struct RenderContext<'a> {
+    pub(crate) content: CanvasContent<'a>,
+    pub(crate) viewport: ViewportOffset,
+    pub(crate) toolbar_hotspot_hovered: bool,
+}
+
 #[derive(Clone)]
 pub struct Renderer {
     font_mgr: FontMgr,
@@ -152,12 +158,15 @@ pub fn render(
     window: &Window,
     surface: &mut Surface<Rc<Window>, Rc<Window>>,
     state: &Editor,
-    content: CanvasContent<'_>,
     renderer: &Renderer,
     config: &AppConfig,
-    viewport: ViewportOffset,
-    toolbar_hotspot_hovered: bool,
+    context: RenderContext<'_>,
 ) -> Result<FrameTiming> {
+    let RenderContext {
+        content,
+        viewport,
+        toolbar_hotspot_hovered,
+    } = context;
     let buffer_started = std::time::Instant::now();
     let size = window.inner_size();
     let width = size.width.max(1) as usize;

@@ -53,11 +53,6 @@ pub const DIRECTIONAL_ENDINGS: [DirectionalEnding; 6] = [
     DirectionalEnding::Bidirectional,
 ];
 
-pub const DECORATORS: [&str; 20] = [
-    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
-    "¤",
-];
-
 pub const ARROWS: [&str; 22] = [
     "△", "▽", "◁", "▷", "▲", "▼", "◀", "▶", "↑", "↓", "←", "→", "▵", "▿", "◃", "▹", "▴", "▾", "◂",
     "▸", "↕", "↔",
@@ -342,6 +337,12 @@ fn double_glyph_for_connections(connections: u8) -> char {
         _ => unreachable!("connections only use four direction bits"),
     }
 }
+
+#[cfg(test)]
+pub const DECORATORS: [&str; 20] = [
+    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
+    "¤",
+];
 
 #[cfg(test)]
 mod tests {

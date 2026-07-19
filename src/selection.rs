@@ -95,8 +95,20 @@ pub struct TextRectangle {
 }
 
 impl TextRectangle {
+    pub fn from_rows(mut rows: Vec<Vec<Atom>>) -> Option<Self> {
+        let width = rows.iter().map(|row| display_width(row)).max().unwrap_or(0);
+        if width == 0 {
+            return None;
+        }
+        for row in &mut rows {
+            let row_width = display_width(row);
+            row.extend((row_width..width).map(|_| blank_atom()));
+        }
+        Some(Self { rows, width })
+    }
+
     pub fn from_text(text: &str) -> Option<Self> {
-        let mut rows: Vec<Vec<Atom>> = text
+        let rows: Vec<Vec<Atom>> = text
             .split('\n')
             .map(|row| {
                 let row = row.strip_suffix('\r').unwrap_or(row);
@@ -108,15 +120,7 @@ impl TextRectangle {
                     .collect()
             })
             .collect();
-        let width = rows.iter().map(|row| display_width(row)).max().unwrap_or(0);
-        if width == 0 {
-            return None;
-        }
-        for row in &mut rows {
-            let row_width = display_width(row);
-            row.extend((row_width..width).map(|_| blank_atom()));
-        }
-        Some(Self { rows, width })
+        Self::from_rows(rows)
     }
 
     pub fn bounds_at(&self, origin: Coord) -> SelectionBounds {

@@ -65,6 +65,7 @@ pub struct Editor {
     pending_prepend: (i64, i64),
     canvas_origin: Coord,
     toolbar_document_changed: bool,
+    toolbar_viewport_stable: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -365,6 +366,7 @@ impl Editor {
             pending_prepend: (0, 0),
             canvas_origin: Coord::default(),
             toolbar_document_changed: false,
+            toolbar_viewport_stable: false,
         }
     }
 
@@ -426,6 +428,7 @@ impl Editor {
         self.toolbar_spans_for_width(row, usize::MAX)
     }
 
+    #[cfg(test)]
     pub fn toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
         self.toolbar
             .toolbar_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
@@ -485,6 +488,7 @@ impl Editor {
 
     pub fn handle_toolbar_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
         self.toolbar_document_changed = false;
+        self.toolbar_viewport_stable = false;
         if self.cursor_mode.accepts_text() {
             self.toolbar.cancel_shortcut();
             return false;
@@ -529,6 +533,7 @@ impl Editor {
 
     pub fn apply_toolbar_action(&mut self, action: ToolbarAction) -> bool {
         self.toolbar_document_changed = false;
+        self.toolbar_viewport_stable = false;
         self.cancel_jump();
         let updates_live_route = self.has_line_preview()
             && matches!(action, ToolbarAction::SelectSubmenu { submenu: 3, .. })
@@ -580,10 +585,15 @@ impl Editor {
         std::mem::take(&mut self.toolbar_document_changed)
     }
 
+    pub fn take_toolbar_viewport_stable(&mut self) -> bool {
+        std::mem::take(&mut self.toolbar_viewport_stable)
+    }
+
     fn apply_pending_layer_action(&mut self) {
         let Some((layer, operation)) = self.toolbar.take_layer_action() else {
             return;
         };
+        self.toolbar_viewport_stable = operation == LayerOperation::Show;
         self.toolbar_document_changed = match operation {
             LayerOperation::Select => {
                 self.select_layer(layer);
@@ -718,6 +728,15 @@ impl Editor {
             preview.end = self.grid.cursor_pos;
         }
         self.grid.lines.len() != old_line_count || coord.column > old_width
+    }
+
+    pub fn extend_selection_to(&mut self, coord: Coord) {
+        let anchor = self.selection.anchor();
+        self.cancel_line_preview();
+        self.cancel_move_lift();
+        self.end_stroke();
+        self.move_to_without_ending_stroke(coord);
+        self.selection.select(anchor, self.grid.cursor_pos);
     }
 
     /// Used when a smaller viewport can no longer contain both the active
@@ -1751,6 +1770,30 @@ mod tests {
     }
 
     #[test]
+    fn shifted_layer_shortcut_merges_and_consumes_the_selected_layer() {
+        let mut state = Editor::new(&ThemeConfig::default(), "ascdraw");
+        state.grid.lines = lines_from_text("base");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let source = state.active_layer_id();
+        state.grid.lines = lines_from_text(" top");
+        assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
+
+        for key in ["8", "2"] {
+            assert!(
+                state
+                    .handle_toolbar_shortcut(&Key::Character(key.into()), ModifiersState::empty(),)
+            );
+        }
+        assert!(state.handle_toolbar_shortcut(&Key::Character("4".into()), ModifiersState::SHIFT,));
+
+        assert_eq!(state.layer_summaries().len(), 1);
+        assert_eq!(state.active_layer_id(), base);
+        assert_ne!(state.active_layer_id(), source);
+        assert_eq!(contents(&state.grid.lines[0]), "btop");
+    }
+
+    #[test]
     fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers() {
         let mut state = state();
         state.grid.lines = lines_from_text("A");
@@ -2422,6 +2465,19 @@ mod tests {
         assert_eq!(state.selection.anchor(), Coord { line: 1, column: 1 });
         assert_eq!(state.selection.active(), Coord { line: 0, column: 0 });
         assert_eq!(state.take_pending_prepend(), (1, 1));
+    }
+
+    #[test]
+    fn extending_selection_to_a_blank_cell_above_content_preserves_its_anchor() {
+        let mut state = state();
+        state.grid.lines = lines_from_text("\n\n\ncontent");
+        state.move_to(Coord { line: 3, column: 2 });
+
+        state.extend_selection_to(Coord { line: 0, column: 1 });
+
+        assert_eq!(state.selection.anchor(), Coord { line: 3, column: 2 });
+        assert_eq!(state.selection.active(), Coord { line: 0, column: 1 });
+        assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
     #[test]

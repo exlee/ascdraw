@@ -329,6 +329,7 @@ fn apply_editor_key(
         config.jump.inactivity(),
         started,
     ) {
+        let viewport_stable = editor.state.take_toolbar_viewport_stable();
         if history_group.is_none() {
             editor.state.end_stroke();
         }
@@ -342,6 +343,11 @@ fn apply_editor_key(
             None if document_changed && clears_selection => {
                 editor.finish_selection_clear(previous_state, previous_viewport)
             }
+            None if viewport_stable => editor.finish_state_change_with_stable_viewport(
+                previous_state,
+                previous_viewport,
+                document_changed,
+            ),
             None => editor.finish_state_change(previous_state, previous_viewport, document_changed),
         };
         if changed {
