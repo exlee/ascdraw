@@ -408,6 +408,176 @@ impl LayerMap {
         Ok(())
     }
 
+    pub(crate) fn insert_column(&mut self, column: usize, height: usize) -> Result<()> {
+        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+        for row in self.rows.values_mut() {
+            *row = std::mem::take(row)
+                .into_iter()
+                .map(|(existing_x, data)| {
+                    let target = if existing_x >= x {
+                        existing_x
+                            .checked_add(1)
+                            .expect("validated canvas columns fit signed range")
+                    } else {
+                        existing_x
+                    };
+                    (target, data)
+                })
+                .collect();
+        }
+        self.dense_widths
+            .resize(self.dense_widths.len().max(height), 0);
+        for width in &mut self.dense_widths {
+            *width = (*width).max(column).saturating_add(1);
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn insert_row(&mut self, line: usize) -> Result<()> {
+        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+        self.rows = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(|(existing_y, row)| {
+                let target = if existing_y >= y {
+                    existing_y
+                        .checked_add(1)
+                        .expect("validated canvas rows fit signed range")
+                } else {
+                    existing_y
+                };
+                (target, row)
+            })
+            .collect();
+        while self.dense_widths.len() < line {
+            self.dense_widths.push(0);
+        }
+        self.dense_widths.insert(line, 0);
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn pull_column_left(&mut self, column: usize, affected: &[bool]) -> Result<()> {
+        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+        for (line, is_affected) in affected.iter().copied().enumerate() {
+            if !is_affected {
+                continue;
+            }
+            let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+            if let Some(row) = self.rows.remove(&y) {
+                let shifted = row
+                    .into_iter()
+                    .filter_map(|(existing_x, data)| {
+                        (existing_x != x).then_some((
+                            if existing_x > x {
+                                existing_x - 1
+                            } else {
+                                existing_x
+                            },
+                            data,
+                        ))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                if !shifted.is_empty() {
+                    self.rows.insert(y, shifted);
+                }
+            }
+            if let Some(width) = self.dense_widths.get_mut(line) {
+                *width = width.saturating_sub(1);
+            }
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn pull_column_right(&mut self, column: usize, affected: &[bool]) -> Result<()> {
+        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+        for (line, is_affected) in affected.iter().copied().enumerate() {
+            if !is_affected {
+                continue;
+            }
+            let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+            if let Some(row) = self.rows.remove(&y) {
+                let shifted = row
+                    .into_iter()
+                    .filter_map(|(existing_x, data)| {
+                        (existing_x != x).then_some((
+                            if existing_x < x {
+                                existing_x
+                                    .checked_add(1)
+                                    .expect("validated columns fit signed range")
+                            } else {
+                                existing_x
+                            },
+                            data,
+                        ))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                if !shifted.is_empty() {
+                    self.rows.insert(y, shifted);
+                }
+            }
+            if self.dense_widths.len() <= line {
+                self.dense_widths.resize(line + 1, 0);
+            }
+            if column >= self.dense_widths[line] {
+                self.dense_widths[line] = self.dense_widths[line].saturating_add(1);
+            }
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn remove_row(&mut self, line: usize) -> Result<()> {
+        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+        self.rows.remove(&y);
+        self.rows = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(|(existing_y, row)| {
+                (
+                    if existing_y > y {
+                        existing_y - 1
+                    } else {
+                        existing_y
+                    },
+                    row,
+                )
+            })
+            .collect();
+        if line < self.dense_widths.len() {
+            self.dense_widths.remove(line);
+        }
+        if self.dense_widths.is_empty() {
+            self.dense_widths.push(0);
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn remove_row_and_prepend_blank(&mut self, line: usize) -> Result<()> {
+        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+        self.rows.remove(&y);
+        self.rows = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(|(existing_y, row)| {
+                let target = if existing_y < y {
+                    existing_y
+                        .checked_add(1)
+                        .expect("validated rows fit signed range")
+                } else {
+                    existing_y
+                };
+                (target, row)
+            })
+            .collect();
+        if line < self.dense_widths.len() {
+            self.dense_widths.remove(line);
+        }
+        self.dense_widths.insert(0, 0);
+        self.recalculate_bounds();
+        Ok(())
+    }
+
     pub(crate) fn join_row_with_next(&mut self, line: usize) -> Result<bool> {
         if line + 1 >= self.dense_widths.len() {
             return Ok(false);
@@ -773,6 +943,66 @@ impl LayerStack {
     pub(crate) fn clear_bounds_in_all_layers(&mut self, bounds: SelectionBounds) -> Result<()> {
         for layer in &mut self.layers {
             layer.replace_bounds(bounds, None)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn insert_column_in_all_layers(
+        &mut self,
+        column: usize,
+        height: usize,
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.insert_column(column, height)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn insert_row_in_all_layers(&mut self, line: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.insert_row(line)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn pull_column_left_in_all_layers(
+        &mut self,
+        column: usize,
+        affected: &[bool],
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.pull_column_left(column, affected)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn pull_column_right_in_all_layers(
+        &mut self,
+        column: usize,
+        affected: &[bool],
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.pull_column_right(column, affected)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn remove_row_in_all_layers(&mut self, line: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.remove_row(line)?;
+        }
+        self.recalculate_bounds();
+        Ok(())
+    }
+
+    pub(crate) fn remove_row_and_prepend_blank_in_all_layers(&mut self, line: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.remove_row_and_prepend_blank(line)?;
         }
         self.recalculate_bounds();
         Ok(())
