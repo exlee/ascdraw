@@ -139,8 +139,6 @@ impl Editor {
                 self.canvas
                     .set_at(Coord { line, column }, atom, &face)
                     .expect("validated replacement fits the sparse canvas");
-                self.canvas
-                    .ensure_active_row_width(line, column.saturating_add(1));
                 self.grid.cursor_pos.column = column.saturating_add(1);
             }
             if part.ends_with('\n')

@@ -2425,7 +2425,7 @@ mod tests {
             &mut state,
             EditCommand::Move(model::Direction::Up)
         ));
-        assert_eq!(state.grid.lines.len(), 2);
+        assert_eq!(state.take_pending_prepend(), (0, 1));
     }
 
     #[test]
@@ -2463,7 +2463,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(line_contents(&state.grid.lines[0]), "│");
-        assert_eq!(line_contents(&state.grid.lines[1]), " ");
+        assert_eq!(line_contents(&state.grid.lines[1]), "");
         assert_eq!(line_contents(&state.grid.lines[2]), "│");
     }
 
@@ -2765,8 +2765,8 @@ mod tests {
             dispatch_ordered(&mut utility, Key::Character("l".into()), &states),
             Some(true)
         );
-        assert_eq!(utility.grid.lines[0].len(), 6);
-        assert_eq!(line_contents(&utility.grid.lines[0]), "x     ");
+        assert_eq!(utility.grid.lines[0].len(), 1);
+        assert_eq!(line_contents(&utility.grid.lines[0]), "x");
     }
 
     #[test]
@@ -3013,7 +3013,7 @@ mod tests {
                 Some(true),
                 "Backspace in {mode:?}"
             );
-            assert_eq!(line_contents(&cleared.grid.lines[0]), "  ");
+            assert_eq!(line_contents(&cleared.grid.lines[0]), "");
             assert_eq!(cleared.selection, selection);
             assert_eq!(cleared.grid.cursor_pos, cursor);
 

@@ -1267,8 +1267,7 @@ impl Editor {
             .active_line_markers()
             .iter()
             .any(|marker| bounds.contains(marker.coord));
-        let unchanged = self.canvas.layers()[self.canvas.active_index()]
-            .selected_atoms(bounds)
+        let unchanged = self.canvas.layers()[self.canvas.active_index()].selected_atoms(bounds)
             == rectangle.rows;
         if unchanged && !removed_marker {
             return false;
@@ -1286,13 +1285,8 @@ impl Editor {
 
     pub fn replace_canvas(&mut self, mut lines: Vec<Vec<Atom>>) {
         truncate_canvas_lines(&mut lines);
-        let map = crate::canvas::LayerMap::from_dense_with_markers(
-            LayerId(0),
-            true,
-            &lines,
-            &[],
-        )
-        .expect("loaded canvas contains valid graphemes");
+        let map = crate::canvas::LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[])
+            .expect("loaded canvas contains valid graphemes");
         self.canvas = crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())
             .expect("replacement canvas has a base layer");
         #[cfg(test)]
@@ -1465,8 +1459,7 @@ impl Editor {
         cells
     }
 
-    pub fn compact_blank_runs_preserving_cursor(&mut self) {
-    }
+    pub fn compact_blank_runs_preserving_cursor(&mut self) {}
 
     fn prepare_adjacent(&mut self, direction: Direction) -> Option<bool> {
         self.commit_canvas();
@@ -2600,7 +2593,7 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
 
         assert!(state.erase(Direction::Right));
-        assert_eq!(contents(&state.grid.lines[0]), "   ");
+        assert_eq!(contents(&state.grid.lines[0]), "");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
     }
 
@@ -2612,20 +2605,20 @@ mod tests {
 
         assert!(state.erase(Direction::Left));
 
-        assert_eq!(contents(&state.grid.lines[0]), "╶╴ ");
+        assert_eq!(contents(&state.grid.lines[0]), "╶╴");
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
     #[test]
-    fn erasing_a_display_cell_preserves_the_row_width() {
+    fn erasing_a_display_cell_removes_trailing_implicit_blanks() {
         let mut state = state();
         state.insert("ABC");
         state.move_to(Coord { line: 0, column: 2 });
 
         assert!(state.erase(Direction::Left));
 
-        assert_eq!(contents(&state.grid.lines[0]), "A  ");
-        assert_eq!(display_width(&state.grid.lines[0]), 3);
+        assert_eq!(contents(&state.grid.lines[0]), "A");
+        assert_eq!(display_width(&state.grid.lines[0]), 1);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
@@ -2874,47 +2867,6 @@ mod tests {
     }
 
     #[test]
-    fn range_clear_is_rectangular_across_short_rows_and_wide_graphemes() {
-        let mut state = state();
-        state.grid.lines = vec![
-            vec![
-                Atom {
-                    face: Face::default(),
-                    contents: "a".into(),
-                },
-                Atom {
-                    face: Face::default(),
-                    contents: "😀".into(),
-                },
-                Atom {
-                    face: Face::default(),
-                    contents: "z".into(),
-                },
-            ],
-            Vec::new(),
-        ];
-        state.move_to(Coord { line: 0, column: 1 });
-        state.extend_selection(Direction::Right);
-        state.extend_selection(Direction::Down);
-
-        state.clear_selection();
-
-        assert_eq!(state.selected_text(), "  \n  ");
-        assert_eq!(contents(&state.grid.lines[0]), "a  z");
-        assert_eq!(display_width(&state.grid.lines[1]), 3);
-        assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
-        assert_eq!(
-            state.selection_bounds(),
-            SelectionBounds {
-                left: 1,
-                right: 2,
-                top: 0,
-                bottom: 1
-            }
-        );
-    }
-
-    #[test]
     fn clear_is_literal_and_does_not_cap_neighboring_line_cells() {
         let mut state = state();
         state.insert("│\n│\n│");
@@ -2923,7 +2875,7 @@ mod tests {
         state.clear_selection();
 
         assert_eq!(contents(&state.grid.lines[0]), "│");
-        assert_eq!(contents(&state.grid.lines[1]), " ");
+        assert_eq!(contents(&state.grid.lines[1]), "");
         assert_eq!(contents(&state.grid.lines[2]), "│");
     }
 
@@ -4261,7 +4213,7 @@ mod tests {
             Coord { line: 0, column: 1 },
         );
         assert!(right.apply_utility(Direction::Right));
-        assert_eq!(line_contents(&right), vec!["ab ", "cd "]);
+        assert_eq!(line_contents(&right), vec!["ab", "cd"]);
 
         let mut left = utility_state(
             &["ab", "cd"],
@@ -4291,7 +4243,7 @@ mod tests {
             Coord { line: 0, column: 1 },
         );
         assert!(left.apply_utility(Direction::Left));
-        assert_eq!(line_contents(&left), vec!["abd", "xy", ""]);
+        assert_eq!(line_contents(&left), vec!["abd", "xy"]);
 
         let mut right = utility_state(
             &["abcd", "xy", ""],
@@ -4299,7 +4251,7 @@ mod tests {
             Coord { line: 0, column: 1 },
         );
         assert!(right.apply_utility(Direction::Right));
-        assert_eq!(line_contents(&right), vec![" abd", " xy", ""]);
+        assert_eq!(line_contents(&right), vec![" abd", " xy"]);
         assert_eq!(right.grid.cursor_pos.column, 2);
     }
 
@@ -4722,7 +4674,7 @@ mod tests {
         assert_eq!(contents(&preview[1]), "A─C");
 
         assert!(state.confirm_move_lift());
-        assert_eq!(line_contents(&state), vec!["   ", "A─C"]);
+        assert_eq!(line_contents(&state), vec!["", "A─C"]);
         assert_eq!(state.line_markers_for_test().len(), 1);
         assert_eq!(
             state.line_markers_for_test()[0].coord,

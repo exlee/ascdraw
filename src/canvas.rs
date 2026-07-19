@@ -75,8 +75,6 @@ pub struct LayerMap {
     pub id: LayerId,
     pub visible: bool,
     rows: BTreeMap<i16, BTreeMap<i16, CoordData>>,
-    bounds: Option<LayerBounds>,
-    dense_widths: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +91,6 @@ impl LayerMap {
             id,
             visible,
             rows: BTreeMap::new(),
-            bounds: None,
-            dense_widths: vec![0],
         }
     }
 
@@ -113,11 +109,37 @@ impl LayerMap {
     }
 
     pub fn bounds(&self) -> Option<LayerBounds> {
-        self.bounds
+        let (&min_y, _) = self.rows.first_key_value()?;
+        let (&max_y, _) = self.rows.last_key_value()?;
+        let mut columns = self.rows.values().flat_map(|row| row.keys().copied());
+        let min_x = columns.next()?;
+        let (min_x, max_x) = columns.fold((min_x, min_x), |(min_x, max_x), x| {
+            (min_x.min(x), max_x.max(x))
+        });
+        Some(LayerBounds {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        })
     }
 
     pub(crate) fn row_width(&self, line: usize) -> usize {
-        self.dense_widths.get(line).copied().unwrap_or(0)
+        let Some(row) = i16::try_from(line)
+            .ok()
+            .and_then(|line| self.rows.get(&line))
+        else {
+            return 0;
+        };
+        row.iter()
+            .filter_map(|(&column, data)| {
+                usize::try_from(column).ok().map(|column| {
+                    column
+                        .saturating_add(UnicodeWidthStr::width(data.atom.contents.as_str()).max(1))
+                })
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     pub(crate) fn selected_atoms(&self, bounds: SelectionBounds) -> Vec<Vec<Atom>> {
@@ -139,13 +161,6 @@ impl LayerMap {
                     .collect()
             })
             .collect()
-    }
-
-    pub(crate) fn ensure_row_width(&mut self, line: usize, width: usize) {
-        if self.dense_widths.len() <= line {
-            self.dense_widths.resize(line + 1, 0);
-        }
-        self.dense_widths[line] = self.dense_widths[line].max(width);
     }
 
     pub(crate) fn line_markers(&self) -> Vec<LineMarker> {
@@ -305,13 +320,6 @@ impl LayerMap {
         if remove_row {
             self.rows.remove(&y);
         }
-        if removed
-            && self.bounds.is_some_and(|bounds| {
-                x == bounds.min_x || x == bounds.max_x || y == bounds.min_y || y == bounds.max_y
-            })
-        {
-            self.recalculate_bounds();
-        }
         removed
     }
 
@@ -341,12 +349,6 @@ impl LayerMap {
             }
             self.rows.insert(y, shifted);
         }
-        if self.dense_widths.len() <= line {
-            self.dense_widths.resize(line + 1, 0);
-        }
-        self.dense_widths[line] = self.dense_widths[line]
-            .max(column)
-            .saturating_add(cells.len());
         for (offset, (atom, face)) in cells.into_iter().enumerate() {
             let target = x
                 .checked_add(i16::try_from(offset).context("insert offset exceeds signed range")?)
@@ -378,9 +380,6 @@ impl LayerMap {
             if !shifted.is_empty() {
                 self.rows.insert(y, shifted);
             }
-        }
-        if let Some(width) = self.dense_widths.get_mut(line) {
-            *width = width.saturating_sub(count);
         }
         self.recalculate_bounds();
         Ok(())
@@ -420,13 +419,9 @@ impl LayerMap {
         if !remainder.is_empty() {
             self.rows.insert(next_y, remainder);
         }
-        let width = self.dense_widths.get(line).copied().unwrap_or(0);
+        let width = self.row_width(line);
         let split = column.min(width);
-        if self.dense_widths.len() <= line {
-            self.dense_widths.resize(line + 1, 0);
-        }
-        self.dense_widths[line] = split;
-        self.dense_widths.insert(line + 1, width - split);
+        let _ = split;
         self.recalculate_bounds();
         Ok(())
     }
@@ -448,11 +443,7 @@ impl LayerMap {
                 })
                 .collect();
         }
-        self.dense_widths
-            .resize(self.dense_widths.len().max(height), 0);
-        for width in &mut self.dense_widths {
-            *width = (*width).max(column).saturating_add(1);
-        }
+        let _ = height;
         self.recalculate_bounds();
         Ok(())
     }
@@ -472,10 +463,6 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
-        while self.dense_widths.len() < line {
-            self.dense_widths.push(0);
-        }
-        self.dense_widths.insert(line, 0);
         self.recalculate_bounds();
         Ok(())
     }
@@ -504,9 +491,6 @@ impl LayerMap {
                 if !shifted.is_empty() {
                     self.rows.insert(y, shifted);
                 }
-            }
-            if let Some(width) = self.dense_widths.get_mut(line) {
-                *width = width.saturating_sub(1);
             }
         }
         self.recalculate_bounds();
@@ -540,12 +524,6 @@ impl LayerMap {
                     self.rows.insert(y, shifted);
                 }
             }
-            if self.dense_widths.len() <= line {
-                self.dense_widths.resize(line + 1, 0);
-            }
-            if column >= self.dense_widths[line] {
-                self.dense_widths[line] = self.dense_widths[line].saturating_add(1);
-            }
         }
         self.recalculate_bounds();
         Ok(())
@@ -567,12 +545,6 @@ impl LayerMap {
                 )
             })
             .collect();
-        if line < self.dense_widths.len() {
-            self.dense_widths.remove(line);
-        }
-        if self.dense_widths.is_empty() {
-            self.dense_widths.push(0);
-        }
         self.recalculate_bounds();
         Ok(())
     }
@@ -593,24 +565,20 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
-        if line < self.dense_widths.len() {
-            self.dense_widths.remove(line);
-        }
-        self.dense_widths.insert(0, 0);
         self.recalculate_bounds();
         Ok(())
     }
 
     pub(crate) fn join_row_with_next(&mut self, line: usize) -> Result<bool> {
-        if line + 1 >= self.dense_widths.len() {
+        let Some(next_y) = i16::try_from(line + 1).ok() else {
+            return Ok(false);
+        };
+        if !self.rows.contains_key(&next_y) {
             return Ok(false);
         }
         let y = i16::try_from(line).context("canvas line exceeds signed range")?;
-        let next_y = y
-            .checked_add(1)
-            .context("join exceeds signed canvas range")?;
-        let offset = i16::try_from(self.dense_widths[line])
-            .context("row width exceeds signed canvas range")?;
+        let offset =
+            i16::try_from(self.row_width(line)).context("row width exceeds signed canvas range")?;
         let next = self.rows.remove(&next_y).unwrap_or_default();
         let row = self.rows.entry(y).or_default();
         for (x, data) in next {
@@ -624,8 +592,6 @@ impl LayerMap {
             .into_iter()
             .map(|(row_y, row)| (if row_y > next_y { row_y - 1 } else { row_y }, row))
             .collect();
-        let next_width = self.dense_widths.remove(line + 1);
-        self.dense_widths[line] = self.dense_widths[line].saturating_add(next_width);
         self.recalculate_bounds();
         Ok(true)
     }
@@ -636,7 +602,6 @@ impl LayerMap {
         replacement: Option<(Atom, Face)>,
     ) -> Result<()> {
         for line in bounds.top..=bounds.bottom {
-            self.ensure_row_width(line, bounds.right.saturating_add(1));
             let y = i16::try_from(line).context("selection line exceeds signed range")?;
             for column in bounds.left..=bounds.right {
                 let x = i16::try_from(column).context("selection column exceeds signed range")?;
@@ -660,7 +625,6 @@ impl LayerMap {
                 .line
                 .checked_add(row_offset)
                 .context("rectangle exceeds canvas height")?;
-            self.ensure_row_width(line, origin.column.saturating_add(rectangle.width));
             for (column_offset, atom) in row.iter().enumerate() {
                 atom.validate_cell()?;
                 let column = origin
@@ -695,17 +659,6 @@ impl LayerMap {
         line_markers: &[LineMarker],
     ) -> Result<Self> {
         let mut map = Self::new(id, visible);
-        map.dense_widths = lines
-            .iter()
-            .map(|line| {
-                line.iter()
-                    .map(|atom| UnicodeWidthStr::width(atom.contents.as_str()).max(1))
-                    .fold(0usize, usize::saturating_add)
-            })
-            .collect();
-        if map.dense_widths.is_empty() {
-            map.dense_widths.push(0);
-        }
         for (line_index, row) in lines.iter().enumerate() {
             let line = i16::try_from(line_index).context("canvas line exceeds signed i16 range")?;
             let mut column = 0i16;
@@ -748,7 +701,6 @@ impl LayerMap {
             .into_iter()
             .map(|(line, row)| (line.saturating_add(1), row))
             .collect();
-        self.dense_widths.insert(0, 0);
         self.recalculate_bounds();
     }
 
@@ -758,9 +710,6 @@ impl LayerMap {
                 .into_iter()
                 .map(|(column, data)| (column.saturating_add(1), data))
                 .collect();
-        }
-        for width in &mut self.dense_widths {
-            *width = width.saturating_add(1);
         }
         self.recalculate_bounds();
     }
@@ -774,60 +723,34 @@ impl LayerMap {
     }
 
     fn set_data(&mut self, y: i16, x: i16, data: CoordData) {
-        if let (Ok(line), Ok(column)) = (usize::try_from(y), usize::try_from(x)) {
-            if self.dense_widths.len() <= line {
-                self.dense_widths.resize(line + 1, 0);
-            }
-            self.dense_widths[line] =
-                self.dense_widths[line]
-                    .max(column.saturating_add(
-                        UnicodeWidthStr::width(data.atom.contents.as_str()).max(1),
-                    ));
-        }
         self.rows.entry(y).or_default().insert(x, data);
-        self.bounds = Some(match self.bounds {
-            Some(bounds) => LayerBounds {
-                min_x: bounds.min_x.min(x),
-                min_y: bounds.min_y.min(y),
-                max_x: bounds.max_x.max(x),
-                max_y: bounds.max_y.max(y),
-            },
-            None => LayerBounds {
-                min_x: x,
-                min_y: y,
-                max_x: x,
-                max_y: y,
-            },
-        });
     }
 
-    fn recalculate_bounds(&mut self) {
-        let Some((&min_y, _)) = self.rows.first_key_value() else {
-            self.bounds = None;
-            return;
-        };
-        let max_y = *self.rows.last_key_value().expect("nonempty rows").0;
-        let mut columns = self.rows.values().flat_map(|row| row.keys().copied());
-        let min_x = columns.next().expect("nonempty rows contain cells");
-        let (min_x, max_x) = columns.fold((min_x, min_x), |(min_x, max_x), x| {
-            (min_x.min(x), max_x.max(x))
-        });
-        self.bounds = Some(LayerBounds {
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        });
-    }
+    fn recalculate_bounds(&mut self) {}
 
     pub fn to_dense(&self) -> Vec<Vec<Atom>> {
-        self.dense_widths
-            .iter()
-            .enumerate()
-            .map(|(line, &width)| {
+        let height = self
+            .rows
+            .last_key_value()
+            .and_then(|(&line, _)| usize::try_from(line).ok())
+            .map_or(1, |line| line.saturating_add(1));
+        (0..height)
+            .map(|line| {
                 let row = i16::try_from(line)
                     .ok()
                     .and_then(|line| self.rows.get(&line));
+                let width = row.map_or(0, |row| {
+                    row.iter()
+                        .filter_map(|(&column, data)| {
+                            usize::try_from(column).ok().map(|column| {
+                                column.saturating_add(
+                                    UnicodeWidthStr::width(data.atom.contents.as_str()).max(1),
+                                )
+                            })
+                        })
+                        .max()
+                        .unwrap_or(0)
+                });
                 let mut atoms = Vec::new();
                 let mut column = 0usize;
                 while column < width {
@@ -856,7 +779,6 @@ pub struct LayerStack {
     layers: Vec<LayerMap>,
     active: usize,
     enabled: bool,
-    bounds: Option<LayerBounds>,
 }
 
 impl LayerStack {
@@ -872,12 +794,10 @@ impl LayerStack {
             .iter()
             .position(|layer| layer.id == active_id)
             .context("active layer is not present in the layer stack")?;
-        let bounds = combined_bounds(&layers);
         Ok(Self {
             layers,
             active,
             enabled,
-            bounds,
         })
     }
 
@@ -1049,10 +969,6 @@ impl LayerStack {
         i16::try_from(line)
             .ok()
             .is_some_and(|line| self.layers[self.active].rows().contains_key(&line))
-    }
-
-    pub(crate) fn ensure_active_row_width(&mut self, line: usize, width: usize) {
-        self.layers[self.active].ensure_row_width(line, width);
     }
 
     pub(crate) fn active_line_markers(&self) -> Vec<LineMarker> {
@@ -1306,7 +1222,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             *layer = LayerMap::new(layer.id, layer.visible);
         }
-        self.bounds = None;
     }
 
     pub(crate) fn reset(&mut self) {
@@ -1314,12 +1229,10 @@ impl LayerStack {
             .expect("the default stack has a base layer");
     }
 
-    pub fn recalculate_bounds(&mut self) {
-        self.bounds = combined_bounds(&self.layers);
-    }
+    pub fn recalculate_bounds(&mut self) {}
 
     pub fn bounds(&self) -> Option<LayerBounds> {
-        self.bounds
+        combined_bounds(&self.layers)
     }
 
     pub fn effective_layers(&self) -> &[LayerMap] {

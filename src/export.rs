@@ -1551,8 +1551,8 @@ mod tests {
 
         assert_eq!(platform.clipboard.as_deref(), Some("│Z\n  \n界"));
         assert_eq!(state.selected_text(), "  \n  \n  ");
-        assert_eq!(contents(&state.grid.lines[0]), "A   ");
-        assert_eq!(contents(&state.grid.lines[1]), "B   ");
+        assert_eq!(contents(&state.grid.lines[0]), "A");
+        assert_eq!(contents(&state.grid.lines[1]), "B");
         assert_eq!(contents(&state.grid.lines[2]), "C  Q");
         assert_eq!(state.selection.bounds().left, 1);
         assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 2 });
@@ -1597,7 +1597,7 @@ mod tests {
 
         assert_eq!(platform.clipboard.as_deref(), Some("│"));
         assert_eq!(contents(&state.grid.lines[0]), "│");
-        assert_eq!(contents(&state.grid.lines[1]), " ");
+        assert_eq!(contents(&state.grid.lines[1]), "");
         assert_eq!(contents(&state.grid.lines[2]), "│");
         assert_eq!(state.grid.lines[0][0].face, outside_faces[0]);
         assert_eq!(state.grid.lines[2][0].face, outside_faces[1]);
@@ -1955,7 +1955,7 @@ mod tests {
                     .map(|atom| atom.contents.as_str())
                     .collect::<String>())
                 .collect::<Vec<_>>(),
-            ["😀x  ", "", " z"]
+            ["😀x", "", " z"]
         );
         assert_eq!(target.grid.lines[0][0].face, source.grid.lines[0][0].face);
         let _ = fs::remove_file(path);
