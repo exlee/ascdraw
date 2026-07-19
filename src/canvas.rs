@@ -1124,29 +1124,18 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn activate(
-        &mut self,
-        index: usize,
-        active_lines: &mut Vec<Vec<Atom>>,
-    ) -> Result<bool> {
+    pub(crate) fn activate(&mut self, index: usize) -> bool {
         if index >= self.layers.len() || index == self.active {
-            return Ok(false);
+            return false;
         }
-        self.commit_active(active_lines)?;
         self.active = index;
-        *active_lines = self.layers[index].to_dense();
-        Ok(true)
+        true
     }
 
-    pub(crate) fn add_above(
-        &mut self,
-        index: usize,
-        active_lines: &mut Vec<Vec<Atom>>,
-    ) -> Result<Option<LayerId>> {
+    pub(crate) fn add_above(&mut self, index: usize) -> Result<Option<LayerId>> {
         if self.layers.len() >= MAX_LAYERS || index >= self.layers.len() {
             return Ok(None);
         }
-        self.commit_active(active_lines)?;
         let id = (0..LAYER_SYMBOLS.len())
             .map(|value| LayerId(value as u8))
             .find(|candidate| self.index_of(*candidate).is_none())
@@ -1154,7 +1143,6 @@ impl LayerStack {
         let new_index = index + 1;
         self.layers.insert(new_index, LayerMap::new(id, true));
         self.active = new_index;
-        *active_lines = vec![Vec::new()];
         self.recalculate_bounds();
         Ok(Some(id))
     }
@@ -1193,12 +1181,7 @@ impl LayerStack {
         true
     }
 
-    pub(crate) fn merge_into(
-        &mut self,
-        index: usize,
-        target: usize,
-        active_lines: &mut Vec<Vec<Atom>>,
-    ) -> Result<bool> {
+    pub(crate) fn merge_into(&mut self, index: usize, target: usize) -> Result<bool> {
         if index == 0
             || index >= self.layers.len()
             || target >= self.layers.len()
@@ -1206,7 +1189,6 @@ impl LayerStack {
         {
             return Ok(false);
         }
-        self.commit_active(active_lines)?;
         let source = self.layers.remove(index);
         let target = target.saturating_sub(usize::from(target > index));
         let target_layer = &mut self.layers[target];
@@ -1224,29 +1206,22 @@ impl LayerStack {
         self.layers[target] =
             LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
         self.active = target;
-        *active_lines = target_lines;
         self.recalculate_bounds();
         Ok(true)
     }
 
-    pub(crate) fn delete(
-        &mut self,
-        index: usize,
-        active_lines: &mut Vec<Vec<Atom>>,
-    ) -> Result<bool> {
+    pub(crate) fn delete(&mut self, index: usize) -> bool {
         if index == 0 || index >= self.layers.len() {
-            return Ok(false);
+            return false;
         }
-        self.commit_active(active_lines)?;
         self.layers.remove(index);
         if index == self.active {
             self.active = index - 1;
-            *active_lines = self.layers[self.active].to_dense();
         } else if index < self.active {
             self.active -= 1;
         }
         self.recalculate_bounds();
-        Ok(true)
+        true
     }
 
     pub(crate) fn for_each_layer_dense_mut(

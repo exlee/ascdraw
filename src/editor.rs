@@ -322,15 +322,13 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
-        let changed = self
-            .canvas
-            .activate(index, &mut self.grid.lines)
-            .expect("editor layers contain valid sparse cells");
+        self.sync_dense_layer_before_operation();
+        let changed = self.canvas.activate(index);
         if changed {
+            self.grid.lines = self.canvas.active_dense_lines();
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
-            self.commit_canvas();
         }
         changed
     }
@@ -339,50 +337,45 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
+        self.sync_dense_layer_before_operation();
         let changed = self
             .canvas
-            .add_above(index, &mut self.grid.lines)
+            .add_above(index)
             .expect("editor layers contain valid sparse cells")
             .is_some();
         if changed {
+            self.grid.lines = self.canvas.active_dense_lines();
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
-            self.commit_canvas();
         }
         changed
     }
 
     pub fn toggle_layer_visibility(&mut self, id: LayerId) -> bool {
+        self.sync_dense_layer_before_operation();
         let changed = self
             .canvas
             .index_of(id)
             .is_some_and(|index| self.canvas.toggle_visibility(index));
-        if changed {
-            self.commit_canvas();
-        }
         changed
     }
 
     pub fn move_layer_up(&mut self, id: LayerId) -> bool {
+        self.sync_dense_layer_before_operation();
         let changed = self
             .canvas
             .index_of(id)
             .is_some_and(|index| self.canvas.move_up(index));
-        if changed {
-            self.commit_canvas();
-        }
         changed
     }
 
     pub fn move_layer_down(&mut self, id: LayerId) -> bool {
+        self.sync_dense_layer_before_operation();
         let changed = self
             .canvas
             .index_of(id)
             .is_some_and(|index| self.canvas.move_down(index));
-        if changed {
-            self.commit_canvas();
-        }
         changed
     }
 
@@ -401,15 +394,16 @@ impl Editor {
     }
 
     fn merge_layer_into(&mut self, index: usize, target: usize) -> bool {
+        self.sync_dense_layer_before_operation();
         let changed = self
             .canvas
-            .merge_into(index, target, &mut self.grid.lines)
+            .merge_into(index, target)
             .expect("editor layers contain valid sparse cells");
         if changed {
+            self.grid.lines = self.canvas.active_dense_lines();
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
-            self.commit_canvas();
         }
         changed
     }
@@ -418,17 +412,21 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
-        let changed = self
-            .canvas
-            .delete(index, &mut self.grid.lines)
-            .expect("editor layers contain valid sparse cells");
+        self.sync_dense_layer_before_operation();
+        let changed = self.canvas.delete(index);
         if changed {
+            self.grid.lines = self.canvas.active_dense_lines();
             self.toolbar.sync_layer_count(self.canvas.layers().len());
             self.cancel_layer_transients();
             self.sync_cursor_to_active_layer();
-            self.commit_canvas();
         }
         changed
+    }
+
+    fn sync_dense_layer_before_operation(&mut self) {
+        if !self.canvas_is_current() {
+            self.commit_canvas();
+        }
     }
 
     fn cancel_layer_transients(&mut self) {
