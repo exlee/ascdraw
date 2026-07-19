@@ -6,15 +6,18 @@ use crate::selection::{
     selected_atoms,
 };
 
-use super::{Editor, PlacedLineMarker, index_for_column};
+use super::{EditSnapshot, Editor, PlacedLineMarker, index_for_column};
 
 #[derive(Debug, Clone)]
 pub(super) struct MoveLift {
-    pub(super) source_selection: CanvasSelection,
-    pub(super) source_cursor: Coord,
-    pub(super) source_cursor_index: usize,
+    pub(super) source_snapshot: EditSnapshot,
+    source_selection: CanvasSelection,
+    source_cursor: Coord,
+    source_cursor_index: usize,
     source_bounds: SelectionBounds,
     origin: Coord,
+    prepended_columns: usize,
+    prepended_lines: usize,
     clone_origins: Vec<Coord>,
     last_clone_press: Option<u64>,
     rectangle: TextRectangle,
@@ -55,6 +58,7 @@ impl Editor {
         self.end_stroke();
         self.shape_preview = None;
         self.toolbar.cancel_shortcut();
+        let source_snapshot = self.edit_snapshot();
         let source_selection = self.selection;
         let source_bounds = source_selection.bounds();
         let source_origin = Coord {
@@ -89,6 +93,7 @@ impl Editor {
             })
             .collect();
         self.move_lift = Some(MoveLift {
+            source_snapshot,
             source_selection,
             source_cursor: self.grid.cursor_pos,
             source_cursor_index: self.cursor_index,
@@ -97,6 +102,8 @@ impl Editor {
                 line: source_bounds.top,
                 column: source_bounds.left,
             },
+            prepended_columns: 0,
+            prepended_lines: 0,
             clone_origins: Vec::new(),
             last_clone_press: None,
             rectangle: TextRectangle {
@@ -110,6 +117,32 @@ impl Editor {
     }
 
     pub fn move_lift(&mut self, direction: Direction) -> bool {
+        let prepend = self.move_lift.as_ref().map(|lift| match direction {
+            Direction::Up if lift.origin.line == 0 => (0, 1),
+            Direction::Left if lift.origin.column == 0 => (1, 0),
+            _ => (0, 0),
+        });
+        match prepend {
+            Some((1, 0)) => {
+                self.prepend_column();
+                self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
+                self.move_lift
+                    .as_mut()
+                    .expect("move lift remains active after prepend")
+                    .shift(1, 0);
+            }
+            Some((0, 1)) => {
+                self.prepend_line();
+                self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
+                self.move_lift
+                    .as_mut()
+                    .expect("move lift remains active after prepend")
+                    .shift(0, 1);
+            }
+            Some((0, 0)) => {}
+            Some(_) => unreachable!("move lift prepends at most one row or column"),
+            None => return false,
+        }
         let Some(lift) = self.move_lift.as_mut() else {
             return false;
         };
@@ -184,6 +217,7 @@ impl Editor {
         };
         let destinations = move_lift_destinations(&lift);
         if destinations.as_slice() == [source_origin] {
+            self.restore_move_lift_source(lift);
             return false;
         }
         let mut changed = false;
@@ -225,9 +259,7 @@ impl Editor {
         let Some(lift) = self.move_lift.take() else {
             return false;
         };
-        self.selection = lift.source_selection;
-        self.grid.cursor_pos = lift.source_cursor;
-        self.cursor_index = lift.source_cursor_index;
+        self.restore_move_lift_source(lift);
         true
     }
 
@@ -284,6 +316,36 @@ impl Editor {
                 &destinations,
                 &layer.edited_atoms,
             );
+        }
+    }
+
+    fn restore_move_lift_source(&mut self, lift: MoveLift) {
+        let prefix_shift = (
+            -i64::try_from(lift.prepended_columns).unwrap_or(i64::MAX),
+            -i64::try_from(lift.prepended_lines).unwrap_or(i64::MAX),
+        );
+        self.restore_edit_snapshot(lift.source_snapshot);
+        self.pending_prepend = prefix_shift;
+    }
+}
+
+impl MoveLift {
+    fn shift(&mut self, columns: usize, lines: usize) {
+        self.prepended_columns = self.prepended_columns.saturating_add(columns);
+        self.prepended_lines = self.prepended_lines.saturating_add(lines);
+        self.source_selection.shift(columns, lines);
+        self.source_cursor.column = self.source_cursor.column.saturating_add(columns);
+        self.source_cursor.line = self.source_cursor.line.saturating_add(lines);
+        self.source_cursor_index = self.source_cursor_index.saturating_add(columns);
+        self.source_bounds.left = self.source_bounds.left.saturating_add(columns);
+        self.source_bounds.right = self.source_bounds.right.saturating_add(columns);
+        self.source_bounds.top = self.source_bounds.top.saturating_add(lines);
+        self.source_bounds.bottom = self.source_bounds.bottom.saturating_add(lines);
+        self.origin.column = self.origin.column.saturating_add(columns);
+        self.origin.line = self.origin.line.saturating_add(lines);
+        for origin in &mut self.clone_origins {
+            origin.column = origin.column.saturating_add(columns);
+            origin.line = origin.line.saturating_add(lines);
         }
     }
 }

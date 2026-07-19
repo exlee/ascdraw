@@ -128,7 +128,8 @@ impl ViewportOffset {
             .saturating_add((old_grid_top - new_grid_top).round() as i64);
     }
 
-    pub fn compensate_for_prepend(&mut self, columns: usize, lines: usize, cell_size: (f32, f32)) {
+    /// Negative counts reverse compensation for a canceled prepend.
+    pub fn compensate_for_prepend(&mut self, columns: i64, lines: i64, cell_size: (f32, f32)) {
         self.x = self.x.saturating_sub(cell_shift(columns, cell_size.0));
         self.y = self.y.saturating_sub(cell_shift(lines, cell_size.1));
     }
@@ -163,7 +164,7 @@ impl ViewportOffset {
     }
 }
 
-fn cell_shift(count: usize, size: f32) -> i64 {
+fn cell_shift(count: i64, size: f32) -> i64 {
     (count as f64 * size as f64).round() as i64
 }
 
@@ -914,6 +915,9 @@ mod tests {
         viewport.compensate_for_prepend(1, 1, cell_size);
         let after = cursor_top_left(Coord { line: 3, column: 5 }, cell_size, 44.0, viewport);
         assert_eq!(after, before);
+
+        viewport.compensate_for_prepend(-1, -1, cell_size);
+        assert_eq!(viewport, ViewportOffset::default());
     }
 
     fn cursor_top_left(

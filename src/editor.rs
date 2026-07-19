@@ -62,7 +62,7 @@ pub struct Editor {
     move_lift: Option<MoveLift>,
     jump_mode: Option<JumpMode>,
     single_replace_pending: bool,
-    pending_prepend: (usize, usize),
+    pending_prepend: (i64, i64),
     canvas_origin: Coord,
     toolbar_document_changed: bool,
 }
@@ -256,6 +256,9 @@ impl Editor {
         self.shape_preview.is_some()
     }
     pub fn edit_snapshot(&self) -> EditSnapshot {
+        if let Some(lift) = &self.move_lift {
+            return lift.source_snapshot.clone();
+        }
         let (lines, cursor_pos, cursor_index, selection, line_markers, canvas_origin) =
             if let Some(preview) = self
                 .line_preview
@@ -271,21 +274,11 @@ impl Editor {
                     preview.source_canvas_origin,
                 )
             } else {
-                let (cursor_pos, cursor_index, selection) = self.move_lift.as_ref().map_or(
-                    (self.grid.cursor_pos, self.cursor_index, self.selection),
-                    |lift| {
-                        (
-                            lift.source_cursor,
-                            lift.source_cursor_index,
-                            lift.source_selection,
-                        )
-                    },
-                );
                 (
                     self.grid.lines.clone(),
-                    cursor_pos,
-                    cursor_index,
-                    selection,
+                    self.grid.cursor_pos,
+                    self.cursor_index,
+                    self.selection,
                     self.line_markers.clone(),
                     self.canvas_origin,
                 )
@@ -1110,7 +1103,9 @@ impl Editor {
         self.restore_active_cursor_index();
     }
 
-    pub fn take_pending_prepend(&mut self) -> (usize, usize) {
+    /// Positive values compensate for prepended cells; negative values undo
+    /// that compensation when a transient edit restores its source snapshot.
+    pub fn take_pending_prepend(&mut self) -> (i64, i64) {
         std::mem::take(&mut self.pending_prepend)
     }
 
@@ -4076,6 +4071,61 @@ mod tests {
 
         assert_eq!(state.edit_snapshot(), before);
         assert!(state.lines_with_shape_preview().is_none());
+    }
+
+    #[test]
+    fn move_lift_extends_past_the_top_left_canvas_origin() {
+        let mut left = utility_state(&["  AB"], UtilityKind::Push, Coord { line: 0, column: 3 });
+        left.selection
+            .select(Coord { line: 0, column: 2 }, Coord { line: 0, column: 3 });
+        let before = left.edit_snapshot();
+        assert!(left.begin_selected_move_lift());
+        for _ in 0..5 {
+            assert!(left.move_lift(Direction::Left));
+        }
+        assert_eq!(left.move_lift_bounds().unwrap().left, 0);
+        assert_eq!(left.edit_snapshot(), before);
+        assert!(left.cancel_move_lift());
+        assert_eq!(left.edit_snapshot(), before);
+        assert_eq!(left.take_pending_prepend(), (-3, 0));
+
+        assert!(left.begin_selected_move_lift());
+        for _ in 0..5 {
+            assert!(left.move_lift(Direction::Left));
+        }
+        assert!(left.confirm_move_lift());
+        assert_eq!(left.canvas_origin.column, 3);
+        assert_eq!(left.selection_bounds().left, 0);
+        assert_eq!(left.selected_text(), "AB");
+
+        let mut up = utility_state(
+            &["", "", "AB"],
+            UtilityKind::Push,
+            Coord { line: 2, column: 1 },
+        );
+        up.selection
+            .select(Coord { line: 2, column: 0 }, Coord { line: 2, column: 1 });
+        assert!(up.begin_selected_move_lift());
+        for _ in 0..4 {
+            assert!(up.move_lift(Direction::Up));
+        }
+        assert!(up.confirm_move_lift());
+        assert_eq!(up.canvas_origin.line, 2);
+        assert_eq!(up.selection_bounds().top, 0);
+        assert_eq!(up.selected_text(), "AB");
+
+        let mut stationary =
+            utility_state(&["AB"], UtilityKind::Push, Coord { line: 0, column: 1 });
+        stationary
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        let before = stationary.edit_snapshot();
+        assert!(stationary.begin_selected_move_lift());
+        assert!(stationary.move_lift(Direction::Left));
+        assert!(stationary.move_lift(Direction::Right));
+        assert!(!stationary.confirm_move_lift());
+        assert_eq!(stationary.edit_snapshot(), before);
+        assert_eq!(stationary.take_pending_prepend(), (-1, 0));
     }
 
     #[test]
