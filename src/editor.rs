@@ -899,6 +899,12 @@ impl Editor {
 
     pub fn move_home(&mut self) {
         self.end_stroke();
+        if self.canvas_is_current() {
+            self.grid.cursor_pos.column = 0;
+            self.cursor_index = 0;
+            self.collapse_selection();
+            return;
+        }
         grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], 0);
         self.cursor_index = 0;
         self.sync_cursor_column();
@@ -907,6 +913,19 @@ impl Editor {
 
     pub fn move_end(&mut self) {
         self.end_stroke();
+        if self.canvas_is_current() {
+            let width = self.canvas.active_row_width(self.grid.cursor_pos.line);
+            self.grid.cursor_pos.column = width.min(MAX_CANVAS_WIDTH - 1);
+            self.cursor_index = self
+                .grid
+                .lines
+                .get(self.grid.cursor_pos.line)
+                .map_or(0, |line| {
+                    index_for_column(line, self.grid.cursor_pos.column)
+                });
+            self.collapse_selection();
+            return;
+        }
         let width = display_width(&self.grid.lines[self.grid.cursor_pos.line]);
         grid::expose_cursor_cells(&mut self.grid.lines[self.grid.cursor_pos.line], width);
         self.cursor_index = self.grid.lines[self.grid.cursor_pos.line].len();
@@ -918,6 +937,7 @@ impl Editor {
         let coord = clamp_canvas_coord(coord);
         self.cancel_line_preview();
         self.cancel_move_lift();
+        let sparse = self.canvas_is_current();
         let old_line_count = self.grid.lines.len();
         let old_width = self
             .grid
@@ -930,7 +950,7 @@ impl Editor {
         if let Some(preview) = self.shape_preview.as_mut() {
             preview.end = self.grid.cursor_pos;
         }
-        self.grid.lines.len() != old_line_count || coord.column > old_width
+        !sparse && (self.grid.lines.len() != old_line_count || coord.column > old_width)
     }
 
     pub fn resolve_pointer_coord(&mut self, line: i64, column: i64) -> Coord {
@@ -975,8 +995,14 @@ impl Editor {
         self.shape_preview = None;
         self.move_lift = None;
         self.grid.cursor_pos = coord;
-        self.cursor_index = index_for_column(&self.grid.lines[coord.line], coord.column);
-        self.sync_cursor_column();
+        self.cursor_index = self
+            .grid
+            .lines
+            .get(coord.line)
+            .map_or(0, |line| index_for_column(line, coord.column));
+        if !self.canvas_is_current() {
+            self.sync_cursor_column();
+        }
         self.collapse_selection();
     }
 
@@ -993,6 +1019,15 @@ impl Editor {
 
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
         let coord = clamp_canvas_coord(coord);
+        if self.canvas_is_current() {
+            self.grid.cursor_pos = coord;
+            self.cursor_index = self
+                .grid
+                .lines
+                .get(coord.line)
+                .map_or(0, |line| index_for_column(line, coord.column));
+            return;
+        }
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
         }
@@ -1037,6 +1072,9 @@ impl Editor {
     }
 
     pub fn cursor_target_for_coord(&self, target: Coord) -> Coord {
+        if self.canvas_is_current() {
+            return target;
+        }
         let Some(line) = self.grid.lines.get(target.line) else {
             return target;
         };
@@ -1064,6 +1102,9 @@ impl Editor {
         }
         let target = adjacent_coord(cursor, direction)?;
         if extend_selection {
+            return Some(target);
+        }
+        if self.canvas_is_current() {
             return Some(target);
         }
         let Some(line) = self.grid.lines.get(target.line) else {
@@ -1157,6 +1198,15 @@ impl Editor {
     }
 
     fn move_selection_to_without_ending_stroke(&mut self, coord: Coord) {
+        if self.canvas_is_current() {
+            self.grid.cursor_pos = coord;
+            self.cursor_index = self
+                .grid
+                .lines
+                .get(coord.line)
+                .map_or(0, |line| index_for_column(line, coord.column));
+            return;
+        }
         while self.grid.lines.len() <= coord.line {
             self.grid.lines.push(Vec::new());
         }
@@ -3463,12 +3513,15 @@ mod tests {
     }
 
     #[test]
-    fn clicking_beyond_content_pads_the_canvas() {
+    fn clicking_beyond_content_does_not_allocate_blank_cells() {
         let mut state = state();
         state.move_to(Coord { line: 2, column: 4 });
-        assert_eq!(state.grid.lines.len(), 3);
-        assert_eq!(state.grid.lines[2].len(), 1);
-        assert_eq!(contents(&state.grid.lines[2]), "    ");
+        assert_eq!(state.grid.lines, vec![Vec::new()]);
+        assert!(
+            state.canvas.layers()[state.canvas.active_index()]
+                .rows()
+                .is_empty()
+        );
         assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 4 });
     }
 
@@ -3478,9 +3531,7 @@ mod tests {
         state.move_or_draw(Direction::Right, false);
         state.move_or_draw(Direction::Down, false);
         assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 1 });
-        assert_eq!(state.grid.lines.len(), 2);
-        assert_eq!(contents(&state.grid.lines[0]), " ");
-        assert_eq!(contents(&state.grid.lines[1]), " ");
+        assert_eq!(state.grid.lines, vec![Vec::new()]);
     }
 
     #[test]

@@ -106,12 +106,6 @@ pub(crate) fn compact_blank_runs(lines: &mut [Vec<Atom>]) {
     }
 }
 
-pub(crate) fn compacted_blank_runs(lines: &[Vec<Atom>]) -> Vec<Vec<Atom>> {
-    let mut lines = lines.to_vec();
-    compact_blank_runs(&mut lines);
-    lines
-}
-
 pub(crate) fn compact_blank_line(line: &mut Vec<Atom>) {
     let mut compacted: Vec<Atom> = Vec::with_capacity(line.len());
     for atom in line.drain(..) {

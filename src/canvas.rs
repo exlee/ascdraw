@@ -323,7 +323,9 @@ impl LayerMap {
         if self.dense_widths.len() <= line {
             self.dense_widths.resize(line + 1, 0);
         }
-        self.dense_widths[line] = self.dense_widths[line].saturating_add(cells.len());
+        self.dense_widths[line] = self.dense_widths[line]
+            .max(column)
+            .saturating_add(cells.len());
         for (offset, (atom, face)) in cells.into_iter().enumerate() {
             let target = x
                 .checked_add(i16::try_from(offset).context("insert offset exceeds signed range")?)
@@ -1465,6 +1467,18 @@ mod tests {
             )
             .unwrap();
         assert!(layer.rows().is_empty());
+    }
+
+    #[test]
+    fn insertion_beyond_content_extends_logical_row_to_the_inserted_cell() {
+        let mut layer = LayerMap::new(LayerId(0), true);
+        let atom = data("x", Face::default()).atom.as_ref().clone();
+        layer
+            .insert_cells(2, 4, vec![(atom, Face::default())])
+            .unwrap();
+
+        assert_eq!(layer.row_width(2), 5);
+        assert_eq!(layer.get(2, 4).unwrap().atom.contents, "x");
     }
 
     #[test]

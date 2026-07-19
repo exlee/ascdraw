@@ -21,8 +21,11 @@ impl Editor {
                     contents: contents.to_string(),
                 })
                 .collect::<Vec<_>>();
-            let available = MAX_CANVAS_WIDTH
-                .saturating_sub(self.canvas.active_row_width(self.grid.cursor_pos.line));
+            let available = MAX_CANVAS_WIDTH.saturating_sub(
+                self.canvas
+                    .active_row_width(self.grid.cursor_pos.line)
+                    .max(self.grid.cursor_pos.column),
+            );
             let mut accepted_width: usize = 0;
             let atoms = atoms
                 .into_iter()
