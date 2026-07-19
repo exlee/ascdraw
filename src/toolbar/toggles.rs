@@ -59,6 +59,7 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectMain(*mode)),
+                shift_action: None,
                 right_aligned: false,
                 foreground: None,
             });

@@ -86,6 +86,7 @@ impl ToolbarState {
                     && action != ToolbarAction::ToggleExportMenu,
                 tooltip: false,
                 action: Some(action),
+                shift_action: None,
                 right_aligned: index == 0,
                 foreground: None,
             });
@@ -97,6 +98,7 @@ impl ToolbarState {
                     highlighted: false,
                     tooltip: false,
                     action: Some(action),
+                    shift_action: None,
                     right_aligned: false,
                     foreground: None,
                 });
@@ -271,6 +273,7 @@ impl ToolbarState {
             highlighted: row == 0 && active && !matches!(kind, PanelKind::Files),
             tooltip: false,
             action: Some(action),
+            shift_action: None,
             right_aligned: false,
             foreground: None,
         }]

@@ -169,6 +169,7 @@ pub fn tooltip_spans(tooltip: Tooltip, width: usize) -> Vec<ToolbarSpan> {
         highlighted: false,
         tooltip: true,
         action: None,
+        shift_action: None,
         right_aligned: false,
         foreground: None,
     }]
@@ -378,8 +379,19 @@ pub struct ToolbarSpan {
     pub highlighted: bool,
     pub tooltip: bool,
     pub action: Option<ToolbarAction>,
+    pub shift_action: Option<ToolbarAction>,
     pub right_aligned: bool,
     pub foreground: Option<String>,
+}
+
+impl ToolbarSpan {
+    pub fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
+        if shifted {
+            self.shift_action.or(self.action)
+        } else {
+            self.action
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -491,8 +503,11 @@ impl ToolbarState {
             return true;
         }
 
-        if modifiers != ModifiersState::empty() {
+        if modifiers != ModifiersState::empty() && modifiers != ModifiersState::SHIFT {
             return self.cancel_pending_shortcut();
+        }
+        if matches!(key, Key::Named(NamedKey::Shift)) {
+            return self.shortcut_prefix.is_some();
         }
         let Key::Character(text) = key else {
             return self.cancel_pending_shortcut();
@@ -957,6 +972,7 @@ impl ToolbarState {
                         highlighted: false,
                         tooltip: false,
                         action: Some(ToolbarAction::SelectExportCategory(category)),
+                        shift_action: None,
                         right_aligned: false,
                         foreground: None,
                     });
@@ -989,6 +1005,7 @@ impl ToolbarState {
                         highlighted: false,
                         tooltip: false,
                         action: Some(ToolbarAction::RunExport(*action)),
+                        shift_action: None,
                         right_aligned: false,
                         foreground: None,
                     });
@@ -1012,6 +1029,7 @@ impl ToolbarState {
                     highlighted: false,
                     tooltip: false,
                     action: Some(ToolbarAction::SelectExportCategory(FILES_TOGGLE_CATEGORY)),
+                    shift_action: None,
                     right_aligned: false,
                     foreground: None,
                 });
@@ -1039,6 +1057,7 @@ impl ToolbarState {
                     highlighted: false,
                     tooltip: false,
                     action: Some(ToolbarAction::Toggle(*toggle)),
+                    shift_action: None,
                     right_aligned: false,
                     foreground: None,
                 });
@@ -1052,6 +1071,7 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::RunExport(ExportAction::Clear)),
+                shift_action: None,
                 right_aligned: true,
                 foreground: None,
             });
@@ -1095,6 +1115,7 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(action),
+                shift_action: None,
                 right_aligned: false,
                 foreground: None,
             });
@@ -1121,6 +1142,7 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(action),
+                shift_action: None,
                 right_aligned: false,
                 foreground: None,
             });
@@ -1386,6 +1408,7 @@ fn plain_span(contents: String) -> ToolbarSpan {
         highlighted: false,
         tooltip: false,
         action: None,
+        shift_action: None,
         right_aligned: false,
         foreground: None,
     }
@@ -2584,6 +2607,57 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert!(!toolbar.handle_shortcut(&Key::Named(NamedKey::Escape), ModifiersState::empty()));
         assert_eq!(toolbar.main_mode(), MainMode::Line);
+    }
+
+    #[test]
+    fn shift_preserves_and_can_advance_pending_shortcuts() {
+        let mut toolbar = ToolbarState::default();
+        assert!(toolbar.handle_shortcut(&Key::Character("2".into()), ModifiersState::SHIFT));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::Category(0))
+        );
+
+        for modifiers in [ModifiersState::SHIFT, ModifiersState::empty()] {
+            assert!(toolbar.handle_shortcut(&Key::Named(NamedKey::Shift), modifiers));
+            assert_eq!(
+                toolbar.pending_shortcut(),
+                Some(PendingShortcut::Category(0))
+            );
+        }
+
+        assert!(toolbar.handle_shortcut(&Key::Character("1".into()), ModifiersState::SHIFT));
+        assert_eq!(
+            toolbar.pending_shortcut(),
+            Some(PendingShortcut::Option {
+                category: 0,
+                page: 0,
+            })
+        );
+        assert!(toolbar.handle_shortcut(&Key::Character("2".into()), ModifiersState::SHIFT));
+        assert_eq!(toolbar.stamp(), "■");
+        assert_eq!(toolbar.pending_shortcut(), None);
+    }
+
+    #[test]
+    fn toolbar_spans_can_resolve_alternate_shift_actions() {
+        let mut span = plain_span("x".to_owned());
+        span.action = Some(ToolbarAction::SelectMain(MainMode::Stamp));
+        span.shift_action = Some(ToolbarAction::SelectMain(MainMode::Line));
+
+        assert_eq!(
+            span.action_for_shift(false),
+            Some(ToolbarAction::SelectMain(MainMode::Stamp))
+        );
+        assert_eq!(
+            span.action_for_shift(true),
+            Some(ToolbarAction::SelectMain(MainMode::Line))
+        );
+        span.shift_action = None;
+        assert_eq!(
+            span.action_for_shift(true),
+            Some(ToolbarAction::SelectMain(MainMode::Stamp))
+        );
     }
 
     #[test]

@@ -205,6 +205,7 @@ fn push_page(
                 submenu: category,
                 option: option_index,
             }),
+            shift_action: None,
             right_aligned: false,
             foreground: None,
         });

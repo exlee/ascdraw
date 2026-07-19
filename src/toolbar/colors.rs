@@ -46,6 +46,7 @@ impl ToolbarState {
                 highlighted: false,
                 tooltip: false,
                 action: Some(ToolbarAction::SelectColor(color)),
+                shift_action: None,
                 right_aligned: false,
                 foreground: color.hex().map(str::to_owned),
             });

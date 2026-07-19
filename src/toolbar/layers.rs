@@ -91,6 +91,7 @@ impl ToolbarState {
                     layer: layer.id,
                     operation,
                 }),
+                shift_action: None,
                 right_aligned: false,
                 foreground: None,
             });
