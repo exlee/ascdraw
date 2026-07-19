@@ -431,6 +431,34 @@ impl Editor {
             .toolbar_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
     }
 
+    pub fn boxed_toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
+        self.toolbar
+            .boxed_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
+    }
+
+    pub fn select_custom_stamp(&mut self, text: &str) -> bool {
+        let Some(rectangle) = TextRectangle::from_text(text) else {
+            return false;
+        };
+        let [row] = rectangle.rows.as_slice() else {
+            return false;
+        };
+        let [atom] = row.as_slice() else {
+            return false;
+        };
+        if rectangle.width != 1 || UnicodeWidthStr::width(atom.contents.as_str()) != 1 {
+            return false;
+        }
+
+        self.end_stroke();
+        self.cancel_line_preview();
+        self.cancel_move_lift();
+        self.shape_preview = None;
+        self.toolbar.select_custom_stamp(atom.contents.clone());
+        self.sync_cursor_mode_with_toolbar();
+        true
+    }
+
     pub fn cursor_coordinates(&self) -> (i128, i128) {
         (
             self.grid.cursor_pos.column as i128 - self.canvas_origin.column as i128,
@@ -3398,6 +3426,28 @@ mod tests {
 
         assert_eq!(contents(&state.grid.lines[0]), "█");
         assert_eq!(state.grid.cursor_pos, Coord::default());
+    }
+
+    #[test]
+    fn custom_stamp_fills_selection_until_a_bundled_stamp_is_selected() {
+        let mut state = state();
+        state.insert("abcd");
+        state.move_to(Coord { line: 0, column: 1 });
+        state.extend_selection(Direction::Right);
+
+        assert!(state.select_custom_stamp("◇"));
+        state.place_stamp();
+        assert_eq!(contents(&state.grid.lines[0]), "a◇◇d");
+        assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
+
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 0,
+        }));
+        assert_eq!(state.toolbar.custom_stamp(), None);
+        assert_eq!(state.toolbar.stamp(), "□");
+        assert!(!state.select_custom_stamp("😀"));
+        assert!(!state.select_custom_stamp("xy"));
     }
 
     #[test]

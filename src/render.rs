@@ -531,19 +531,17 @@ fn render_toolbar(
         let physical_row = crate::toolbar::toolbar_content_row(row);
         rows.push((
             physical_row,
-            crate::toolbar::boxed_toolbar_spans(
-                &state.toolbar_spans_for_width(row, max_columns),
-                max_columns,
-            ),
+            state.boxed_toolbar_spans_for_width(row, max_columns),
         ));
     }
 
     rows.push((
         state.toolbar.rows_for_width(max_columns) - 1,
-        crate::toolbar::toolbar_minimap_border_spans(
+        crate::toolbar::toolbar_bottom_border_spans(
             max_columns,
             crate::layout::minimap_width_in_cells(max_columns),
             state.cursor_coordinates(),
+            state.toolbar.custom_stamp().is_some(),
         ),
     ));
 

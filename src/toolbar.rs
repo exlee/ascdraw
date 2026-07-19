@@ -105,6 +105,43 @@ pub fn toolbar_minimap_border_spans(
     vec![plain_span(border.into_iter().collect())]
 }
 
+pub fn toolbar_bottom_border_spans(
+    width: usize,
+    minimap_width: usize,
+    coordinates: (i128, i128),
+    custom_stamp: bool,
+) -> Vec<ToolbarSpan> {
+    let mut spans = toolbar_minimap_border_spans(width, minimap_width, coordinates);
+    if custom_stamp && width >= 4 {
+        let mut border = spans[0].contents.chars().collect::<Vec<_>>();
+        border[2] = '┴';
+        spans[0].contents = border.into_iter().collect();
+    }
+    spans
+}
+
+fn custom_stamp_cap_spans(width: usize) -> Vec<ToolbarSpan> {
+    let contents = match width {
+        0 => return Vec::new(),
+        1 => "├".to_owned(),
+        2 => "├│".to_owned(),
+        3 => "├─┐".to_owned(),
+        _ => format!("├─┐{}│", " ".repeat(width - 4)),
+    };
+    vec![plain_span(contents)]
+}
+
+fn custom_stamp_glyph_spans(width: usize, stamp: &str) -> Vec<ToolbarSpan> {
+    let contents = match width {
+        0 => return Vec::new(),
+        1 => "│".to_owned(),
+        2 => "││".to_owned(),
+        3 => format!("│{stamp}│"),
+        _ => format!("│{stamp}│{}│", " ".repeat(width - 4)),
+    };
+    vec![plain_span(contents)]
+}
+
 pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSpan> {
     if width == 0 {
         return Vec::new();
@@ -355,6 +392,7 @@ pub struct ToolbarState {
     line_selected: [usize; LINE_LABELS.len()],
     stamp_selected: [usize; STAMP_LABELS.len()],
     stamp_active_category: usize,
+    custom_stamp: Option<String>,
     shape_selected: [usize; SHAPE_LABELS.len()],
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
@@ -877,6 +915,11 @@ impl ToolbarState {
     }
 
     pub fn content_rows_for_width(&self, box_width: usize) -> usize {
+        self.standard_content_rows_for_width(box_width)
+            + usize::from(self.custom_stamp.is_some()) * 2
+    }
+
+    fn standard_content_rows_for_width(&self, box_width: usize) -> usize {
         MENU_FIRST_ROW + self.menu_row_count_for_width(box_width)
     }
 
@@ -944,6 +987,27 @@ impl ToolbarState {
             );
         }
         spans
+    }
+
+    pub fn boxed_spans_with_layers_for_width(
+        &self,
+        row: usize,
+        box_width: usize,
+        layers: &[LayerSummary],
+    ) -> Vec<ToolbarSpan> {
+        let indicator_row = self.standard_content_rows_for_width(box_width);
+        if self.custom_stamp.is_some() && row == indicator_row {
+            return custom_stamp_cap_spans(box_width);
+        }
+        if let Some(stamp) = self.custom_stamp.as_deref()
+            && row == indicator_row + 1
+        {
+            return custom_stamp_glyph_spans(box_width, stamp);
+        }
+        boxed_toolbar_spans(
+            &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
+            box_width,
+        )
     }
 
     fn top_level_headers_wrap(&self, box_width: usize) -> bool {
@@ -1212,8 +1276,22 @@ impl ToolbarState {
         }
     }
 
-    pub fn stamp(&self) -> &'static str {
-        STAMP_OPTIONS[self.stamp_active_category][self.stamp_selected[self.stamp_active_category]]
+    pub fn stamp(&self) -> &str {
+        self.custom_stamp.as_deref().unwrap_or_else(|| {
+            STAMP_OPTIONS[self.stamp_active_category]
+                [self.stamp_selected[self.stamp_active_category]]
+        })
+    }
+
+    pub fn custom_stamp(&self) -> Option<&str> {
+        self.custom_stamp.as_deref()
+    }
+
+    pub(crate) fn select_custom_stamp(&mut self, stamp: String) {
+        self.close_export_menu();
+        self.cancel_shortcut();
+        self.custom_stamp = Some(stamp);
+        self.main_mode = MainMode::Stamp;
     }
 
     pub fn shape_kind(&self) -> ShapeKind {
@@ -1256,10 +1334,7 @@ impl ToolbarState {
         layers: &[LayerSummary],
     ) -> Option<ToolbarAction> {
         let mut start = 0;
-        for span in boxed_toolbar_spans(
-            &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
-            box_width,
-        ) {
+        for span in self.boxed_spans_with_layers_for_width(row, box_width, layers) {
             let end = start + UnicodeWidthStr::width(span.contents.as_str());
             if (start..end).contains(&column) {
                 return span.action;
@@ -1303,6 +1378,9 @@ impl ToolbarState {
                 let Some(selected) = selected else {
                     return false;
                 };
+                if self.main_mode == MainMode::Stamp {
+                    self.custom_stamp = None;
+                }
                 *selected = option;
                 true
             }
@@ -1397,7 +1475,11 @@ impl ToolbarState {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
-                exclusive_submenu: Some(self.stamp_active_category),
+                exclusive_submenu: Some(
+                    self.custom_stamp
+                        .as_ref()
+                        .map_or(self.stamp_active_category, |_| usize::MAX),
+                ),
                 page_lengths: &STAMP_PAGE_LENGTHS,
             }),
             MainMode::Shapes => Some(MenuLayout {
@@ -1896,6 +1978,52 @@ mod tests {
             spans_text(&boxed_toolbar_spans(&toolbar.toolbar_spans(0), 8)),
             "│ Mode │"
         );
+    }
+
+    #[test]
+    fn custom_stamp_indicator_attaches_to_the_lower_left_border() {
+        let mut toolbar = ToolbarState::default();
+        let standard_rows = toolbar.content_rows();
+        toolbar.select_custom_stamp("▼".to_owned());
+
+        assert_eq!(toolbar.content_rows(), standard_rows + 2);
+        assert!(
+            (MENU_FIRST_ROW..MENU_FIRST_ROW + toolbar.menu_row_count())
+                .all(|row| { toolbar.toolbar_spans(row).iter().all(|span| !span.selected) })
+        );
+        let cap_row = toolbar.content_rows_for_width(12) - 2;
+        let glyph_row = toolbar.content_rows_for_width(12) - 1;
+        assert_eq!(
+            spans_text(&toolbar.boxed_spans_with_layers_for_width(cap_row, 12, &[])),
+            "├─┐        │"
+        );
+        assert_eq!(
+            spans_text(&toolbar.boxed_spans_with_layers_for_width(glyph_row, 12, &[])),
+            "│▼│        │"
+        );
+        assert_eq!(
+            spans_text(&toolbar_bottom_border_spans(12, 0, (0, 0), true)),
+            "└─┴────────┘"
+        );
+
+        for width in 0..12 {
+            let content_rows = toolbar.content_rows_for_width(width);
+            for row in [content_rows - 2, content_rows - 1] {
+                assert_eq!(
+                    UnicodeWidthStr::width(
+                        spans_text(&toolbar.boxed_spans_with_layers_for_width(row, width, &[]))
+                            .as_str()
+                    ),
+                    width
+                );
+            }
+            assert_eq!(
+                UnicodeWidthStr::width(
+                    spans_text(&toolbar_bottom_border_spans(width, 0, (0, 0), true)).as_str()
+                ),
+                width
+            );
+        }
     }
 
     #[test]

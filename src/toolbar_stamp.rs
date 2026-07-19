@@ -8,7 +8,7 @@ use crate::layout::PADDING;
 use crate::model::{Atom, Face};
 use crate::render::{FALLBACK_BG, FALLBACK_FG};
 use crate::selection::TextRectangle;
-use crate::toolbar::{ToolbarSpan, boxed_toolbar_spans, toolbar_border_spans};
+use crate::toolbar::{ToolbarSpan, toolbar_border_spans, toolbar_bottom_border_spans};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HotspotClick {
@@ -89,12 +89,14 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
     let mut span_rows = Vec::with_capacity(state.toolbar.rows_for_width(box_width));
     span_rows.push(toolbar_border_spans(box_width, true));
     for row in 0..state.toolbar.content_rows_for_width(box_width) {
-        span_rows.push(boxed_toolbar_spans(
-            &state.toolbar_spans_for_width(row, box_width),
-            box_width,
-        ));
+        span_rows.push(state.boxed_toolbar_spans_for_width(row, box_width));
     }
-    span_rows.push(toolbar_border_spans(box_width, false));
+    span_rows.push(toolbar_bottom_border_spans(
+        box_width,
+        0,
+        (0, 0),
+        state.toolbar.custom_stamp().is_some(),
+    ));
 
     let rows = span_rows
         .iter()

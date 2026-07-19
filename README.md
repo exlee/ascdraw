@@ -173,7 +173,8 @@ The first held modifier chooses an operation. The second chooses how far it trav
 
 Space fills the current selection with the active stamp. Ctrl + direction stamps continuously
 while moving. The bundled inventory includes decorators, directional arrows, grey fills, and
-quadrant and fractional blocks.
+quadrant and fractional blocks. Copying a single display cell makes it a custom stamp; its glyph is
+shown in the attached box at the toolbar's lower-left corner until a bundled stamp is selected.
 
 ### Line
 

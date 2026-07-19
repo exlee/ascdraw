@@ -436,7 +436,16 @@ fn try_main() -> Result<ExitCode> {
                                             editor.mark_document_dirty();
                                         }
                                     }
-                                    Ok(false) => {}
+                                    Ok(false) => {
+                                        if clipboard_command == ClipboardCommand::Copy {
+                                            editor.finish_state_change(
+                                                previous_state,
+                                                previous_viewport,
+                                                false,
+                                            );
+                                            editor.request_redraw();
+                                        }
+                                    }
                                     Err(error) => {
                                         editor.state = previous_state;
                                         editor.viewport = previous_viewport;
