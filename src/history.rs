@@ -387,6 +387,30 @@ mod tests {
     }
 
     #[test]
+    fn layer_merge_is_one_undoable_change() {
+        let mut state = Editor::new(&AppConfig::default().theme, "test");
+        state.insert("base");
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let upper = state.active_layer_id();
+        state.insert(" upper");
+        let before = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+
+        assert!(state.merge_layer_up(upper));
+        let after = HistorySnapshot {
+            edit: state.edit_snapshot(),
+            viewport: ViewportOffset::default(),
+        };
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before.clone(), &after));
+        assert_eq!(history.undo(after.clone()), Some(before.clone()));
+        assert_eq!(history.redo(before), Some(after));
+    }
+
+    #[test]
     fn confirmed_move_lift_is_one_entry_and_stationary_confirmation_preserves_redo() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
         state.insert("abcd");

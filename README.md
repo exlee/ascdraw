@@ -151,8 +151,9 @@ ignores color; PNG keeps it.
 Layers are ordered bottom-to-top. Enable Multi Layer Mode, then use the visible `8.ROW.` prefix and
 an operation column, for example `8 1 2`. Column `1` selects by its Greek symbol; columns `2`
 through `7` select, hide/show, move up, move down, add, or delete. Press `8` at any time to restart
-the Layers path. The base `α` layer cannot be moved or deleted. Editing affects only the selected
-layer.
+the Layers path. Hold Shift to change the movement arrows to `▲`/`▼`; these merge the source onto
+the adjacent layer and consume the source. The base `α` layer cannot be moved, used as a merge
+source, or deleted. Editing affects only the selected layer.
 TXT export chooses the highest visible nonblank glyph at each position, while PNG preserves every
 visible layer.
 

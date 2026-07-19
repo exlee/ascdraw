@@ -14,6 +14,8 @@ pub enum LayerOperation {
     Show,
     MoveUp,
     MoveDown,
+    MergeUp,
+    MergeDown,
     New,
     Delete,
 }
@@ -28,12 +30,23 @@ const GRID_OPERATIONS: [LayerOperation; 7] = [
     LayerOperation::New,
     LayerOperation::Delete,
 ];
+const SHIFT_GRID_OPERATIONS: [LayerOperation; 7] = [
+    LayerOperation::Select,
+    LayerOperation::Select,
+    LayerOperation::Show,
+    LayerOperation::MergeUp,
+    LayerOperation::MergeDown,
+    LayerOperation::New,
+    LayerOperation::Delete,
+];
 
 fn operation_enabled(operation: LayerOperation, index: usize, layer_count: usize) -> bool {
     match operation {
         LayerOperation::Select | LayerOperation::Show => true,
         LayerOperation::MoveUp => index > 0 && index + 1 < layer_count,
         LayerOperation::MoveDown => index > 1,
+        LayerOperation::MergeUp => index > 0,
+        LayerOperation::MergeDown => index > 0 && index + 1 < layer_count,
         LayerOperation::New => layer_count < MAX_LAYERS,
         LayerOperation::Delete => index > 0,
     }
@@ -71,12 +84,17 @@ impl ToolbarState {
             layer.id.symbol(),
             if layer.active { "×" } else { " " },
             if layer.visible { "▪" } else { "▫" },
-            "↑",
-            "↓",
+            if self.shift_layer() { "▲" } else { "↑" },
+            if self.shift_layer() { "▼" } else { "↓" },
             "+",
             "ø",
         ];
-        for (column, (glyph, operation)) in glyphs.into_iter().zip(GRID_OPERATIONS).enumerate() {
+        let operations = if self.shift_layer() {
+            SHIFT_GRID_OPERATIONS
+        } else {
+            GRID_OPERATIONS
+        };
+        for (column, (glyph, operation)) in glyphs.into_iter().zip(operations).enumerate() {
             if column > 0 {
                 spans.push(plain_span(" ".to_owned()));
             }
@@ -91,7 +109,11 @@ impl ToolbarState {
                     layer: layer.id,
                     operation,
                 }),
-                shift_action: None,
+                shift_action: operation_enabled(SHIFT_GRID_OPERATIONS[column], index, layers.len())
+                    .then_some(ToolbarAction::Layer {
+                        layer: layer.id,
+                        operation: SHIFT_GRID_OPERATIONS[column],
+                    }),
                 right_aligned: false,
                 foreground: None,
             });
@@ -107,9 +129,14 @@ impl ToolbarState {
         digit: usize,
     ) -> Option<LayerOperation> {
         let index = layers.iter().position(|summary| summary.id == layer)?;
+        let operations = if self.shift_layer() {
+            SHIFT_GRID_OPERATIONS
+        } else {
+            GRID_OPERATIONS
+        };
         let operation = digit
             .checked_sub(1)
-            .and_then(|column| GRID_OPERATIONS.get(column))
+            .and_then(|column| operations.get(column))
             .copied()?;
         operation_enabled(operation, index, layers.len()).then_some(operation)
     }
@@ -329,6 +356,85 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn shift_replaces_move_arrows_with_merge_actions_and_boundaries() {
+        let layers = sample_layers();
+        let mut toolbar = ToolbarState::default();
+        enter_layers(&mut toolbar, &layers);
+
+        let operation_for = |toolbar: &ToolbarState, row: usize, glyph: &str| {
+            toolbar
+                .layer_panel_spans(row, &layers)
+                .into_iter()
+                .find(|span| span.contents == glyph)
+                .and_then(|span| span.action)
+        };
+        assert_eq!(operation_for(&toolbar, 2, "↑"), None);
+        let second_row_up = toolbar
+            .layer_panel_spans(2, &layers)
+            .into_iter()
+            .find(|span| span.contents == "↑")
+            .unwrap();
+        assert_eq!(
+            second_row_up.shift_action,
+            Some(ToolbarAction::Layer {
+                layer: LayerId(1),
+                operation: LayerOperation::MergeUp,
+            })
+        );
+        assert_eq!(
+            operation_for(&toolbar, 2, "↓"),
+            Some(ToolbarAction::Layer {
+                layer: LayerId(1),
+                operation: LayerOperation::MoveUp,
+            })
+        );
+        assert_eq!(operation_for(&toolbar, 3, "↓"), None);
+
+        assert!(toolbar.set_shift_layer(true));
+        assert_eq!(operation_for(&toolbar, 1, "▲"), None);
+        assert_eq!(operation_for(&toolbar, 1, "▼"), None);
+        assert_eq!(
+            operation_for(&toolbar, 2, "▲"),
+            Some(ToolbarAction::Layer {
+                layer: LayerId(1),
+                operation: LayerOperation::MergeUp,
+            })
+        );
+        assert_eq!(
+            operation_for(&toolbar, 2, "▼"),
+            Some(ToolbarAction::Layer {
+                layer: LayerId(1),
+                operation: LayerOperation::MergeDown,
+            })
+        );
+        assert_eq!(
+            operation_for(&toolbar, 3, "▲"),
+            Some(ToolbarAction::Layer {
+                layer: LayerId(2),
+                operation: LayerOperation::MergeUp,
+            })
+        );
+        assert_eq!(operation_for(&toolbar, 3, "▼"), None);
+
+        for key in ["8", "2"] {
+            assert!(toolbar.handle_shortcut_with_layers(
+                &Key::Character(key.into()),
+                ModifiersState::empty(),
+                &layers,
+            ));
+        }
+        assert!(toolbar.handle_shortcut_with_layers(
+            &Key::Character("4".into()),
+            ModifiersState::SHIFT,
+            &layers,
+        ));
+        assert_eq!(
+            toolbar.take_layer_action(),
+            Some((LayerId(1), LayerOperation::MergeUp))
+        );
     }
 
     #[test]

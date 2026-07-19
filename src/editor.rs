@@ -214,6 +214,32 @@ impl Editor {
             .is_some_and(|index| self.layers.move_down(index))
     }
 
+    pub fn merge_layer_up(&mut self, id: LayerId) -> bool {
+        let Some(index) = self.layers.index_of(id) else {
+            return false;
+        };
+        self.merge_layer_into(index, index.saturating_sub(1))
+    }
+
+    pub fn merge_layer_down(&mut self, id: LayerId) -> bool {
+        let Some(index) = self.layers.index_of(id) else {
+            return false;
+        };
+        self.merge_layer_into(index, index.saturating_add(1))
+    }
+
+    fn merge_layer_into(&mut self, index: usize, target: usize) -> bool {
+        let changed =
+            self.layers
+                .merge_into(index, target, &mut self.grid.lines, &mut self.line_markers);
+        if changed {
+            self.toolbar.sync_layer_count(self.layers.layers().len());
+            self.cancel_layer_transients();
+            self.sync_cursor_to_active_layer();
+        }
+        changed
+    }
+
     pub fn delete_layer(&mut self, id: LayerId) -> bool {
         let Some(index) = self.layers.index_of(id) else {
             return false;
@@ -538,6 +564,8 @@ impl Editor {
             LayerOperation::Show => self.toggle_layer_visibility(layer),
             LayerOperation::MoveUp => self.move_layer_up(layer),
             LayerOperation::MoveDown => self.move_layer_down(layer),
+            LayerOperation::MergeUp => self.merge_layer_up(layer),
+            LayerOperation::MergeDown => self.merge_layer_down(layer),
             LayerOperation::New => self.add_layer_above(layer),
             LayerOperation::Delete => self.delete_layer(layer),
         };
@@ -1604,6 +1632,66 @@ mod tests {
                 .collect::<Vec<_>>(),
             [base, middle, top]
         );
+    }
+
+    #[test]
+    fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
+        let mut state = state();
+        state.grid.lines = lines_from_text("A界z");
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 1 },
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "界".into(),
+        });
+        let base = state.active_layer_id();
+        assert!(state.add_layer_above(base));
+        let source = state.active_layer_id();
+        state.grid.lines = lines_from_text(" B ");
+        let source_face = state.theme.tooltip.clone();
+        state.grid.lines[0][1].face = source_face.clone();
+        state.line_markers.push(PlacedLineMarker {
+            coord: Coord { line: 0, column: 1 },
+            ending: LineEnding::Fixed('●'),
+            base_glyph: "B".into(),
+        });
+        assert!(state.add_layer_above(source));
+        let top = state.active_layer_id();
+        state.grid.lines = lines_from_text("top");
+
+        assert!(state.merge_layer_up(source));
+
+        assert_eq!(state.active_layer_id(), base);
+        assert_eq!(
+            state
+                .layer_summaries()
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            [base, top]
+        );
+        assert_eq!(contents(&state.grid.lines[0]), "AB z");
+        assert_eq!(state.grid.lines[0][1].face, source_face);
+        assert_eq!(state.line_markers.len(), 1);
+        assert_eq!(state.line_markers[0].ending, LineEnding::Fixed('●'));
+        assert_eq!(contents(&state.layer_views()[1].lines[0]), "top");
+        assert!(!state.merge_layer_up(base));
+        assert!(!state.merge_layer_down(base));
+        assert!(!state.merge_layer_down(top));
+
+        let mut down = Editor::new(&ThemeConfig::default(), "ascdraw");
+        down.grid.lines = lines_from_text("base");
+        let base = down.active_layer_id();
+        assert!(down.add_layer_above(base));
+        let source = down.active_layer_id();
+        down.grid.lines = lines_from_text(" M");
+        assert!(down.add_layer_above(source));
+        let target = down.active_layer_id();
+        down.grid.lines = lines_from_text("T");
+
+        assert!(down.merge_layer_down(source));
+        assert_eq!(down.active_layer_id(), target);
+        assert_eq!(contents(&down.grid.lines[0]), "TM");
+        assert_eq!(down.layer_summaries().len(), 2);
     }
 
     #[test]

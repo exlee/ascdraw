@@ -358,6 +358,7 @@ pub struct ToolbarState {
     shape_selected: [usize; SHAPE_LABELS.len()],
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
+    shift_layer: bool,
     export_open: bool,
     toggles: [bool; 3],
     active_export_category: Option<usize>,
@@ -495,6 +496,7 @@ impl ToolbarState {
         modifiers: ModifiersState,
         layers: &[LayerSummary],
     ) -> bool {
+        self.shift_layer = modifiers.shift_key();
         self.sync_layer_count(layers.len());
         if matches!(key, Key::Named(NamedKey::Escape))
             && (self.shortcut_prefix.is_some() || self.export_open)
@@ -837,6 +839,16 @@ impl ToolbarState {
 
     pub fn pending_shortcut(&self) -> Option<PendingShortcut> {
         self.shortcut_prefix
+    }
+
+    pub fn set_shift_layer(&mut self, shifted: bool) -> bool {
+        let changed = self.shift_layer != shifted;
+        self.shift_layer = shifted;
+        changed
+    }
+
+    pub(super) fn shift_layer(&self) -> bool {
+        self.shift_layer
     }
 
     #[cfg(test)]

@@ -313,9 +313,15 @@ fn try_main() -> Result<ExitCode> {
                                 editor.modifiers.control_key() && !modifiers.state().control_key();
                             editor.modifiers = modifiers.state();
                             editor.ordered_modifiers.update(editor.modifiers);
+                            let shift_layer_changed = editor
+                                .state
+                                .toolbar
+                                .set_shift_layer(editor.modifiers.shift_key());
                             if released_control {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
+                            }
+                            if released_control || shift_layer_changed {
                                 editor.request_redraw();
                             }
                         }
@@ -324,6 +330,7 @@ fn try_main() -> Result<ExitCode> {
                             editor.finish_history_transaction();
                             editor.modifiers = ModifiersState::empty();
                             editor.ordered_modifiers.update(editor.modifiers);
+                            editor.state.toolbar.set_shift_layer(false);
                             editor.request_redraw();
                         }
                         WindowEvent::Ime(Ime::Commit(text)) => {

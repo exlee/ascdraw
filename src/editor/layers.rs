@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
+use crate::model::{Atom, Coord, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
+use crate::selection::{SelectionBounds, TextRectangle, overwrite_rectangle};
 
 use super::{PlacedLineMarker, blank_atom};
 
@@ -250,6 +252,43 @@ impl LayerStack {
         true
     }
 
+    pub(super) fn merge_into(
+        &mut self,
+        index: usize,
+        target: usize,
+        active_lines: &mut Vec<Vec<Atom>>,
+        active_markers: &mut Vec<PlacedLineMarker>,
+    ) -> bool {
+        if index == 0
+            || index >= self.layers.len()
+            || target >= self.layers.len()
+            || index.abs_diff(target) != 1
+        {
+            return false;
+        }
+
+        std::mem::swap(active_lines, &mut self.layers[self.active].lines);
+        std::mem::swap(active_markers, &mut self.layers[self.active].line_markers);
+        let source = self.layers.remove(index);
+        let target = target.saturating_sub(usize::from(target > index));
+        let target_layer = &mut self.layers[target];
+        let covered = overlay_nonblank_atoms(&mut target_layer.lines, &source.lines);
+        target_layer
+            .line_markers
+            .retain(|marker| !covered.iter().any(|bounds| bounds.contains(marker.coord)));
+        for marker in source.line_markers {
+            target_layer
+                .line_markers
+                .retain(|existing| existing.coord != marker.coord);
+            target_layer.line_markers.push(marker);
+        }
+
+        self.active = target;
+        std::mem::swap(active_lines, &mut self.layers[target].lines);
+        std::mem::swap(active_markers, &mut self.layers[target].line_markers);
+        true
+    }
+
     pub(super) fn delete(
         &mut self,
         index: usize,
@@ -304,4 +343,36 @@ impl LayerStack {
     pub(super) fn reset(&mut self) {
         *self = Self::default();
     }
+}
+
+fn overlay_nonblank_atoms(
+    target: &mut Vec<Vec<Atom>>,
+    source: &[Vec<Atom>],
+) -> Vec<SelectionBounds> {
+    let mut covered = Vec::new();
+    for (line, atoms) in source.iter().enumerate() {
+        let mut column = 0usize;
+        for atom in atoms {
+            let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
+            if !atom.contents.chars().all(char::is_whitespace) {
+                let bounds = SelectionBounds {
+                    left: column,
+                    right: column.saturating_add(width.saturating_sub(1)),
+                    top: line,
+                    bottom: line,
+                };
+                overwrite_rectangle(
+                    target,
+                    Coord { line, column },
+                    &TextRectangle {
+                        rows: vec![vec![atom.clone()]],
+                        width,
+                    },
+                );
+                covered.push(bounds);
+            }
+            column = column.saturating_add(width);
+        }
+    }
+    covered
 }
