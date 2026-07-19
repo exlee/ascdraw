@@ -1828,7 +1828,7 @@ mod tests {
             EditCommand::StartOrConfirmShape
         ));
         assert!(state.lines_with_shape_preview().is_none());
-        assert_eq!(line_contents(&state.grid.lines[2]), "└──┘");
+        assert_eq!(line_contents(&state.lines_for_test()[2]), "└──┘");
         let placed = history::HistorySnapshot {
             edit: state.edit_snapshot(),
             viewport: layout::ViewportOffset::default(),
@@ -1947,7 +1947,7 @@ mod tests {
             edit: state.edit_snapshot(),
             viewport: layout::ViewportOffset::default(),
         };
-        assert_eq!(line_contents(&state.grid.lines[0]), "░░░░");
+        assert_eq!(line_contents(&state.lines_for_test()[0]), "░░░░");
         assert!(history.finish_transaction(&complete));
         assert_eq!(history.undo(complete), Some(before));
     }
@@ -2062,7 +2062,7 @@ mod tests {
             state.prepare_history_command();
             let undone = edit_history.undo(edited).expect("undo entry");
             state.restore_edit_snapshot(undone.edit.clone());
-            assert_eq!(line_contents(&state.grid.lines[0]), "");
+            assert_eq!(line_contents(&state.lines_for_test()[0]), "");
 
             assert_eq!(
                 history_command(
@@ -2076,7 +2076,7 @@ mod tests {
             state.prepare_history_command();
             let redone = edit_history.redo(undone).expect("redo entry");
             state.restore_edit_snapshot(redone.edit);
-            assert_eq!(line_contents(&state.grid.lines[0]), "x");
+            assert_eq!(line_contents(&state.lines_for_test()[0]), "x");
         }
     }
 
@@ -2103,7 +2103,11 @@ mod tests {
                     Some(true)
                 );
             }
-            assert_eq!(line_contents(&state.grid.lines[0]), "uU", "mode {mode:?}");
+            assert_eq!(
+                line_contents(&state.lines_for_test()[0]),
+                "uU",
+                "mode {mode:?}"
+            );
         }
 
         for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
@@ -2125,7 +2129,7 @@ mod tests {
                 ),
                 Some(true)
             );
-            assert_eq!(line_contents(&state.grid.lines[0]), key);
+            assert_eq!(line_contents(&state.lines_for_test()[0]), key);
             assert_eq!(state.cursor_mode, CursorMode::Stamp);
         }
     }
@@ -2161,7 +2165,7 @@ mod tests {
             submenu: 0,
             option: 0,
         });
-        let unchanged = state.grid.lines.clone();
+        let unchanged = state.lines_for_test();
 
         assert_eq!(
             handle_editor_key(
@@ -2174,7 +2178,7 @@ mod tests {
             None
         );
         assert!(!state.move_lift_active());
-        assert_eq!(state.grid.lines, unchanged);
+        assert_eq!(state.lines_for_test(), unchanged);
     }
 
     #[test]
@@ -2193,7 +2197,7 @@ mod tests {
             state.move_home();
             state.extend_selection(Direction::Right);
             state.cursor_mode = mode;
-            let unchanged = state.grid.lines.clone();
+            let unchanged = state.lines_for_test();
 
             assert_eq!(
                 handle_editor_key(
@@ -2208,7 +2212,7 @@ mod tests {
             );
             assert!(state.move_lift_active(), "mode={mode:?}");
             assert_eq!(state.selection_bounds().left, 1, "mode={mode:?}");
-            assert_eq!(state.grid.lines, unchanged, "mode={mode:?}");
+            assert_eq!(state.lines_for_test(), unchanged, "mode={mode:?}");
 
             assert_eq!(
                 handle_editor_key(
@@ -2237,7 +2241,11 @@ mod tests {
             assert!(!state.move_lift_active(), "mode={mode:?}");
             assert!(state.selection.is_collapsed(), "mode={mode:?}");
             assert_eq!(state.grid.cursor_pos.column, 2, "mode={mode:?}");
-            assert_eq!(line_contents(&state.grid.lines[0]), "  ab", "mode={mode:?}");
+            assert_eq!(
+                line_contents(&state.lines_for_test()[0]),
+                "  ab",
+                "mode={mode:?}"
+            );
         }
     }
 
@@ -2255,7 +2263,7 @@ mod tests {
         }
         assert_eq!(state.selection_bounds().left, 0);
         assert_eq!(state.selection_bounds().right, 2);
-        let unchanged = state.grid.lines.clone();
+        let unchanged = state.lines_for_test();
 
         assert_eq!(
             handle_cursor_direction(
@@ -2270,7 +2278,7 @@ mod tests {
         assert!(state.move_lift_active());
         assert_eq!(state.selection_bounds().left, 1);
         assert_eq!(state.selection_bounds().right, 3);
-        assert_eq!(state.grid.lines, unchanged);
+        assert_eq!(state.lines_for_test(), unchanged);
     }
 
     #[test]
@@ -2322,7 +2330,7 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(line_contents(&state.grid.lines[0]).trim_end(), " AA");
+        assert_eq!(line_contents(&state.lines_for_test()[0]).trim_end(), " AA");
     }
 
     #[test]
@@ -2378,7 +2386,7 @@ mod tests {
                 Some(true)
             );
         }
-        assert_eq!(line_contents(&stamp.grid.lines[0]), "░░░░");
+        assert_eq!(line_contents(&stamp.lines_for_test()[0]), "░░░░");
 
         let mut line = Editor::new(&AppConfig::default().theme, "test");
         line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
@@ -2394,7 +2402,7 @@ mod tests {
                 Some(true)
             );
         }
-        assert_eq!(line_contents(&line.grid.lines[0]), "╶──╴");
+        assert_eq!(line_contents(&line.lines_for_test()[0]), "╶──╴");
     }
 
     #[test]
@@ -2462,9 +2470,10 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(line_contents(&state.grid.lines[0]), "│");
-        assert_eq!(line_contents(&state.grid.lines[1]), "");
-        assert_eq!(line_contents(&state.grid.lines[2]), "│");
+        let lines = state.lines_for_test();
+        assert_eq!(line_contents(&lines[0]), "│");
+        assert_eq!(line_contents(&lines[1]), "");
+        assert_eq!(line_contents(&lines[2]), "│");
     }
 
     #[test]
@@ -2604,7 +2613,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(text.state(), EditorState::TextMode);
-        assert_eq!(line_contents(&text.grid.lines[0]), "m");
+        assert_eq!(line_contents(&text.lines_for_test()[0]), "m");
 
         text.extend_selection(Direction::Right);
         assert!(matches!(text.state(), EditorState::SelectionMode(_)));
@@ -2671,9 +2680,9 @@ mod tests {
                 Some(true)
             );
             assert_eq!(state.grid.cursor_pos.column, steps);
-            assert_eq!(state.grid.lines[0].len(), steps + 1);
+            assert_eq!(state.lines_for_test()[0].len(), steps + 1);
             assert!(
-                state.grid.lines[0]
+                state.lines_for_test()[0]
                     .iter()
                     .all(|atom| { !atom.contents.chars().all(char::is_whitespace) })
             );
@@ -2697,7 +2706,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(state.grid.cursor_pos.column, 5);
-        assert_eq!(line_contents(&state.grid.lines[0]), "      f");
+        assert_eq!(line_contents(&state.lines_for_test()[0]), "      f");
     }
 
     #[test]
@@ -2738,7 +2747,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(stamp.grid.cursor_pos.column, 5);
-        assert!(stamp.grid.lines[0].len() >= 6);
+        assert!(stamp.lines_for_test()[0].len() >= 6);
 
         let mut shape = Editor::new(&app::ThemeConfig::default(), "test");
         assert!(shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
@@ -2765,8 +2774,8 @@ mod tests {
             dispatch_ordered(&mut utility, Key::Character("l".into()), &states),
             Some(true)
         );
-        assert_eq!(utility.grid.lines[0].len(), 1);
-        assert_eq!(line_contents(&utility.grid.lines[0]), "x");
+        assert_eq!(utility.lines_for_test()[0].len(), 1);
+        assert_eq!(line_contents(&utility.lines_for_test()[0]), "x");
     }
 
     #[test]
@@ -2796,7 +2805,7 @@ mod tests {
                 Some(true)
             );
             let expected = format!("a{}", &source[steps + 1..]);
-            assert_eq!(line_contents(&state.grid.lines[0]), expected);
+            assert_eq!(line_contents(&state.lines_for_test()[0]), expected);
 
             let after = history::HistorySnapshot {
                 edit: state.edit_snapshot(),
@@ -3013,7 +3022,7 @@ mod tests {
                 Some(true),
                 "Backspace in {mode:?}"
             );
-            assert_eq!(line_contents(&cleared.grid.lines[0]), "");
+            assert_eq!(line_contents(&cleared.lines_for_test()[0]), "");
             assert_eq!(cleared.selection, selection);
             assert_eq!(cleared.grid.cursor_pos, cursor);
 
@@ -3154,7 +3163,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(platform.text, "copy");
-        assert_eq!(copy.grid.lines, before.grid.lines);
+        assert_eq!(copy.lines_for_test(), before.lines_for_test());
         assert_eq!(copy.selection, before.selection);
     }
 
@@ -3231,7 +3240,7 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(line_contents(&insert.grid.lines[0]), "2");
+        assert_eq!(line_contents(&insert.lines_for_test()[0]), "2");
 
         let mut replace = Editor::new(&config.theme, "test");
         replace.insert("a");
@@ -3247,7 +3256,7 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(line_contents(&replace.grid.lines[0]), "2");
+        assert_eq!(line_contents(&replace.lines_for_test()[0]), "2");
         assert_eq!(replace.cursor_mode, CursorMode::Replace);
 
         let mut single_replace = Editor::new(&config.theme, "test");
@@ -3264,7 +3273,7 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(line_contents(&single_replace.grid.lines[0]), "2");
+        assert_eq!(line_contents(&single_replace.lines_for_test()[0]), "2");
         assert_eq!(single_replace.grid.cursor_pos, Coord::default());
         assert_eq!(single_replace.cursor_mode, CursorMode::Stamp);
     }

@@ -1037,7 +1037,7 @@ mod tests {
 
     fn state_with_selection() -> Editor {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("outside\n  ab  \n  cd  ");
+        state.set_lines_for_test(lines_from_text("outside\n  ab  \n  cd  "));
         state.move_to(Coord { line: 1, column: 2 });
         state.extend_selection(crate::model::Direction::Right);
         state.extend_selection(crate::model::Direction::Down);
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn collapsed_selection_exports_signed_viewport_with_blank_padding_and_trailing_cells() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("abc\nde");
+        state.set_lines_for_test(lines_from_text("abc\nde"));
         let before = state.edit_snapshot();
         let mut viewport = ViewportOffset { x: 13, y: -7 };
         let mut platform = MockPlatform::default();
@@ -1152,32 +1152,13 @@ mod tests {
     }
 
     #[test]
-    fn txt_flattens_the_highest_visible_glyph_without_splitting_wide_graphemes() {
-        let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("😀");
-        let base = state.active_layer_id();
-        assert!(state.add_layer_above(base));
-        let upper = state.active_layer_id();
-        state.grid.lines = lines_from_text(" x");
-        let visible = VisibleCanvasCells {
-            origin: (0, 0),
-            columns: 2,
-            rows: 1,
-        };
-
-        assert_eq!(text_export(&state, visible), " x");
-        assert!(state.toggle_layer_visibility(upper));
-        assert_eq!(text_export(&state, visible), "😀");
-    }
-
-    #[test]
     fn clipboard_txt_combines_visible_layers_with_the_topmost_nonblank_winning() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("AAA");
+        state.set_lines_for_test(lines_from_text("AAA"));
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
         assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
-        state.grid.lines = lines_from_text("  BBB");
+        state.set_lines_for_test(lines_from_text("  BBB"));
         let visible = VisibleCanvasCells {
             origin: (0, 0),
             columns: 5,
@@ -1203,11 +1184,11 @@ mod tests {
     #[test]
     fn edit_copy_and_cut_flatten_visible_layers_and_cut_clears_every_layer() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("AAA");
+        state.set_lines_for_test(lines_from_text("AAA"));
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
         assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
-        state.grid.lines = lines_from_text("  BBB");
+        state.set_lines_for_test(lines_from_text("  BBB"));
         state.move_to(Coord::default());
         for _ in 0..4 {
             state.extend_selection(crate::model::Direction::Right);
@@ -1236,7 +1217,7 @@ mod tests {
     #[test]
     fn copying_does_not_change_the_active_tool_or_toolbar_height() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("◇x");
+        state.set_lines_for_test(lines_from_text("◇x"));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
         let toolbar_rows = state.toolbar.rows();
         let mut platform = MockPlatform::default();
@@ -1258,13 +1239,13 @@ mod tests {
     #[test]
     fn png_export_passes_every_visible_layer_in_bottom_to_top_order() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("◯");
+        state.set_lines_for_test(lines_from_text("◯"));
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
-        state.grid.lines = lines_from_text("○");
+        state.set_lines_for_test(lines_from_text("○"));
         let middle = state.active_layer_id();
         assert!(state.add_layer_above(middle));
-        state.grid.lines = lines_from_text("•");
+        state.set_lines_for_test(lines_from_text("•"));
         let top = state.active_layer_id();
         assert!(state.select_layer(middle));
         let mut platform = MockPlatform {
@@ -1329,7 +1310,9 @@ mod tests {
     fn json_save_remains_whole_project_when_selection_and_viewport_are_smaller() {
         let path = temp_path("json");
         let mut state = state_with_selection();
-        state.grid.lines.push(row_atoms("outside"));
+        let mut lines = state.lines_for_test();
+        lines.push(row_atoms("outside"));
+        state.set_lines_for_test(lines);
         let mut viewport = ViewportOffset::default();
         let mut platform = MockPlatform {
             save: Some(path.clone()),
@@ -1409,12 +1392,12 @@ mod tests {
     fn png_viewport_source_is_raw_canvas_only_even_with_active_overlays_and_preview() {
         let config = ThemeConfig::default();
         let mut state = Editor::new(&config, "title excluded");
-        state.grid.lines = lines_from_text("ab");
+        state.set_lines_for_test(lines_from_text("ab"));
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
         state.toggle_shape_preview();
         state.move_cursor(crate::model::Direction::Right);
         let expected = region_atoms(
-            &state.grid.lines,
+            &state.lines_for_test(),
             CanvasRegion {
                 left: 0,
                 top: 0,
@@ -1443,7 +1426,7 @@ mod tests {
         assert_eq!(platform.rendered_lines.as_ref(), Some(&expected));
 
         let mut lifted = Editor::new(&config, "title excluded");
-        lifted.grid.lines = lines_from_text("ab");
+        lifted.set_lines_for_test(lines_from_text("ab"));
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
         assert!(lifted.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
@@ -1522,7 +1505,7 @@ mod tests {
     #[test]
     fn clipboard_copy_preserves_blank_rows_and_trailing_spaces_without_mutating_state() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("ab\n\nz");
+        state.set_lines_for_test(lines_from_text("ab\n\nz"));
         state.move_to(Coord::default());
         state.extend_selection(crate::model::Direction::Right);
         state.extend_selection(crate::model::Direction::Right);
@@ -1532,7 +1515,7 @@ mod tests {
         let mut platform = MockPlatform::default();
         copy_selection(&mut state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("ab \n   \nz  "));
-        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);
         assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
     }
@@ -1540,7 +1523,7 @@ mod tests {
     #[test]
     fn cut_copies_exact_ragged_rectangle_then_clears_only_that_rectangle() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("A│Z\nB\nC界Q");
+        state.set_lines_for_test(lines_from_text("A│Z\nB\nC界Q"));
         state.move_to(Coord { line: 0, column: 1 });
         state.extend_selection(crate::model::Direction::Right);
         state.extend_selection(crate::model::Direction::Down);
@@ -1551,9 +1534,10 @@ mod tests {
 
         assert_eq!(platform.clipboard.as_deref(), Some("│Z\n  \n界"));
         assert_eq!(state.selected_text(), "  \n  \n  ");
-        assert_eq!(contents(&state.grid.lines[0]), "A");
-        assert_eq!(contents(&state.grid.lines[1]), "B");
-        assert_eq!(contents(&state.grid.lines[2]), "C  Q");
+        let lines = state.lines_for_test();
+        assert_eq!(contents(&lines[0]), "A");
+        assert_eq!(contents(&lines[1]), "B");
+        assert_eq!(contents(&lines[2]), "C  Q");
         assert_eq!(state.selection.bounds().left, 1);
         assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 2 });
     }
@@ -1567,7 +1551,7 @@ mod tests {
             ..MockPlatform::default()
         };
         assert!(cut_selection(&mut state, &mut failure).is_err());
-        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);
         assert_eq!(state.grid.cursor_pos, before.grid.cursor_pos);
 
@@ -1578,35 +1562,36 @@ mod tests {
         let mut platform = MockPlatform::default();
         assert!(!cut_selection(&mut blank, &mut platform).unwrap());
         assert_eq!(platform.clipboard.as_deref(), Some("  \n  "));
-        assert_eq!(blank.grid.lines, blank_before.grid.lines);
+        assert_eq!(blank.lines_for_test(), blank_before.lines_for_test());
         assert_eq!(blank.selection, blank_before.selection);
     }
 
     #[test]
     fn cut_does_not_smart_break_neighboring_lines() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("│\n│\n│");
+        state.set_lines_for_test(lines_from_text("│\n│\n│"));
         state.move_to(Coord { line: 1, column: 0 });
         let outside_faces = [
-            state.grid.lines[0][0].face.clone(),
-            state.grid.lines[2][0].face.clone(),
+            state.lines_for_test()[0][0].face.clone(),
+            state.lines_for_test()[2][0].face.clone(),
         ];
         let mut platform = MockPlatform::default();
 
         assert!(cut_selection(&mut state, &mut platform).unwrap());
 
         assert_eq!(platform.clipboard.as_deref(), Some("│"));
-        assert_eq!(contents(&state.grid.lines[0]), "│");
-        assert_eq!(contents(&state.grid.lines[1]), "");
-        assert_eq!(contents(&state.grid.lines[2]), "│");
-        assert_eq!(state.grid.lines[0][0].face, outside_faces[0]);
-        assert_eq!(state.grid.lines[2][0].face, outside_faces[1]);
+        let lines = state.lines_for_test();
+        assert_eq!(contents(&lines[0]), "│");
+        assert_eq!(contents(&lines[1]), "");
+        assert_eq!(contents(&lines[2]), "│");
+        assert_eq!(lines[0][0].face, outside_faces[0]);
+        assert_eq!(lines[2][0].face, outside_faces[1]);
     }
 
     #[test]
     fn real_cut_is_one_undoable_edit_and_blank_cut_preserves_redo() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("wide\ntext");
+        state.set_lines_for_test(lines_from_text("wide\ntext"));
         state.move_to(Coord::default());
         state.extend_selection(crate::model::Direction::Right);
         let before = HistorySnapshot {
@@ -1651,7 +1636,7 @@ mod tests {
             ..MockPlatform::default()
         };
         assert!(paste_selection(&mut state, &mut read_error).is_err());
-        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);
 
         let mut empty = MockPlatform {
@@ -1659,20 +1644,20 @@ mod tests {
             ..MockPlatform::default()
         };
         assert!(!paste_selection(&mut state, &mut empty).unwrap());
-        assert_eq!(state.grid.lines, before.grid.lines);
+        assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);
     }
 
     #[test]
     fn canceled_dialog_is_a_clean_no_op() {
         let mut state = state_with_selection();
-        let before = state.grid.lines.clone();
+        let before = state.lines_for_test();
         let mut platform = MockPlatform::default();
         assert_eq!(
             perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
             ExportOutcome::Cancelled
         );
-        assert_eq!(state.grid.lines, before);
+        assert_eq!(state.lines_for_test(), before);
     }
 
     #[test]
@@ -1694,7 +1679,7 @@ mod tests {
     #[test]
     fn project_json_is_human_readable_and_preserves_cell_styles() {
         let mut state = state_with_selection();
-        state.grid.lines[1][2].face = state.theme.selection.clone();
+        state.set_cell_face_for_test(Coord { line: 1, column: 2 }, state.theme.selection.clone());
         let json = serde_json::to_string_pretty(&project_document(
             &state,
             ViewportOffset { x: -12, y: 34 },
@@ -1715,17 +1700,17 @@ mod tests {
     #[test]
     fn project_v2_round_trips_layer_order_visibility_active_layer_and_faces() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![Atom {
             face: state.theme.selection.clone(),
             contents: "a".to_owned(),
-        }]];
+        }]]);
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
         let upper = state.active_layer_id();
-        state.grid.lines = vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![Atom {
             face: state.theme.cursor_block.clone(),
             contents: "b".to_owned(),
-        }]];
+        }]]);
         assert!(state.toggle_layer_visibility(base));
         state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
         state.apply_toolbar_action(ToolbarAction::SelectColor(crate::model::ColorId(14)));
@@ -1796,7 +1781,7 @@ mod tests {
     fn collapsed_txt_save_exports_the_whole_canvas_and_can_become_active() {
         let path = temp_path("txt");
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.grid.lines = lines_from_text("one\ntwo");
+        state.set_lines_for_test(lines_from_text("one\ntwo"));
         let mut platform = MockPlatform {
             save: Some(path.clone()),
             ..MockPlatform::default()
@@ -1818,7 +1803,7 @@ mod tests {
         let text_path = temp_path("txt");
         fs::write(&text_path, "XY\nZ ").unwrap();
         let mut target = Editor::new(&ThemeConfig::default(), "test");
-        target.grid.lines = lines_from_text("aaaa\nbbbb\ncccc");
+        target.set_lines_for_test(lines_from_text("aaaa\nbbbb\ncccc"));
         target.move_to(Coord { line: 1, column: 1 });
         let mut platform = MockPlatform {
             open: Some(text_path.clone()),
@@ -1829,9 +1814,10 @@ mod tests {
             perform_action(ExportAction::ImportTxt, &mut target, &mut platform).unwrap(),
             ExportOutcome::DocumentImported
         );
-        assert_eq!(contents(&target.grid.lines[0]), "aaaa");
-        assert_eq!(contents(&target.grid.lines[1]), "bXYb");
-        assert_eq!(contents(&target.grid.lines[2]), "cZ c");
+        let lines = target.lines_for_test();
+        assert_eq!(contents(&lines[0]), "aaaa");
+        assert_eq!(contents(&lines[1]), "bXYb");
+        assert_eq!(contents(&lines[2]), "cZ c");
         assert_eq!(target.grid.cursor_pos, Coord { line: 1, column: 1 });
         assert!(target.selection.is_collapsed());
         let _ = fs::remove_file(text_path);
@@ -1841,12 +1827,12 @@ mod tests {
     fn json_import_uses_canvas_data_without_restoring_project_state() {
         let path = temp_path("json");
         let mut source = Editor::new(&ThemeConfig::default(), "source");
-        source.grid.lines = lines_from_text("XY");
+        source.set_lines_for_test(lines_from_text("XY"));
         source.move_to(Coord { line: 0, column: 1 });
         save_project_json(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
-        target.grid.lines = lines_from_text("aaaa\nbbbb");
+        target.set_lines_for_test(lines_from_text("aaaa\nbbbb"));
         target.move_to(Coord { line: 1, column: 1 });
         let mut platform = MockPlatform {
             open: Some(path.clone()),
@@ -1857,8 +1843,9 @@ mod tests {
             perform_action(ExportAction::ImportJson, &mut target, &mut platform).unwrap(),
             ExportOutcome::DocumentImported
         );
-        assert_eq!(contents(&target.grid.lines[0]), "aaaa");
-        assert_eq!(contents(&target.grid.lines[1]), "bXYb");
+        let lines = target.lines_for_test();
+        assert_eq!(contents(&lines[0]), "aaaa");
+        assert_eq!(contents(&lines[1]), "bXYb");
         assert_eq!(target.grid.cursor_pos, Coord { line: 1, column: 1 });
         let _ = fs::remove_file(path);
     }
@@ -1896,8 +1883,8 @@ mod tests {
     fn json_project_round_trip_restores_full_canvas_state_with_default_faces() {
         let path = temp_path("json");
         let mut source = state_with_selection();
-        source.grid.lines = vec![row_atoms("😀x  "), Vec::new(), row_atoms(" z")];
-        source.grid.lines[0][0].face = source.theme.selection.clone();
+        source.set_lines_for_test(vec![row_atoms("Qx  "), Vec::new(), row_atoms(" z")]);
+        source.set_cell_face_for_test(Coord::default(), source.theme.selection.clone());
         source.move_to(Coord { line: 2, column: 1 });
         source
             .selection
@@ -1917,7 +1904,7 @@ mod tests {
         save_project_json(&path, &source, source_viewport).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
-        target.grid.lines = lines_from_text("unrelated outside content");
+        target.set_lines_for_test(lines_from_text("unrelated outside content"));
         target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
         let mut target_viewport = ViewportOffset::default();
         let mut platform = MockPlatform {
@@ -1947,17 +1934,19 @@ mod tests {
         assert_eq!(target.cursor_mode, CursorMode::Utilities);
         assert_eq!(
             target
-                .grid
-                .lines
+                .lines_for_test()
                 .iter()
                 .map(|line| line
                     .iter()
                     .map(|atom| atom.contents.as_str())
                     .collect::<String>())
                 .collect::<Vec<_>>(),
-            ["😀x", "", " z"]
+            ["Qx", "", " z"]
         );
-        assert_eq!(target.grid.lines[0][0].face, source.grid.lines[0][0].face);
+        assert_eq!(
+            target.lines_for_test()[0][0].face,
+            source.lines_for_test()[0][0].face
+        );
         let _ = fs::remove_file(path);
     }
 

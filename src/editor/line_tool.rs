@@ -148,7 +148,6 @@ impl Editor {
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
-        self.refresh_active_dense_view();
     }
 
     pub(super) fn cell_contents(&self, coord: Coord) -> Option<&str> {
@@ -191,7 +190,6 @@ impl Editor {
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
-        self.refresh_active_dense_view();
         Some(contents)
     }
 
@@ -236,7 +234,6 @@ impl Editor {
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
-        self.refresh_active_dense_view();
     }
 
     pub(super) fn write_diagonal_cell(
@@ -265,7 +262,6 @@ impl Editor {
         self.canvas
             .set_at(coord, atom, &face)
             .expect("diagonal glyphs occupy one sparse cell");
-        self.refresh_active_dense_view();
         true
     }
 

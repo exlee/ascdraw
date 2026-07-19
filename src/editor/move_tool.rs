@@ -2,9 +2,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::{LayerMap, LayerStack, LineData};
 use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
-use crate::selection::{
-    CanvasSelection, SelectionBounds, TextRectangle, overwrite_rectangle, replace_range,
-};
+use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
 
 use super::{EditSnapshot, Editor, PlacedLineMarker};
 
@@ -29,8 +27,6 @@ struct LiftedLayer {
     id: LayerId,
     edited_atoms: Vec<LiftedAtom>,
     markers: Vec<PlacedLineMarker>,
-    #[cfg(test)]
-    rendered_lines: Vec<Vec<Atom>>,
 }
 
 #[derive(Debug, Clone)]
@@ -222,7 +218,6 @@ impl Editor {
             apply_sparse_move(map, source_origin, &destinations, layer);
             changed |= *map != before;
         });
-        self.refresh_active_dense_view();
         changed
     }
 
@@ -240,32 +235,20 @@ impl Editor {
             .map(|lift| lift.rectangle.bounds_at(lift.origin))
     }
 
-    pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<crate::model::Atom>>> {
-        #[cfg(not(test))]
-        return None;
-        #[cfg(test)]
-        self.move_lift_render_lines().map(<[_]>::to_vec)
+    #[cfg(test)]
+    pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<Atom>>> {
+        self.move_lift_render_canvas()
+            .map(LayerStack::active_dense_lines)
     }
 
-    pub(super) fn move_lift_render_lines(&self) -> Option<&[Vec<crate::model::Atom>]> {
-        #[cfg(not(test))]
-        return None;
-        #[cfg(test)]
-        self.move_lift_render_lines_for_layer(self.active_layer_id())
-    }
-
-    pub(crate) fn move_lift_render_lines_for_layer(
-        &self,
-        id: LayerId,
-    ) -> Option<&[Vec<crate::model::Atom>]> {
-        #[cfg(not(test))]
-        return None;
-        #[cfg(test)]
-        self.move_lift.as_ref().and_then(|lift| {
-            lift.layers
+    #[cfg(test)]
+    pub(crate) fn move_lift_render_lines_for_layer(&self, id: LayerId) -> Option<Vec<Vec<Atom>>> {
+        self.move_lift_render_canvas().and_then(|canvas| {
+            canvas
+                .layers()
                 .iter()
-                .find(|layer| layer.id == id)
-                .map(|layer| layer.rendered_lines.as_slice())
+                .find(|layer| layer.id == id && layer.visible)
+                .map(LayerMap::to_dense)
         })
     }
 
@@ -290,25 +273,10 @@ impl Editor {
                 apply_sparse_move(map, source_origin, &destinations, layer);
             }
         });
-        #[cfg(test)]
-        let contents = self.layer_contents();
         let lift = self
             .move_lift
             .as_mut()
             .expect("move lift remains active while composing");
-        #[cfg(test)]
-        for layer in &mut lift.layers {
-            let Some((_, lines, _)) = contents.iter().find(|(id, _, _)| *id == layer.id) else {
-                continue;
-            };
-            layer.rendered_lines = lines.clone();
-            compose_sparse_move(
-                &mut layer.rendered_lines,
-                source_origin,
-                &destinations,
-                &layer.edited_atoms,
-            );
-        }
         lift.rendered_canvas = Some(rendered_canvas);
     }
 
@@ -347,8 +315,6 @@ fn lifted_layer(
         id,
         edited_atoms,
         markers,
-        #[cfg(test)]
-        rendered_lines: Vec::new(),
     }
 }
 
@@ -439,29 +405,6 @@ fn lifted_atoms_cover(atoms: &[LiftedAtom], origin: Coord, coord: Coord) -> bool
                     .saturating_add(atom.width))
                 .contains(&coord.column)
     })
-}
-
-fn compose_sparse_move(
-    lines: &mut Vec<Vec<Atom>>,
-    source_origin: Coord,
-    destination_origins: &[Coord],
-    atoms: &[LiftedAtom],
-) {
-    for atom in atoms {
-        replace_range(lines, lifted_atom_bounds(source_origin, atom), None);
-    }
-    for destination_origin in destination_origins {
-        for atom in atoms {
-            overwrite_rectangle(
-                lines,
-                offset_origin(*destination_origin, atom.offset),
-                &TextRectangle {
-                    rows: vec![vec![atom.atom.clone()]],
-                    width: atom.width,
-                },
-            );
-        }
-    }
 }
 
 fn move_lift_destinations(lift: &MoveLift) -> Vec<Coord> {

@@ -1,6 +1,8 @@
 use crate::app::CursorMode;
 use crate::drawing::{LineEnding, is_line_glyph};
-use crate::model::{Atom, Coord, Direction};
+#[cfg(test)]
+use crate::model::Atom;
+use crate::model::{Coord, Direction};
 use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
 
@@ -24,8 +26,6 @@ pub(super) struct LinePreview {
     pub(super) source_cursor: Coord,
     pub(super) source_selection: CanvasSelection,
     pub(super) source_canvas_origin: Coord,
-    #[cfg(test)]
-    rendered_lines: Vec<Vec<Atom>>,
     rendered_canvas: crate::canvas::LayerStack,
     prepended_columns: usize,
     prepended_lines: usize,
@@ -129,8 +129,6 @@ impl Editor {
             source_cursor: self.grid.cursor_pos,
             source_selection,
             source_canvas_origin: self.canvas_origin,
-            #[cfg(test)]
-            rendered_lines: self.grid.lines.clone(),
             rendered_canvas: self.canvas.clone(),
             prepended_columns: 0,
             prepended_lines: 0,
@@ -199,10 +197,6 @@ impl Editor {
         };
         if preview.segments.is_empty() {
             let preview = self.line_preview.take().expect("preview exists");
-            #[cfg(test)]
-            {
-                self.grid.lines = preview.source_canvas.active_dense_lines();
-            }
             self.canvas = preview.source_canvas;
             self.grid.cursor_pos = preview.source_cursor;
             self.selection = preview.source_selection;
@@ -221,28 +215,11 @@ impl Editor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<Atom>>> {
-        #[cfg(test)]
-        {
-            return self
-                .line_preview
-                .as_ref()
-                .map(|preview| preview.rendered_lines.clone());
-        }
-        #[cfg(not(test))]
-        None
-    }
-
-    pub(super) fn line_preview_render_lines(&self) -> Option<&[Vec<Atom>]> {
-        #[cfg(test)]
-        {
-            return self
-                .line_preview
-                .as_ref()
-                .map(|preview| preview.rendered_lines.as_slice());
-        }
-        #[cfg(not(test))]
-        None
+        self.line_preview
+            .as_ref()
+            .map(|preview| preview.rendered_canvas.active_dense_lines())
     }
 
     pub(crate) fn line_preview_render_canvas(&self) -> Option<&crate::canvas::LayerStack> {
@@ -256,10 +233,6 @@ impl Editor {
             return;
         };
         if let Some(preview) = self.line_preview.as_mut() {
-            #[cfg(test)]
-            {
-                preview.rendered_lines = composed.grid.lines.clone();
-            }
             preview.rendered_canvas = composed.canvas;
         }
     }
@@ -269,10 +242,6 @@ impl Editor {
             return false;
         };
         let changed = self.canvas != composed.canvas;
-        #[cfg(test)]
-        {
-            self.grid.lines = composed.grid.lines;
-        }
         self.grid.cursor_pos = composed.grid.cursor_pos;
         self.selection.collapse(self.grid.cursor_pos);
         self.canvas = composed.canvas;
@@ -306,10 +275,6 @@ impl Editor {
         }
         for _ in 0..columns {
             composed.canvas.prepend_column_in_all_layers();
-        }
-        #[cfg(test)]
-        {
-            composed.grid.lines = composed.canvas.active_dense_lines();
         }
         composed.canvas_origin = Coord {
             line: preview.source_canvas_origin.line.saturating_add(lines),
@@ -376,10 +341,6 @@ impl Editor {
             );
         }
         composed.end_stroke();
-        #[cfg(test)]
-        {
-            composed.grid.lines = composed.canvas.active_dense_lines();
-        }
         Some(composed)
     }
 }
@@ -530,7 +491,7 @@ mod tests {
                 .lines_with_line_preview()
                 .expect("active route is rendered");
             assert!(state.start_or_advance_line_preview());
-            assert_eq!(state.grid.lines, preview);
+            assert_eq!(state.lines_for_test(), preview);
         }
     }
 
@@ -540,7 +501,7 @@ mod tests {
         state.start_or_advance_line_preview();
         state.move_line_preview_to(Coord { line: 2, column: 3 });
         assert!(state.start_or_advance_line_preview());
-        let first_segment = state.grid.lines.clone();
+        let first_segment = state.lines_for_test();
 
         state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 3,
@@ -558,7 +519,7 @@ mod tests {
         );
 
         assert!(state.cancel_line_preview());
-        assert_eq!(state.grid.lines, first_segment);
+        assert_eq!(state.lines_for_test(), first_segment);
     }
 
     #[test]
@@ -575,8 +536,7 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, target);
         assert!(
             state
-                .grid
-                .lines
+                .lines_for_test()
                 .iter()
                 .flatten()
                 .any(|atom| atom.contents == "╲")
@@ -676,7 +636,7 @@ mod tests {
         }));
 
         assert!(state.start_or_advance_line_preview());
-        assert_eq!(state.grid.lines, preview);
+        assert_eq!(state.lines_for_test(), preview);
         assert_eq!(state.line_markers_for_test().len(), 2);
         assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
         assert_eq!(state.line_markers_for_test()[1].coord, target);
@@ -729,7 +689,7 @@ mod tests {
         );
 
         assert!(state.start_or_advance_line_preview());
-        assert_eq!(state.grid.lines, preview);
+        assert_eq!(state.lines_for_test(), preview);
         assert_eq!(state.line_markers_for_test().len(), 2);
         assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
         assert_eq!(

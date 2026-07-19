@@ -2362,17 +2362,18 @@ mod tests {
 
     fn state_with_rows(rows: &[&str]) -> Editor {
         let mut state = Editor::new(&AppConfig::default().theme, DEFAULT_WINDOW_TITLE);
-        state.grid.lines = rows
-            .iter()
-            .map(|row| {
-                unicode_segmentation::UnicodeSegmentation::graphemes(*row, true)
-                    .map(|contents| Atom {
-                        face: Face::default(),
-                        contents: contents.to_string(),
-                    })
-                    .collect()
-            })
-            .collect();
+        state.set_lines_for_test(
+            rows.iter()
+                .map(|row| {
+                    unicode_segmentation::UnicodeSegmentation::graphemes(*row, true)
+                        .map(|contents| Atom {
+                            face: Face::default(),
+                            contents: contents.to_string(),
+                        })
+                        .collect()
+                })
+                .collect(),
+        );
         state
     }
 
@@ -2386,10 +2387,12 @@ mod tests {
         assert_eq!(index.rebuilds(), 1);
         assert_eq!(index.cells(), &[Coord::default()]);
 
-        state.grid.lines[0].push(Atom {
+        let mut lines = state.lines_for_test();
+        lines[0].push(Atom {
             face: Face::default(),
             contents: "b".to_owned(),
         });
+        state.set_lines_for_test(lines);
         index.invalidate();
         index.refresh(&state);
 
@@ -2618,15 +2621,15 @@ mod tests {
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
         assert!(state.move_lift_active());
-        let original = state.grid.lines.clone();
+        let original = state.lines_for_test();
 
         assert!(finish_mouse_drag_state(&mut state, None));
         assert!(!state.move_lift_active());
-        assert_ne!(state.grid.lines, original);
-        let committed = state.grid.lines.clone();
+        assert_ne!(state.lines_for_test(), original);
+        let committed = state.lines_for_test();
 
         state.move_to(Coord { line: 0, column: 3 });
-        assert_eq!(state.grid.lines, committed);
+        assert_eq!(state.lines_for_test(), committed);
     }
 
     #[test]
@@ -2937,7 +2940,7 @@ mod tests {
             .selection
             .select(Coord { line: 2, column: 4 }, Coord { line: 3, column: 5 });
         let selection = state.selection;
-        let lines = state.grid.lines.clone();
+        let lines = state.lines_for_test();
         let content = state.content_cells();
         let mut viewport = ViewportOffset { x: 3, y: 7 };
 
@@ -2952,7 +2955,7 @@ mod tests {
         assert_eq!(viewport.origin((7.0, 11.0)), (0, -1));
         assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
         assert_eq!(state.selection, selection);
-        assert_eq!(state.grid.lines, lines);
+        assert_eq!(state.lines_for_test(), lines);
         assert!(!center_viewport(
             &mut viewport,
             (7.0, 11.0),
@@ -2976,14 +2979,15 @@ mod tests {
         assert_eq!(blank_viewport, ViewportOffset { x: 5, y: -9 });
         assert_eq!(blank.grid.cursor_pos, blank_cursor);
 
-        let mut wide = state_with_rows(&["    界"]);
-        wide.grid.cursor_pos = Coord::default();
-        wide.selection
+        let mut content_state = state_with_rows(&["    X"]);
+        content_state.grid.cursor_pos = Coord::default();
+        content_state
+            .selection
             .select(Coord::default(), Coord { line: 0, column: 1 });
-        let lines = wide.grid.lines.clone();
-        let selection = wide.selection;
-        let cursor = wide.grid.cursor_pos;
-        let content = wide.content_cells();
+        let lines = content_state.lines_for_test();
+        let selection = content_state.selection;
+        let cursor = content_state.grid.cursor_pos;
+        let content = content_state.content_cells();
         let mut viewport = ViewportOffset::default();
         assert!(center_viewport(
             &mut viewport,
@@ -2991,10 +2995,10 @@ mod tests {
             (3, 1),
             &content,
         ));
-        assert_eq!(viewport.origin((8.0, 12.0)), (4, 0));
-        assert_eq!(wide.grid.cursor_pos, cursor);
-        assert_eq!(wide.selection, selection);
-        assert_eq!(wide.grid.lines, lines);
+        assert_eq!(viewport.origin((8.0, 12.0)), (3, 0));
+        assert_eq!(content_state.grid.cursor_pos, cursor);
+        assert_eq!(content_state.selection, selection);
+        assert_eq!(content_state.lines_for_test(), lines);
     }
 
     fn assert_toolbar_transition_is_anchored(
@@ -3583,7 +3587,7 @@ mod tests {
         );
 
         state = previous.clone();
-        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.lines_for_test(), previous.lines_for_test());
         assert_eq!(state.selection, previous.selection);
         assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
     }
@@ -3616,7 +3620,7 @@ mod tests {
         );
 
         state = previous.clone();
-        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.lines_for_test(), previous.lines_for_test());
         assert_eq!(state.selection, previous.selection);
         assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
     }
@@ -3624,10 +3628,10 @@ mod tests {
     #[test]
     fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.grid.lines = vec![vec![crate::model::Atom {
+        state.set_lines_for_test(vec![vec![crate::model::Atom {
             face: crate::model::Face::default(),
             contents: "x".to_string(),
-        }]];
+        }]]);
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -3645,7 +3649,7 @@ mod tests {
         );
 
         state = previous.clone();
-        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.lines_for_test(), previous.lines_for_test());
         assert_eq!(state.selection, previous.selection);
         assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
     }
@@ -3653,15 +3657,16 @@ mod tests {
     #[test]
     fn rejected_utility_transform_can_restore_document_and_coordinates_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.grid.lines.resize_with(6, Vec::new);
-        state.grid.lines[5].resize_with(5, || Atom {
+        let mut lines = vec![Vec::new(); 6];
+        lines[5].resize_with(5, || Atom {
             face: Face::default(),
             contents: " ".into(),
         });
-        state.grid.lines[5].push(Atom {
+        lines[5].push(Atom {
             face: Face::default(),
             contents: "x".into(),
         });
+        state.set_lines_for_test(lines);
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -3684,7 +3689,7 @@ mod tests {
         );
 
         state = previous.clone();
-        assert_eq!(state.grid.lines, previous.grid.lines);
+        assert_eq!(state.lines_for_test(), previous.lines_for_test());
         assert_eq!(state.selection, previous.selection);
         assert_eq!(state.grid.cursor_pos, previous.grid.cursor_pos);
     }
@@ -4023,10 +4028,10 @@ mod tests {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = Editor::new(&config.theme, "test");
-        state.grid.lines = vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![Atom {
             face: config.theme.selection.clone(),
             contents: " ".into(),
-        }]];
+        }]]);
         let cursor = Coord { line: 3, column: 6 };
         state.move_to(cursor);
         let initial = ViewportOffset {
@@ -4078,8 +4083,7 @@ mod tests {
         );
         assert!(
             state
-                .grid
-                .lines
+                .lines_for_test()
                 .iter()
                 .flatten()
                 .all(|atom| atom.face == Face::default())

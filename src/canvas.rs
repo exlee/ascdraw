@@ -211,15 +211,6 @@ impl LayerMap {
         self.take_line_at(coord).is_some()
     }
 
-    pub(crate) fn remap_line_data(&mut self, mut map: impl FnMut(Coord) -> Option<Coord>) {
-        let markers = self
-            .line_markers()
-            .into_iter()
-            .filter_map(|marker| map(marker.coord).map(|coord| LineMarker { coord, ..marker }))
-            .collect::<Vec<_>>();
-        self.replace_line_markers(&markers);
-    }
-
     fn replace_line_markers(&mut self, markers: &[LineMarker]) {
         for row in self.rows.values_mut() {
             for data in row.values_mut() {
@@ -266,6 +257,7 @@ impl LayerMap {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
         let Some((line, column)) = coord_i16(coord) else {
             return false;
@@ -283,10 +275,6 @@ impl LayerMap {
         data.atom = Rc::new(atom);
         *data.raster_cache.borrow_mut() = None;
         true
-    }
-
-    pub fn matches_dense(&self, lines: &[Vec<Atom>]) -> bool {
-        Self::from_dense(self.id, self.visible, lines).is_ok_and(|dense| dense == *self)
     }
 
     pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<Atom>> {
@@ -355,7 +343,6 @@ impl LayerMap {
                 .context("insert exceeds signed canvas range")?;
             self.set_at(target, y, atom, &face)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -381,7 +368,6 @@ impl LayerMap {
                 self.rows.insert(y, shifted);
             }
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -419,10 +405,6 @@ impl LayerMap {
         if !remainder.is_empty() {
             self.rows.insert(next_y, remainder);
         }
-        let width = self.row_width(line);
-        let split = column.min(width);
-        let _ = split;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -444,7 +426,6 @@ impl LayerMap {
                 .collect();
         }
         let _ = height;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -463,7 +444,6 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -493,7 +473,6 @@ impl LayerMap {
                 }
             }
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -525,7 +504,6 @@ impl LayerMap {
                 }
             }
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -545,7 +523,6 @@ impl LayerMap {
                 )
             })
             .collect();
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -565,7 +542,6 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -592,7 +568,6 @@ impl LayerMap {
             .into_iter()
             .map(|(row_y, row)| (if row_y > next_y { row_y - 1 } else { row_y }, row))
             .collect();
-        self.recalculate_bounds();
         Ok(true)
     }
 
@@ -611,7 +586,6 @@ impl LayerMap {
                 }
             }
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -637,7 +611,6 @@ impl LayerMap {
                 self.set_at(x, y, atom.clone(), &atom.face)?;
             }
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -701,7 +674,6 @@ impl LayerMap {
             .into_iter()
             .map(|(line, row)| (line.saturating_add(1), row))
             .collect();
-        self.recalculate_bounds();
     }
 
     fn prepend_column(&mut self) {
@@ -711,7 +683,6 @@ impl LayerMap {
                 .map(|(column, data)| (column.saturating_add(1), data))
                 .collect();
         }
-        self.recalculate_bounds();
     }
 
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
@@ -725,8 +696,6 @@ impl LayerMap {
     fn set_data(&mut self, y: i16, x: i16, data: CoordData) {
         self.rows.entry(y).or_default().insert(x, data);
     }
-
-    fn recalculate_bounds(&mut self) {}
 
     pub fn to_dense(&self) -> Vec<Vec<Atom>> {
         let height = self
@@ -816,7 +785,6 @@ impl LayerStack {
     pub(crate) fn set_at(&mut self, coord: Coord, atom: Atom, face: &Face) -> Result<()> {
         let (line, column) = coord_i16(coord).context("canvas coordinate exceeds signed range")?;
         self.layers[self.active].set_at(column, line, atom, face)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -825,6 +793,7 @@ impl LayerStack {
         self.layers[self.active].get(line, column)
     }
 
+    #[cfg(test)]
     pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
         self.layers[self.active].set_face_at(coord, face)
     }
@@ -833,11 +802,7 @@ impl LayerStack {
         let Some((line, column)) = coord_i16(coord) else {
             return false;
         };
-        let deleted = self.layers[self.active].delete_at(column, line);
-        if deleted {
-            self.recalculate_bounds();
-        }
-        deleted
+        self.layers[self.active].delete_at(column, line)
     }
 
     pub(crate) fn insert_cells(
@@ -847,28 +812,25 @@ impl LayerStack {
         cells: Vec<(Atom, Face)>,
     ) -> Result<()> {
         self.layers[self.active].insert_cells(line, column, cells)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
     pub(crate) fn remove_cells(&mut self, line: usize, column: usize, count: usize) -> Result<()> {
         self.layers[self.active].remove_cells(line, column, count)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
     pub(crate) fn split_row(&mut self, line: usize, column: usize) -> Result<()> {
         self.layers[self.active].split_row(line, column)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
     pub(crate) fn join_row_with_next(&mut self, line: usize) -> Result<bool> {
         let joined = self.layers[self.active].join_row_with_next(line)?;
-        self.recalculate_bounds();
         Ok(joined)
     }
 
+    #[cfg(test)]
     pub(crate) fn active_dense_lines(&self) -> Vec<Vec<Atom>> {
         self.layers[self.active].to_dense()
     }
@@ -879,7 +841,6 @@ impl LayerStack {
         replacement: Option<(Atom, Face)>,
     ) -> Result<()> {
         self.layers[self.active].replace_bounds(bounds, replacement)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -887,7 +848,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.replace_bounds(bounds, None)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -899,7 +859,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.insert_column(column, height)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -907,7 +866,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.insert_row(line)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -919,7 +877,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.pull_column_left(column, affected)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -931,7 +888,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.pull_column_right(column, affected)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -939,7 +895,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.remove_row(line)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -947,7 +902,6 @@ impl LayerStack {
         for layer in &mut self.layers {
             layer.remove_row_and_prepend_blank(line)?;
         }
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -957,7 +911,6 @@ impl LayerStack {
         rectangle: &TextRectangle,
     ) -> Result<()> {
         self.layers[self.active].overwrite_rectangle(origin, rectangle)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -989,10 +942,6 @@ impl LayerStack {
 
     pub(crate) fn remove_line_at(&mut self, coord: Coord) -> bool {
         self.layers[self.active].remove_line_at(coord)
-    }
-
-    pub(crate) fn remap_active_line_data(&mut self, map: impl FnMut(Coord) -> Option<Coord>) {
-        self.layers[self.active].remap_line_data(map);
     }
 
     pub fn summaries(&self) -> Vec<LayerSummary> {
@@ -1028,12 +977,7 @@ impl LayerStack {
         self.enabled = enabled;
     }
 
-    pub(crate) fn commit_active(&mut self, lines: &[Vec<Atom>]) -> Result<()> {
-        let layer = &self.layers[self.active];
-        let markers = layer.line_markers();
-        self.commit_active_with_markers(lines, &markers)
-    }
-
+    #[cfg(test)]
     pub(crate) fn commit_active_with_markers(
         &mut self,
         lines: &[Vec<Atom>],
@@ -1042,7 +986,6 @@ impl LayerStack {
         let layer = &self.layers[self.active];
         self.layers[self.active] =
             LayerMap::from_dense_with_markers(layer.id, layer.visible, lines, markers)?;
-        self.recalculate_bounds();
         Ok(())
     }
 
@@ -1065,7 +1008,6 @@ impl LayerStack {
         let new_index = index + 1;
         self.layers.insert(new_index, LayerMap::new(id, true));
         self.active = new_index;
-        self.recalculate_bounds();
         Ok(Some(id))
     }
 
@@ -1128,7 +1070,6 @@ impl LayerStack {
         self.layers[target] =
             LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
         self.active = target;
-        self.recalculate_bounds();
         Ok(true)
     }
 
@@ -1142,80 +1083,25 @@ impl LayerStack {
         } else if index < self.active {
             self.active -= 1;
         }
-        self.recalculate_bounds();
         true
-    }
-
-    pub(crate) fn for_each_layer_dense_mut(
-        &mut self,
-        active_lines: &mut Vec<Vec<Atom>>,
-        mut apply: impl FnMut(LayerId, &mut Vec<Vec<Atom>>, &mut Vec<LineMarker>),
-    ) -> Result<()> {
-        self.commit_active(active_lines)?;
-        let active_id = self.active_id();
-        for layer in &mut self.layers {
-            let mut lines = layer.to_dense();
-            let mut markers = layer.line_markers();
-            apply(layer.id, &mut lines, &mut markers);
-            *layer = LayerMap::from_dense_with_markers(layer.id, layer.visible, &lines, &markers)?;
-            if layer.id == active_id {
-                *active_lines = lines;
-            }
-        }
-        self.recalculate_bounds();
-        Ok(())
-    }
-
-    pub(crate) fn for_each_layer_mut(
-        &mut self,
-        active_lines: &[Vec<Atom>],
-        mut apply: impl FnMut(LayerId, &mut LayerMap),
-    ) -> Result<()> {
-        self.commit_active(active_lines)?;
-        for layer in &mut self.layers {
-            apply(layer.id, layer);
-        }
-        self.recalculate_bounds();
-        Ok(())
     }
 
     pub(crate) fn mutate_layers(&mut self, mut apply: impl FnMut(LayerId, &mut LayerMap)) {
         for layer in &mut self.layers {
             apply(layer.id, layer);
         }
-        self.recalculate_bounds();
-    }
-
-    pub(crate) fn prepend_line_to_inactive(&mut self) {
-        for (index, layer) in self.layers.iter_mut().enumerate() {
-            if index != self.active {
-                layer.prepend_line();
-            }
-        }
-        self.recalculate_bounds();
     }
 
     pub(crate) fn prepend_line_in_all_layers(&mut self) {
         for layer in &mut self.layers {
             layer.prepend_line();
         }
-        self.recalculate_bounds();
-    }
-
-    pub(crate) fn prepend_column_to_inactive(&mut self) {
-        for (index, layer) in self.layers.iter_mut().enumerate() {
-            if index != self.active {
-                layer.prepend_column();
-            }
-        }
-        self.recalculate_bounds();
     }
 
     pub(crate) fn prepend_column_in_all_layers(&mut self) {
         for layer in &mut self.layers {
             layer.prepend_column();
         }
-        self.recalculate_bounds();
     }
 
     pub(crate) fn clear_contents(&mut self) {
@@ -1223,13 +1109,6 @@ impl LayerStack {
             *layer = LayerMap::new(layer.id, layer.visible);
         }
     }
-
-    pub(crate) fn reset(&mut self) {
-        *self = Self::new(vec![LayerMap::new(LayerId(0), true)], self.enabled)
-            .expect("the default stack has a base layer");
-    }
-
-    pub fn recalculate_bounds(&mut self) {}
 
     pub fn bounds(&self) -> Option<LayerBounds> {
         combined_bounds(&self.layers)
@@ -1243,6 +1122,7 @@ impl LayerStack {
         }
     }
 
+    #[cfg(test)]
     pub fn at(&self, line: i16, column: i16) -> Raster {
         let layers = if self.enabled {
             self.layers.as_slice()

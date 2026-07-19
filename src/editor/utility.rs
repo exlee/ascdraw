@@ -66,7 +66,6 @@ impl Editor {
         self.canvas
             .insert_column_in_all_layers(column, height)
             .expect("inserted column fits the sparse canvas");
-        self.refresh_active_dense_view();
         self.map_global_coordinate_state(|mut coord| {
             if coord.column >= column {
                 coord.column = coord.column.saturating_add(1);
@@ -84,7 +83,6 @@ impl Editor {
         self.canvas
             .insert_row_in_all_layers(line)
             .expect("inserted row fits the sparse canvas");
-        self.refresh_active_dense_view();
         self.map_global_coordinate_state(|mut coord| {
             if coord.line >= line {
                 coord.line = coord.line.saturating_add(1);
@@ -129,7 +127,6 @@ impl Editor {
         self.canvas
             .pull_column_left_in_all_layers(column, &removed)
             .expect("pulled columns fit the sparse canvas");
-        self.refresh_active_dense_view();
         self.remap_after_pull(
             |coord| removed.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -173,7 +170,6 @@ impl Editor {
         self.canvas
             .pull_column_right_in_all_layers(column, &affected)
             .expect("pulled columns fit the sparse canvas");
-        self.refresh_active_dense_view();
         self.remap_after_pull(
             |coord| affected.get(coord.line).copied().unwrap_or(false) && coord.column == column,
             |mut coord| {
@@ -199,7 +195,6 @@ impl Editor {
         self.canvas
             .remove_row_in_all_layers(target)
             .expect("pulled rows fit the sparse canvas");
-        self.refresh_active_dense_view();
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {
@@ -253,7 +248,6 @@ impl Editor {
         self.canvas
             .remove_row_and_prepend_blank_in_all_layers(target)
             .expect("pulled rows fit the sparse canvas");
-        self.refresh_active_dense_view();
         self.remap_after_pull(
             |coord| coord.line == target,
             |mut coord| {

@@ -86,9 +86,9 @@ impl Editor {
                 .set_at(coord, atom, &face)
                 .expect("shape glyphs occupy one sparse cell");
         }
-        self.refresh_active_dense_view();
     }
 
+    #[cfg(test)]
     pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
         #[cfg(not(test))]
         return None;

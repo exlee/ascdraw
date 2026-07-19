@@ -66,7 +66,6 @@ impl Editor {
                 self.newline_sparse();
             }
         }
-        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
@@ -150,7 +149,6 @@ impl Editor {
                 self.newline_sparse();
             }
         }
-        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
@@ -161,7 +159,6 @@ impl Editor {
             return;
         }
         self.newline_sparse();
-        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
@@ -198,7 +195,6 @@ impl Editor {
             self.grid.cursor_pos.line = previous;
             self.grid.cursor_pos.column = join_column;
         }
-        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 
@@ -220,7 +216,6 @@ impl Editor {
                 .join_row_with_next(line)
                 .expect("joined text rows fit the sparse canvas");
         }
-        self.refresh_active_dense_view();
         self.collapse_selection();
     }
 }
