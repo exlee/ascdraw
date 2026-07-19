@@ -138,10 +138,17 @@ module FpsBenchmark
     end
 
     client.request(command: "key", key: "i", count: 1)
-    character = false
+    characters = "□■▫▪◆◊·∙•●△▽◁▷▲▼◀▶↑↓░▒▓█▘▝▖▗▌▐▞▚▛▜α×▪+ø◦◯Øø╳╱╲÷×±←→▵▿◃▹▴▾◂▸▙▟▀▄█β▪↓+ø¤◇☆★※↕↔▏▎▍▋▊▉▔δ▪↑↓+ø▁▂▃▅▆▇▕γ▪↑+ø".chars
+    character_index = 0
+    inserts = 0
     reports << measure(client, "#{name_prefix}text", warmup, operations) do
-      character = !character
-      client.request(command: "text", text: character ? "x" : " ")
+      client.request(command: "text", text: characters[character_index])
+      character_index = (character_index + 1) % characters.length
+      inserts += 1
+      if (inserts % 10).zero?
+        client.request(command: "key", key: "left", count: 10)
+        client.request(command: "key", key: "down", count: 1)
+      end
     end
 
     client.request(command: "key", key: "escape", count: 1)
