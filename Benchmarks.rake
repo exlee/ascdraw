@@ -49,26 +49,41 @@ module FpsBenchmark
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|
-        pid = Process.spawn(
-          "target/release/ascdraw",
-          "--automation-socket",
-          socket_path,
-          document_path,
-          out: log,
-          err: [:child, :out],
+        reports = run_editor(socket_path, document_path, log) do |client|
+          run_scenarios(client, warmup, operations)
+        end
+        reports.concat(
+          run_editor(socket_path, document_path, log) do |client|
+            run_scenarios(client, warmup, operations, "saved-file-")
+          end,
         )
-        client = nil
+        write_reports(report_dir, reports, warmup, operations, fixture)
+        print_summary(reports, report_dir)
+      end
+    end
+  end
+
+  def run_editor(socket_path, document_path, log)
+    pid = Process.spawn(
+      "target/release/ascdraw",
+      "--automation-socket",
+      socket_path,
+      document_path,
+      out: log,
+      err: [:child, :out],
+    )
+    client = nil
+    begin
+      client = connect(socket_path, pid)
+      yield client
+    ensure
+      begin
+        client&.request(command: "shutdown")
+      ensure
+        client&.close
         begin
-          client = connect(socket_path, pid)
-          reports = run_scenarios(client, warmup, operations)
-          write_reports(report_dir, reports, warmup, operations, fixture)
-          print_summary(reports, report_dir)
-          client.request(command: "shutdown")
-          client.close
-          client = nil
           wait_for_exit(pid)
         ensure
-          client&.close
           stop_process(pid)
         end
       end
@@ -93,15 +108,15 @@ module FpsBenchmark
     end
   end
 
-  def run_scenarios(client, warmup, operations)
+  def run_scenarios(client, warmup, operations, name_prefix = "")
     reports = []
-    reports << measure(client, "scroll", warmup, operations) do
+    reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
       client.request(command: "scroll", x: 0.0, y: -1.0, steps: 1)
     end
 
     client.request(command: "key", key: "i", count: 1)
     character = false
-    reports << measure(client, "text", warmup, operations) do
+    reports << measure(client, "#{name_prefix}text", warmup, operations) do
       character = !character
       client.request(command: "text", text: character ? "x" : " ")
     end
@@ -109,7 +124,7 @@ module FpsBenchmark
     client.request(command: "key", key: "escape", count: 1)
     client.request(command: "key", key: "1", count: 1)
     client.request(command: "key", key: "2", count: 1)
-    reports << measure(client, "line", warmup, operations) do
+    reports << measure(client, "#{name_prefix}line", warmup, operations) do
       client.request(
         command: "key",
         key: "right",
@@ -155,11 +170,11 @@ module FpsBenchmark
   def print_summary(reports, report_dir)
     puts
     puts "FPS benchmark"
-    puts format("%-10s %10s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "event p95", ">8.33ms", ">16.67ms")
+    puts format("%-18s %10s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "event p95", ">8.33ms", ">16.67ms")
     reports.each do |report|
       metrics = report.fetch("metrics")
       puts format(
-        "%-10s %10.1f %10.2fms %10.2fms %9.1f%% %9.1f%%",
+        "%-18s %10.1f %10.2fms %10.2fms %9.1f%% %9.1f%%",
         report.fetch("scenario"),
         metrics.fetch("frame_rate"),
         metrics.dig("frames", "p95_ms"),
@@ -204,7 +219,7 @@ module FpsBenchmark
 end
 
 namespace :benchmark do
-  desc "Run native-window scrolling, text, and line-drawing FPS benchmarks"
+  desc "Run native-window FPS benchmarks before and after saving and reopening the active file"
   task fps: :build_release do
     FpsBenchmark.run
   end
