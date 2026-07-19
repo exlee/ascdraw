@@ -1819,6 +1819,7 @@ pub fn load_renderer(config: &AppConfig) -> Renderer {
 }
 
 impl Renderer {
+    #[cfg(debug_assertions)]
     pub fn rendered_atom_cache_usage(&self) -> (usize, usize, usize) {
         let cache = self.rendered_atom_cache.borrow();
         let bytes = cache

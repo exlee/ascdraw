@@ -165,6 +165,7 @@ pub struct EditorWindow {
     last_line_click: Option<(Instant, Coord)>,
     scroll_pan: ScrollPan,
     wheel_zoom_remainder: f64,
+    #[cfg(debug_assertions)]
     scroll_stats: ScrollStats,
     background: BackgroundSender,
     pub state: Editor,
@@ -240,6 +241,7 @@ impl ContentIndex {
     }
 }
 
+#[cfg(debug_assertions)]
 #[derive(Debug)]
 struct ScrollStats {
     enabled: bool,
@@ -256,6 +258,7 @@ struct ScrollStats {
     started: Instant,
 }
 
+#[cfg(debug_assertions)]
 #[derive(Clone, Copy, Debug)]
 struct ScrollStatsReport {
     scroll_events: u64,
@@ -270,6 +273,7 @@ struct ScrollStatsReport {
     minimap_time: Duration,
 }
 
+#[cfg(debug_assertions)]
 impl ScrollStats {
     fn new(enabled: bool, now: Instant) -> Self {
         Self {
@@ -344,6 +348,7 @@ impl ScrollStats {
     }
 }
 
+#[cfg(debug_assertions)]
 fn format_scroll_stats(report: ScrollStatsReport) -> String {
     let frames = report.redraws as f64;
     let milliseconds = |duration: Duration| duration.as_secs_f64() * 1_000.0 / frames;
@@ -748,23 +753,27 @@ impl EditorWindow {
     }
 
     pub fn note_scroll_event(&mut self) {
+        #[cfg(debug_assertions)]
         if let Some(report) = self.scroll_stats.note_scroll_event(Instant::now()) {
             self.background.debug_output(format_scroll_stats(report));
         }
     }
 
     pub fn note_redraw(&mut self) {
+        #[cfg(debug_assertions)]
         if let Some(report) = self.scroll_stats.note_redraw(Instant::now()) {
             self.background.debug_output(format_scroll_stats(report));
         }
     }
 
-    pub fn report_scroll_event_stats(&mut self, now: Instant) {
-        if let Some(report) = self.scroll_stats.advance(now) {
+    pub fn report_scroll_event_stats(&mut self, _now: Instant) {
+        #[cfg(debug_assertions)]
+        if let Some(report) = self.scroll_stats.advance(_now) {
             self.background.debug_output(format_scroll_stats(report));
         }
     }
 
+    #[cfg(debug_assertions)]
     pub fn report_render_cache_usage(&self) {
         let (bytes, used, capacity) = self.renderer.rendered_atom_cache_usage();
         self.background.debug_output(format!(
@@ -852,7 +861,10 @@ impl EditorWindow {
     }
 
     pub fn note_input_event(&mut self, duration: Duration) {
+        #[cfg(debug_assertions)]
         self.scroll_stats.note_input_event(duration);
+        #[cfg(not(debug_assertions))]
+        let _ = duration;
     }
 
     pub fn record_state_history_time(&mut self, started: Instant) {
@@ -864,6 +876,7 @@ impl EditorWindow {
     }
 
     pub fn record_present(&mut self, timing: FrameTiming, now: Instant) {
+        #[cfg(debug_assertions)]
         if let Some(report) = self.scroll_stats.note_frame(timing, now) {
             self.background.debug_output(format_scroll_stats(report));
         }
@@ -1985,7 +1998,7 @@ pub fn create_editor_window(
     elwt: &ActiveEventLoop,
     config: &AppConfig,
     document_session: &DocumentSession,
-    debug: bool,
+    _debug: bool,
     background: BackgroundSender,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
@@ -2050,7 +2063,8 @@ pub fn create_editor_window(
         last_line_click: None,
         scroll_pan: ScrollPan::default(),
         wheel_zoom_remainder: 0.0,
-        scroll_stats: ScrollStats::new(debug, Instant::now()),
+        #[cfg(debug_assertions)]
+        scroll_stats: ScrollStats::new(_debug, Instant::now()),
         background,
         state,
         renderer,

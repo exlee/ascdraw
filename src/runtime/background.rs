@@ -17,6 +17,7 @@ pub struct BackgroundWorker {
 pub struct BackgroundSender(Sender<Task>);
 
 enum Task {
+    #[cfg(debug_assertions)]
     DebugOutput(String),
     WriteAutosave {
         window_id: WindowId,
@@ -35,6 +36,7 @@ impl BackgroundWorker {
             .spawn(move || {
                 while let Ok(task) = receiver.recv() {
                     match task {
+                        #[cfg(debug_assertions)]
                         Task::DebugOutput(message) => println!("{message}"),
                         Task::WriteAutosave {
                             window_id,
@@ -95,6 +97,7 @@ impl Drop for BackgroundWorker {
 }
 
 impl BackgroundSender {
+    #[cfg(debug_assertions)]
     pub fn debug_output(&self, message: String) {
         let _ = self.0.send(Task::DebugOutput(message));
     }

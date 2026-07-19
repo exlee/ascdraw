@@ -91,7 +91,10 @@ fn main() -> ExitCode {
 #[allow(deprecated)]
 fn try_main() -> Result<ExitCode> {
     let args = Args::parse();
+    #[cfg(debug_assertions)]
     let debug = args.debug;
+    #[cfg(not(debug_assertions))]
+    let debug = false;
     let automation_socket = args.automation_socket;
     let automation_enabled = automation_socket.is_some();
     let mut config = load_config()?;
@@ -148,6 +151,7 @@ fn try_main() -> Result<ExitCode> {
     let mut frame_sequences = HashMap::<WindowId, u64>::new();
     let mut last_autosave_check = Instant::now();
     let mut last_tooltip_redraw = Instant::now();
+    #[cfg(debug_assertions)]
     let mut next_cache_report = Instant::now() + Duration::from_secs(3);
     #[cfg(target_os = "macos")]
     let mut installed_macos_menus = false;
@@ -231,6 +235,7 @@ fn try_main() -> Result<ExitCode> {
                     poll_user_config_updates(watch, &mut config, &mut user_keys, &mut windows);
                 }
                 let now = Instant::now();
+                #[cfg(debug_assertions)]
                 if debug && now >= next_cache_report {
                     for editor in windows.values() {
                         editor.report_render_cache_usage();
