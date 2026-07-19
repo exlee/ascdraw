@@ -1505,13 +1505,13 @@ impl EditorWindow {
             }
         };
         let position = self.canvas_position();
+        self.state.commit_canvas_mutations()?;
         let contents = match format {
             Some(FileKind::Txt) => plain_text(&self.state),
             Some(FileKind::Json) => project_json_contents(&self.state, self.viewport)?,
             Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
             None => document::contents(
-                &self.state.persisted_layers(),
-                self.state.active_layer_id(),
+                self.state.canvas(),
                 &self.state.toolbar.durable_selections(),
                 position,
             )?,
@@ -1565,7 +1565,9 @@ impl EditorWindow {
                 &mut stdout.lock(),
             );
         }
+        self.state.commit_canvas_mutations()?;
         let layers = self.state.persisted_layers();
+        let native_canvas = self.state.canvas().clone();
         let position = self.canvas_position();
         self.document_dirty |= position != self.saved_canvas_position;
         let path = self
@@ -1591,7 +1593,7 @@ impl EditorWindow {
             &layers,
             self.state.active_layer_id(),
             &self.state.toolbar.durable_selections(),
-            |path, layers, active_layer, menu_selections| match format {
+            |path, _layers, _active_layer, menu_selections| match format {
                 Some(FileKind::Txt) => std::fs::write(path, text.as_deref().unwrap_or_default())
                     .with_context(|| format!("failed to write {}", path.display())),
                 Some(FileKind::Json) => save_project_json(
@@ -1602,7 +1604,7 @@ impl EditorWindow {
                     viewport,
                 ),
                 Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
-                None => document::save(path, layers, active_layer, menu_selections, position),
+                None => document::save(path, &native_canvas, menu_selections, position),
             },
         )?;
         if saved {
@@ -1645,13 +1647,10 @@ impl EditorWindow {
         let mut restored_position = false;
         self.renderer.restore_zoom(0);
         if let Some(document) = document::load(&path)? {
-            let active_layer = document
-                .active_layer
-                .context("saved document has no active layer")?;
-            state.restore_layers(document.layers, active_layer)?;
             if let Some(selections) = document.menu_selections {
                 state.restore_menu_selections(&selections);
             }
+            state.restore_canvas(document.canvas);
             if let Some(position) = document.position {
                 state.restore_canvas_position(position.cursor, position.canvas_origin);
                 self.renderer.restore_zoom(position.zoom);
@@ -2028,13 +2027,10 @@ pub fn create_editor_window(
     match document_session {
         DocumentSession::Scratchpad(document_path) | DocumentSession::File(document_path) => {
             if let Some(document) = document::load(document_path)? {
-                let active_layer = document
-                    .active_layer
-                    .context("saved document has no active layer")?;
-                state.restore_layers(document.layers, active_layer)?;
                 if let Some(menu_selections) = document.menu_selections {
                     state.restore_menu_selections(&menu_selections);
                 }
+                state.restore_canvas(document.canvas);
                 if let Some(position) = document.position {
                     state.restore_canvas_position(position.cursor, position.canvas_origin);
                     renderer.restore_zoom(position.zoom);

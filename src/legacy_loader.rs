@@ -42,12 +42,12 @@ pub fn load_document(contents: &str) -> Result<Document> {
     for layer in &mut layers {
         layer.lines = normalize_lines(std::mem::take(&mut layer.lines))?;
     }
-    Ok(Document::new(
+    Document::new(
         layers,
         legacy.active_layer.unwrap_or(LayerId(0)),
         legacy.menu_selections,
         legacy.position,
-    ))
+    )
 }
 
 fn normalize_lines(lines: Vec<Vec<Atom>>) -> Result<Vec<Vec<Atom>>> {
@@ -83,7 +83,7 @@ mod tests {
             "lines": [[{"face": Face::default(), "contents": "abc"}]]
         });
         let loaded = load_document(&document.to_string()).unwrap();
-        assert_eq!(loaded.layers[0].lines[0].len(), 3);
+        assert_eq!(loaded.canvas.layers()[0].to_dense()[0].len(), 3);
 
         let wide = serde_json::json!({
             "version": 1,

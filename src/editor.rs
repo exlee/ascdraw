@@ -233,6 +233,15 @@ impl Editor {
         Ok(())
     }
 
+    pub fn restore_canvas(&mut self, mut canvas: crate::canvas::LayerStack) {
+        canvas.set_enabled(self.toolbar.multi_layer_mode());
+        self.toolbar.sync_layer_count(canvas.layers().len());
+        let active = &canvas.layers()[canvas.active_index()];
+        self.grid.lines = active.to_dense();
+        self.line_markers = active.line_markers();
+        self.canvas = canvas;
+    }
+
     pub fn canvas_origin(&self) -> Coord {
         self.canvas_origin
     }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::canvas::LayerMap;
+use crate::canvas::{LayerMap, LayerStack};
 use crate::editor::PersistedLayer;
 use crate::layout::ViewportOffset;
 use crate::model::{Atom, Coord, Face, LayerId};
@@ -35,8 +35,7 @@ impl RecentDocuments {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
-    pub layers: Vec<PersistedLayer>,
-    pub active_layer: Option<LayerId>,
+    pub canvas: LayerStack,
     pub menu_selections: Option<DurableMenuSelections>,
     pub position: Option<CanvasPosition>,
 }
@@ -86,13 +85,16 @@ impl Document {
         active_layer: LayerId,
         menu_selections: Option<DurableMenuSelections>,
         position: Option<CanvasPosition>,
-    ) -> Self {
-        Self {
-            layers,
-            active_layer: Some(active_layer),
+    ) -> Result<Self> {
+        let maps = layers
+            .into_iter()
+            .map(|layer| LayerMap::from_dense(layer.id, layer.visible, &layer.lines))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            canvas: LayerStack::with_active(maps, active_layer, true)?,
             menu_selections,
             position,
-        }
+        })
     }
 }
 
@@ -145,24 +147,18 @@ fn sparse_document(sparse: SparseDocument) -> Result<Document> {
             map.set_at(cell.column, cell.line, atom, &cell.face)?;
             map.set_line_data(cell.column, cell.line, cell.line_data);
         }
-        layers.push(PersistedLayer {
-            id: map.id,
-            visible: map.visible,
-            lines: map.to_dense(),
-        });
+        layers.push(map);
     }
-    Ok(Document::new(
-        layers,
-        sparse.active_layer,
-        sparse.menu_selections,
-        sparse.position,
-    ))
+    Ok(Document {
+        canvas: LayerStack::with_active(layers, sparse.active_layer, true)?,
+        menu_selections: sparse.menu_selections,
+        position: sparse.position,
+    })
 }
 
 pub fn save(
     path: &Path,
-    layers: &[PersistedLayer],
-    active_layer: LayerId,
+    canvas: &LayerStack,
     menu_selections: &DurableMenuSelections,
     position: CanvasPosition,
 ) -> Result<()> {
@@ -170,21 +166,20 @@ pub fn save(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let contents = contents(layers, active_layer, menu_selections, position)?;
+    let contents = contents(canvas, menu_selections, position)?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn contents(
-    layers: &[PersistedLayer],
-    active_layer: LayerId,
+    canvas: &LayerStack,
     menu_selections: &DurableMenuSelections,
     position: CanvasPosition,
 ) -> Result<String> {
-    let layers = layers
+    let layers = canvas
+        .layers()
         .iter()
         .map(|layer| {
-            let map = LayerMap::from_dense(layer.id, layer.visible, &layer.lines)?;
-            let cells = map
+            let cells = layer
                 .rows()
                 .iter()
                 .flat_map(|(&line, row)| {
@@ -197,17 +192,17 @@ pub fn contents(
                     })
                 })
                 .collect();
-            Ok(SparseLayer {
+            SparseLayer {
                 id: layer.id,
                 visible: layer.visible,
                 cells,
-            })
+            }
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
     serde_json::to_string_pretty(&SparseDocument {
         version: DOCUMENT_VERSION,
         layers,
-        active_layer,
+        active_layer: canvas.active_id(),
         menu_selections: Some(menu_selections.clone()),
         position: Some(position),
     })
@@ -297,6 +292,14 @@ fn default_path_with_env(env_var: impl Fn(&str) -> Option<OsString>, temp_dir: P
 mod tests {
     use super::*;
 
+    fn canvas(layers: &[PersistedLayer]) -> LayerStack {
+        let maps = layers
+            .iter()
+            .map(|layer| LayerMap::from_dense(layer.id, layer.visible, &layer.lines).unwrap())
+            .collect();
+        LayerStack::new(maps, true).unwrap()
+    }
+
     #[test]
     fn sparse_json_round_trip_and_canonical_deletion() {
         let selections = crate::toolbar::ToolbarState::default().durable_selections();
@@ -320,17 +323,16 @@ mod tests {
             viewport: ViewportOffset::default(),
             zoom: 0,
         };
-        let serialized = contents(&layers, LayerId(0), &selections, position).unwrap();
+        let serialized = contents(&canvas(&layers), &selections, position).unwrap();
         assert!(serialized.contains("\"version\": 3"));
         assert_eq!(serialized.matches("\"atom\"").count(), 1);
         let sparse: SparseDocument = serde_json::from_str(&serialized).unwrap();
         let loaded = sparse_document(sparse).unwrap();
-        assert_eq!(loaded.layers[0].lines[0][0].contents, "x");
+        assert_eq!(loaded.canvas.layers()[0].to_dense()[0][0].contents, "x");
     }
 
     #[test]
     fn sparse_write_rejects_wide_atoms() {
-        let selections = crate::toolbar::ToolbarState::default().durable_selections();
         let layers = [PersistedLayer {
             id: LayerId(0),
             visible: true,
@@ -339,19 +341,6 @@ mod tests {
                 contents: "界".to_owned(),
             }]],
         }];
-        assert!(
-            contents(
-                &layers,
-                LayerId(0),
-                &selections,
-                CanvasPosition {
-                    cursor: Coord::default(),
-                    canvas_origin: Coord::default(),
-                    viewport: ViewportOffset::default(),
-                    zoom: 0,
-                }
-            )
-            .is_err()
-        );
+        assert!(LayerMap::from_dense(LayerId(0), true, &layers[0].lines).is_err());
     }
 }
