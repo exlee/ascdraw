@@ -644,13 +644,10 @@ fn line_connection_regeneration_uses_the_current_color() {
 }
 
 #[test]
-fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only() {
+fn edit_snapshot_restores_document_cursor_and_line_continuation_only() {
     let mut state = state();
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
     state.move_or_draw(Direction::Right, true);
-    state
-        .selection
-        .select(Coord::default(), state.grid.cursor_pos);
     let snapshot = state.edit_snapshot();
 
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp));
