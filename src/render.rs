@@ -692,28 +692,21 @@ fn rasterize_sparse_cell(
     root_face: ResolvedFace,
     raster_generation: u64,
 ) -> Option<Rc<crate::canvas::Rasterized>> {
-    let atom = StyledAtom {
-        face: data.face.as_ref().clone(),
-        contents: data.atom.contents().to_owned(),
-    };
-    let resolved_face = if face_is_default(&atom.face) {
+    let contents = data.atom.contents();
+    let face = data.face.as_ref();
+    let resolved_face = if face_is_default(face) {
         root_face
     } else {
-        resolve_derived_face(
-            &state.grid.default_face,
-            &atom.face,
-            FALLBACK_FG,
-            FALLBACK_BG,
-        )
+        resolve_derived_face(&state.grid.default_face, face, FALLBACK_FG, FALLBACK_BG)
     };
-    let paints_background = atom.face.bg != "default"
-        || atom.face.attributes.iter().any(|attribute| {
+    let paints_background = face.bg != "default"
+        || face.attributes.iter().any(|attribute| {
             attribute
                 .trim_start_matches("final:")
                 .eq_ignore_ascii_case("reverse")
         });
     let key = rendered_atom_key(
-        &atom,
+        contents,
         resolved_face,
         root_face,
         paints_background,
@@ -721,8 +714,8 @@ fn rasterize_sparse_cell(
         &state.theme,
         metrics,
     );
-    let overflow = cell_graphics::raster_overflow(&atom.contents, metrics);
-    let image = cached_atom_image_for_key(cache, &atom, &key, metrics, overflow)?;
+    let overflow = cell_graphics::raster_overflow(contents, metrics);
+    let image = cached_atom_image_for_key(cache, contents, face, &key, metrics, overflow)?;
     let raster = Rc::new(crate::canvas::Rasterized {
         generation: raster_generation,
         image,
@@ -850,7 +843,7 @@ fn sparse_raster_generation(style_generation: u64, metrics_generation: u64) -> u
 }
 
 fn rendered_atom_key(
-    atom: &StyledAtom,
+    contents: &str,
     resolved_face: ResolvedFace,
     root_face: ResolvedFace,
     paints_background: bool,
@@ -859,7 +852,7 @@ fn rendered_atom_key(
     metrics: &CellMetrics,
 ) -> RenderedAtomKey {
     RenderedAtomKey {
-        contents: atom.contents.clone(),
+        contents: contents.to_owned(),
         resolved_face,
         root_face,
         default_face: default_face.clone(),
@@ -874,12 +867,13 @@ fn rendered_atom_key(
 
 fn cached_atom_image_for_key(
     cache: &RefCell<RenderedAtomCache>,
-    atom: &StyledAtom,
+    contents: &str,
+    face: &Face,
     key: &RenderedAtomKey,
     metrics: &CellMetrics,
     overflow: f32,
 ) -> Option<skia_safe::Image> {
-    let width = atom_display_width(&atom.contents);
+    let width = atom_display_width(contents);
     if width == 0 || width > 128 {
         return None;
     }
@@ -903,7 +897,7 @@ fn cached_atom_image_for_key(
             first_column: 0,
             max_column: width,
         },
-        std::slice::from_ref(atom),
+        std::iter::once((contents, face)),
         &key.default_face,
         metrics,
         DrawOrigin::Grid {
@@ -1202,7 +1196,7 @@ fn render_line(
             first_column: columns.start,
             max_column: columns.end,
         },
-        line,
+        line.iter().map(|atom| (atom.contents.as_str(), &atom.face)),
         default_face,
         metrics,
         origin,
@@ -1226,7 +1220,7 @@ fn render_overlay_line(
             first_column: columns.start,
             max_column: columns.end,
         },
-        line,
+        line.iter().map(|atom| (atom.contents.as_str(), &atom.face)),
         default_face,
         metrics,
         origin,
@@ -1234,10 +1228,10 @@ fn render_overlay_line(
     );
 }
 
-fn render_line_at(
+fn render_line_at<'a>(
     canvas: &Canvas,
     position: LineRenderPosition,
-    line: &[StyledAtom],
+    line: impl IntoIterator<Item = (&'a str, &'a Face)>,
     default_face: &Face,
     metrics: &CellMetrics,
     origin: DrawOrigin,
@@ -1251,8 +1245,8 @@ fn render_line_at(
     let mut fg_paint = Paint::default();
     fg_paint.set_anti_alias(true);
 
-    for atom in line {
-        let full_width = atom_display_width(&atom.contents);
+    for (contents, face) in line {
+        let full_width = atom_display_width(contents);
         if full_width == 0 {
             continue;
         }
@@ -1269,21 +1263,21 @@ fn render_line_at(
         let visible_start = atom_start.max(position.first_column);
         let visible_end = atom_end.min(position.max_column);
         let visible_width = visible_end.saturating_sub(visible_start);
-        let resolved = if face_is_default(&atom.face) {
+        let resolved = if face_is_default(face) {
             root_face
         } else {
-            resolve_derived_face(default_face, &atom.face, FALLBACK_FG, FALLBACK_BG)
+            resolve_derived_face(default_face, face, FALLBACK_FG, FALLBACK_BG)
         };
         bg_paint.set_color(resolved.bg.to_color());
         fg_paint.set_color(resolved.fg.to_color());
-        let is_blank = atom.contents.bytes().all(|byte| byte == b' ');
+        let is_blank = contents.bytes().all(|byte| byte == b' ');
         let is_plain_blank = is_blank
             && resolved.bg == root_face.bg
             && resolved.underline_style.is_none()
             && !resolved.strikethrough;
         let paints_background = !transparent_default_background
-            || atom.face.bg != "default"
-            || atom.face.attributes.iter().any(|attribute| {
+            || face.bg != "default"
+            || face.attributes.iter().any(|attribute| {
                 attribute
                     .trim_start_matches("final:")
                     .eq_ignore_ascii_case("reverse")
@@ -1314,7 +1308,7 @@ fn render_line_at(
         let font = font_for_face(metrics, &resolved);
 
         let mut cluster_column = atom_start;
-        for cluster in text_clusters(&atom.contents) {
+        for cluster in text_clusters(contents) {
             if cluster == "\n" {
                 continue;
             }
@@ -1708,48 +1702,26 @@ pub fn atom_display_width(contents: &str) -> usize {
         .sum()
 }
 
-fn truncate_atoms(line: &[StyledAtom], max_width: usize) -> Vec<StyledAtom> {
+fn truncate_title(title: &str, max_width: usize) -> String {
     let mut remaining = max_width;
-    let mut result = Vec::new();
+    let mut result = String::new();
 
-    for atom in line {
+    for cluster in text_clusters(title) {
         if remaining == 0 {
             break;
         }
-
-        let mut contents = String::new();
-        for cluster in text_clusters(&atom.contents) {
-            if cluster == "\n" {
-                continue;
-            }
-            let width = cluster_display_width(cluster);
-            if width > remaining {
-                break;
-            }
-            contents.push_str(cluster);
-            remaining -= width;
+        if cluster == "\n" {
+            continue;
         }
-
-        if !contents.is_empty() {
-            result.push(StyledAtom {
-                face: atom.face.clone(),
-                contents,
-            });
+        let width = cluster_display_width(cluster);
+        if width > remaining {
+            break;
         }
+        result.push_str(cluster);
+        remaining -= width;
     }
 
     result
-}
-
-fn truncate_title(title: &str, max_width: usize) -> String {
-    let atoms = [StyledAtom {
-        face: Face::default(),
-        contents: title.to_string(),
-    }];
-    truncate_atoms(&atoms, max_width)
-        .into_iter()
-        .map(|atom| atom.contents)
-        .collect()
 }
 
 fn row_top(row: usize, metrics: &CellMetrics, top_padding: f32) -> f32 {
