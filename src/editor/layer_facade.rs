@@ -5,6 +5,7 @@ impl Editor {
         self.canvas.summaries()
     }
 
+    #[cfg(test)]
     pub fn layer_views(&self) -> Vec<LayerView> {
         self.canvas
             .layers()
@@ -17,20 +18,11 @@ impl Editor {
             .collect()
     }
 
-    pub(super) fn layer_contents(
-        &self,
-    ) -> Vec<(LayerId, Vec<Vec<StyledAtom>>, Vec<PlacedLineMarker>)> {
-        self.canvas
-            .layers()
-            .iter()
-            .map(|layer| (layer.id, layer.to_dense(), layer.line_markers().to_vec()))
-            .collect()
-    }
-
     pub fn active_layer_id(&self) -> LayerId {
         self.canvas.active_id()
     }
 
+    #[cfg(test)]
     pub fn persisted_layers(&self) -> Vec<PersistedLayer> {
         self.layer_views()
             .into_iter()

@@ -1205,8 +1205,7 @@ impl EditorWindow {
             viewport_cells
         ));
         debug_assert!(
-            content.is_empty()
-                || content_intersects_inner_screen(origin, viewport_cells, &content)
+            content.is_empty() || content_intersects_inner_screen(origin, viewport_cells, &content)
         );
     }
 
@@ -1316,8 +1315,7 @@ impl EditorWindow {
         let viewport_cells = (new_layout.cols.max(1), new_layout.rows.max(1));
         let content = self.state.content_cells();
         let origin = self.viewport.origin(new_cell_size);
-        if !content.is_empty()
-            && !content_intersects_inner_screen(origin, viewport_cells, &content)
+        if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, &content)
         {
             if let Some(origin) =
                 constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, &content)
@@ -1473,7 +1471,6 @@ impl EditorWindow {
             );
         }
         self.state.commit_canvas_mutations()?;
-        let layers = self.state.persisted_layers();
         let native_canvas = self.state.canvas().clone();
         let position = self.canvas_position();
         self.document_dirty |= position != self.saved_canvas_position;
@@ -1498,17 +1495,20 @@ impl EditorWindow {
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
             &path,
-            &layers,
-            self.state.active_layer_id(),
-            &self.state.toolbar.durable_selections(),
-            |path, _layers, _active_layer, menu_selections| match format {
+            |path| match format {
                 Some(FileKind::Txt) => std::fs::write(path, text.as_deref().unwrap_or_default())
                     .with_context(|| format!("failed to write {}", path.display())),
                 Some(FileKind::Json) => {
                     unreachable!("JSON sessions use native document persistence")
                 }
                 Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
-                None => document::save(path, &native_canvas, menu_selections, position, cell_size),
+                None => document::save(
+                    path,
+                    &native_canvas,
+                    &self.state.toolbar.durable_selections(),
+                    position,
+                    cell_size,
+                ),
             },
         )?;
         if saved {
@@ -1777,20 +1777,12 @@ fn save_document_if_dirty(
     document_dirty: &mut bool,
     menu_selections_dirty: &mut bool,
     path: &Path,
-    layers: &[crate::editor::PersistedLayer],
-    active_layer: crate::model::LayerId,
-    menu_selections: &crate::toolbar::DurableMenuSelections,
-    save: impl FnOnce(
-        &Path,
-        &[crate::editor::PersistedLayer],
-        crate::model::LayerId,
-        &crate::toolbar::DurableMenuSelections,
-    ) -> Result<()>,
+    save: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<bool> {
     if !*document_dirty && !*menu_selections_dirty {
         return Ok(false);
     }
-    save(path, layers, active_layer, menu_selections)?;
+    save(path)?;
     *document_dirty = false;
     *menu_selections_dirty = false;
     Ok(true)
@@ -3017,35 +3009,14 @@ mod tests {
         let mut document_dirty = true;
         let mut menu_dirty = false;
         let path = Path::new("latest-document.toml");
-        let lines = vec![vec![crate::model::StyledAtom {
-            face: crate::model::Face::default(),
-            contents: "latest".into(),
-        }]];
-        let layers = vec![crate::editor::PersistedLayer {
-            id: crate::model::LayerId(0),
-            visible: true,
-            lines,
-        }];
-        let menu = crate::toolbar::ToolbarState::default().durable_selections();
         let mut writes = 0;
 
         assert!(
-            save_document_if_dirty(
-                &mut document_dirty,
-                &mut menu_dirty,
-                path,
-                &layers,
-                crate::model::LayerId(0),
-                &menu,
-                |saved_path, saved_layers, active_layer, saved_menu| {
-                    writes += 1;
-                    assert_eq!(saved_path, path);
-                    assert_eq!(saved_layers, layers);
-                    assert_eq!(active_layer, crate::model::LayerId(0));
-                    assert_eq!(saved_menu, &menu);
-                    Ok(())
-                }
-            )
+            save_document_if_dirty(&mut document_dirty, &mut menu_dirty, path, |saved_path| {
+                writes += 1;
+                assert_eq!(saved_path, path);
+                Ok(())
+            })
             .unwrap()
         );
 
@@ -3085,17 +3056,13 @@ mod tests {
     fn clean_shutdown_save_does_not_write() {
         let mut document_dirty = false;
         let mut menu_dirty = false;
-        let menu = crate::toolbar::ToolbarState::default().durable_selections();
 
         assert!(
             !save_document_if_dirty(
                 &mut document_dirty,
                 &mut menu_dirty,
                 Path::new("clean-document.toml"),
-                &[],
-                crate::model::LayerId(0),
-                &menu,
-                |_, _, _, _| panic!("clean documents must not be written"),
+                |_| panic!("clean documents must not be written"),
             )
             .unwrap()
         );
@@ -3107,15 +3074,11 @@ mod tests {
     fn failed_shutdown_save_keeps_document_dirty() {
         let mut document_dirty = true;
         let mut menu_dirty = true;
-        let menu = crate::toolbar::ToolbarState::default().durable_selections();
         let error = save_document_if_dirty(
             &mut document_dirty,
             &mut menu_dirty,
             Path::new("failed-document.toml"),
-            &[],
-            crate::model::LayerId(0),
-            &menu,
-            |_, _, _, _| Err(anyhow!("disk full")),
+            |_| Err(anyhow!("disk full")),
         )
         .unwrap_err();
 
@@ -3128,13 +3091,6 @@ mod tests {
     fn menu_only_shutdown_save_writes_without_marking_the_canvas_dirty() {
         let mut document_dirty = false;
         let mut menu_dirty = true;
-        let mut toolbar = crate::toolbar::ToolbarState::default();
-        toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        toolbar.apply_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 2,
-        });
-        let menu = toolbar.durable_selections();
         let mut writes = 0;
 
         assert!(
@@ -3142,13 +3098,8 @@ mod tests {
                 &mut document_dirty,
                 &mut menu_dirty,
                 Path::new("menu-only.toml"),
-                &[],
-                crate::model::LayerId(0),
-                &menu,
-                |_, saved_layers, _, saved_menu| {
+                |_| {
                     writes += 1;
-                    assert!(saved_layers.is_empty());
-                    assert_eq!(saved_menu, &menu);
                     Ok(())
                 },
             )

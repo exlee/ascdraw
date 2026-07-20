@@ -1,5 +1,7 @@
-use super::{Editor, atom_width};
-use crate::model::{Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
+use std::collections::BTreeSet;
+
+use super::Editor;
+use crate::model::{Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::UtilityKind;
 
 impl Editor {
@@ -46,25 +48,9 @@ impl Editor {
         if self.canvas_width() >= MAX_CANVAS_WIDTH {
             return false;
         }
-        let height = self
-            .layer_views()
-            .into_iter()
-            .map(|layer| layer.lines.len())
-            .max()
-            .unwrap_or(1);
-        if usize::try_from(column).is_ok_and(|column| {
-            self.layer_views().into_iter().any(|layer| {
-                layer
-                    .lines
-                    .iter()
-                    .any(|line| boundary_index(line, column).is_none())
-            })
-        }) {
-            return false;
-        }
         self.commit_canvas();
         self.canvas
-            .insert_column_in_all_layers(column, height)
+            .insert_column_in_all_layers(column)
             .expect("inserted column fits the sparse canvas");
         self.map_global_coordinate_state(|mut coord| {
             if coord.column >= column {
@@ -94,34 +80,17 @@ impl Editor {
 
     fn pull_column_left(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let Ok(dense_column) = usize::try_from(column) else {
-            return false;
-        };
-        let height = self
-            .layer_views()
-            .into_iter()
-            .map(|layer| layer.lines.len())
-            .max()
-            .unwrap_or(0);
-        let views = self.layer_views();
-        if views.iter().any(|layer| {
-            layer
-                .lines
+        let removed =
+            self.canvas
+                .layers()
                 .iter()
-                .any(|line| cell_slot(line, dense_column) == CellSlot::Interior)
-        }) {
-            return false;
-        }
-        let removed = (0..height)
-            .map(|row| {
-                views.iter().any(|layer| {
-                    layer.lines.get(row).is_some_and(|line| {
-                        matches!(cell_slot(line, dense_column), CellSlot::Exact(_))
+                .flat_map(|layer| {
+                    layer.rows().iter().filter_map(|(&line, row)| {
+                        row.range(column..).next().is_some().then_some(line)
                     })
                 })
-            })
-            .collect::<Vec<_>>();
-        if !removed.iter().any(|removed| *removed) {
+                .collect::<BTreeSet<_>>();
+        if removed.is_empty() {
             return false;
         }
 
@@ -130,22 +99,9 @@ impl Editor {
             .pull_column_left_in_all_layers(column, &removed)
             .expect("pulled columns fit the sparse canvas");
         self.remap_after_pull(
-            |coord| {
-                usize::try_from(coord.line)
-                    .ok()
-                    .and_then(|line| removed.get(line))
-                    .copied()
-                    .unwrap_or(false)
-                    && coord.column == column
-            },
+            |coord| removed.contains(&coord.line) && coord.column == column,
             |mut coord| {
-                if usize::try_from(coord.line)
-                    .ok()
-                    .and_then(|line| removed.get(line))
-                    .copied()
-                    .unwrap_or(false)
-                    && coord.column > column
-                {
+                if removed.contains(&coord.line) && coord.column > column {
                     coord.column -= 1;
                 }
                 coord
@@ -156,31 +112,13 @@ impl Editor {
 
     fn pull_column_right(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
-        let Ok(dense_column) = usize::try_from(column) else {
-            return false;
-        };
-        let views = self.layer_views();
-        if views.iter().any(|layer| {
-            layer
-                .lines
-                .iter()
-                .any(|line| cell_slot(line, dense_column) == CellSlot::Interior)
-        }) {
-            return false;
-        }
-        let height = views
+        let affected = self
+            .canvas
+            .layers()
             .iter()
-            .map(|layer| layer.lines.len())
-            .max()
-            .unwrap_or(0);
-        let affected = (0..height)
-            .map(|row| {
-                views
-                    .iter()
-                    .any(|layer| layer.lines.get(row).is_some_and(|line| !line.is_empty()))
-            })
-            .collect::<Vec<_>>();
-        if !affected.iter().any(|affected| *affected) {
+            .flat_map(|layer| layer.rows().keys().copied())
+            .collect::<BTreeSet<_>>();
+        if affected.is_empty() {
             return false;
         }
 
@@ -189,22 +127,9 @@ impl Editor {
             .pull_column_right_in_all_layers(column, &affected)
             .expect("pulled columns fit the sparse canvas");
         self.remap_after_pull(
-            |coord| {
-                usize::try_from(coord.line)
-                    .ok()
-                    .and_then(|line| affected.get(line))
-                    .copied()
-                    .unwrap_or(false)
-                    && coord.column == column
-            },
+            |coord| affected.contains(&coord.line) && coord.column == column,
             |mut coord| {
-                if usize::try_from(coord.line)
-                    .ok()
-                    .and_then(|line| affected.get(line))
-                    .copied()
-                    .unwrap_or(false)
-                    && coord.column < column
-                {
+                if affected.contains(&coord.line) && coord.column < column {
                     coord.column = coord.column.saturating_add(1);
                 }
                 coord
@@ -216,9 +141,10 @@ impl Editor {
     fn pull_row_up(&mut self) -> bool {
         let target = self.grid.cursor_pos.line.saturating_add(1);
         if self
-            .layer_views()
-            .into_iter()
-            .all(|layer| usize::try_from(target).map_or(true, |target| target >= layer.lines.len()))
+            .canvas
+            .layers()
+            .iter()
+            .all(|layer| layer.rows().range(target..).next().is_none())
         {
             return false;
         }
@@ -241,19 +167,12 @@ impl Editor {
     fn pull_row_down(&mut self) -> bool {
         let cursor_line = self.grid.cursor_pos.line;
         let target = cursor_line - 1;
-        let has_content = self.layer_views().into_iter().any(|layer| {
-            layer
-                .lines
-                .iter()
-                .take(usize::try_from(target.saturating_add(1)).unwrap_or(0))
-                .any(|line| !line.is_empty())
-        });
-        let has_markers = self
-            .layer_contents()
-            .into_iter()
-            .flat_map(|(_, _, markers)| markers)
-            .any(|marker| marker.coord.line <= target);
-        if !has_content && !has_markers {
+        if self
+            .canvas
+            .layers()
+            .iter()
+            .all(|layer| layer.rows().range(..=target).next_back().is_none())
+        {
             return false;
         }
         self.commit_canvas();
@@ -303,46 +222,4 @@ impl Editor {
             preview.end = map(preview.end);
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CellSlot {
-    Exact(usize),
-    Interior,
-    Implicit,
-}
-
-fn boundary_index(line: &[StyledAtom], target: usize) -> Option<usize> {
-    let mut column: usize = 0;
-    for (index, atom) in line.iter().enumerate() {
-        if column == target {
-            return Some(index);
-        }
-        let end = column.saturating_add(atom_width(atom));
-        if target < end {
-            return None;
-        }
-        column = end;
-    }
-    (target >= column).then_some(line.len())
-}
-
-fn cell_slot(line: &[StyledAtom], target: usize) -> CellSlot {
-    let mut column: usize = 0;
-    for (index, atom) in line.iter().enumerate() {
-        let width = atom_width(atom);
-        let end = column.saturating_add(width);
-        if target == column {
-            return if width == 1 {
-                CellSlot::Exact(index)
-            } else {
-                CellSlot::Interior
-            };
-        }
-        if target < end {
-            return CellSlot::Interior;
-        }
-        column = end;
-    }
-    CellSlot::Implicit
 }

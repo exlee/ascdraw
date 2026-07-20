@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
@@ -13,13 +13,11 @@ use crate::model::{
 };
 use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
 
-mod composition;
-use composition::overlay_nonblank_atoms;
 mod history;
 pub use history::HistoryCanvasDelta;
-use history::{
-    record_cell_before, record_layer_before, record_replacement_before, record_row_before,
-};
+#[cfg(test)]
+use history::record_replacement_before;
+use history::{record_cell_before, record_layer_before, record_row_before};
 
 #[allow(dead_code)]
 pub type Raster = Rc<Atom>;
@@ -425,7 +423,7 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn insert_column(&mut self, column: i16, height: usize) -> Result<()> {
+    pub(crate) fn insert_column(&mut self, column: i16) -> Result<()> {
         record_layer_before(self);
         let x = column;
         for row in self.rows.values_mut() {
@@ -443,7 +441,6 @@ impl LayerMap {
                 })
                 .collect();
         }
-        let _ = height;
         Ok(())
     }
 
@@ -466,13 +463,9 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn pull_column_left(&mut self, column: i16, affected: &[bool]) -> Result<()> {
+    pub(crate) fn pull_column_left(&mut self, column: i16, affected: &BTreeSet<i16>) -> Result<()> {
         let x = column;
-        for (line, is_affected) in affected.iter().copied().enumerate() {
-            if !is_affected {
-                continue;
-            }
-            let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+        for &y in affected {
             record_row_before(self, y);
             if let Some(row) = self.rows.remove(&y) {
                 let shifted = row
@@ -496,13 +489,13 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn pull_column_right(&mut self, column: i16, affected: &[bool]) -> Result<()> {
+    pub(crate) fn pull_column_right(
+        &mut self,
+        column: i16,
+        affected: &BTreeSet<i16>,
+    ) -> Result<()> {
         let x = column;
-        for (line, is_affected) in affected.iter().copied().enumerate() {
-            if !is_affected {
-                continue;
-            }
-            let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+        for &y in affected {
             record_row_before(self, y);
             if let Some(row) = self.rows.remove(&y) {
                 let shifted = row
@@ -755,6 +748,24 @@ impl LayerMap {
             })
             .collect()
     }
+
+    fn overlay_nonblank_from(&mut self, source: &Self) {
+        for (&line, row) in &source.rows {
+            for (&column, source_data) in row {
+                if !source_data.atom.contents().chars().all(char::is_whitespace) {
+                    self.set_data(line, column, source_data.clone());
+                } else if let Some(line_data) = source_data.line.as_ref()
+                    && let Some(target_data) = self
+                        .rows
+                        .get_mut(&line)
+                        .and_then(|row| row.get_mut(&column))
+                {
+                    record_cell_before(self.id, line, column, Some(target_data));
+                    target_data.line = Some(line_data.clone());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -861,9 +872,9 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn insert_column_in_all_layers(&mut self, column: i16, height: usize) -> Result<()> {
+    pub(crate) fn insert_column_in_all_layers(&mut self, column: i16) -> Result<()> {
         for layer in &mut self.layers {
-            layer.insert_column(column, height)?;
+            layer.insert_column(column)?;
         }
         Ok(())
     }
@@ -878,7 +889,7 @@ impl LayerStack {
     pub(crate) fn pull_column_left_in_all_layers(
         &mut self,
         column: i16,
-        affected: &[bool],
+        affected: &BTreeSet<i16>,
     ) -> Result<()> {
         for layer in &mut self.layers {
             layer.pull_column_left(column, affected)?;
@@ -889,7 +900,7 @@ impl LayerStack {
     pub(crate) fn pull_column_right_in_all_layers(
         &mut self,
         column: i16,
-        affected: &[bool],
+        affected: &BTreeSet<i16>,
     ) -> Result<()> {
         for layer in &mut self.layers {
             layer.pull_column_right(column, affected)?;
@@ -1047,24 +1058,9 @@ impl LayerStack {
             return Ok(false);
         }
         record_layer_before(&self.layers[index]);
-        record_layer_before(&self.layers[target]);
         let source = self.layers.remove(index);
         let target = target.saturating_sub(usize::from(target > index));
-        let target_layer = &mut self.layers[target];
-        let mut target_lines = target_layer.to_dense();
-        let source_lines = source.to_dense();
-        let covered = overlay_nonblank_atoms(&mut target_lines, &source_lines);
-        let mut markers = target_layer.line_markers();
-        markers.retain(|marker| !covered.iter().any(|bounds| bounds.contains(marker.coord)));
-        for marker in source.line_markers() {
-            markers.retain(|existing| existing.coord != marker.coord);
-            markers.push(marker);
-        }
-        let id = target_layer.id;
-        let visible = target_layer.visible;
-        let replacement = LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
-        record_replacement_before(target_layer, &replacement);
-        self.layers[target] = replacement;
+        self.layers[target].overlay_nonblank_from(&source);
         self.active = target;
         Ok(true)
     }

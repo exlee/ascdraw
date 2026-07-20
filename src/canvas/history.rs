@@ -74,6 +74,7 @@ pub(super) fn record_row_before(layer: &LayerMap, line: i16) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn record_replacement_before(current: &LayerMap, replacement: &LayerMap) {
     record_layer_before(current);
     for (&line, row) in &replacement.rows {

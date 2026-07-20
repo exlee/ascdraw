@@ -37,12 +37,7 @@ impl Editor {
             self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(
                 i16::try_from(inserted_width).expect("inserted text fits signed canvas range"),
             );
-            if part.ends_with('\n')
-                && self.canvas.layers()[self.canvas.active_index()]
-                    .to_dense()
-                    .len()
-                    < MAX_CANVAS_HEIGHT
-            {
+            if part.ends_with('\n') && self.canvas_height() < MAX_CANVAS_HEIGHT {
                 self.newline_sparse();
             }
         }
@@ -117,12 +112,7 @@ impl Editor {
                     .expect("validated replacement fits the sparse canvas");
                 self.grid.cursor_pos.column = column.saturating_add(1);
             }
-            if part.ends_with('\n')
-                && self.canvas.layers()[self.canvas.active_index()]
-                    .to_dense()
-                    .len()
-                    < MAX_CANVAS_HEIGHT
-            {
+            if part.ends_with('\n') && self.canvas_height() < MAX_CANVAS_HEIGHT {
                 self.newline_sparse();
             }
         }

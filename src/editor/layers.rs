@@ -10,6 +10,7 @@ pub struct PersistedLayer {
     pub lines: Vec<Vec<StyledAtom>>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct LayerView {
     pub id: LayerId,

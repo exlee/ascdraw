@@ -34,7 +34,9 @@ mod text_tool;
 mod utility;
 use crate::canvas::LineMarker as PlacedLineMarker;
 pub(super) use grid::adjacent_coord;
-pub use layers::{LayerView, PersistedLayer};
+#[cfg(test)]
+pub use layers::LayerView;
+pub use layers::PersistedLayer;
 use line_preview::LinePreview;
 use line_tool::ActiveStroke;
 use move_tool::MoveLift;
