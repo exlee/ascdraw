@@ -109,6 +109,8 @@ fn cloning_coordinate_data_drops_raster_cache() {
     *source.raster_cache.borrow_mut() = Some(Rc::new(Rasterized {
         generation: 3,
         image,
+        cell_width: 1.0,
+        cell_height: 1.0,
     }));
 
     let cloned = source.clone();

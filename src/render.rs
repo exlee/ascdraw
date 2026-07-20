@@ -153,7 +153,7 @@ struct ToolbarCache {
     image: skia_safe::Image,
 }
 
-const RENDERED_ATOM_CACHE_CAPACITY: usize = 512;
+const RENDERED_ATOM_CACHE_CAPACITY: usize = 2048;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct RenderedAtomKey {
@@ -596,23 +596,36 @@ fn render_cached_sparse_grid_atoms(
                 let cached_image = cached_raster
                     .as_ref()
                     .filter(|cached| cached.generation == raster_generation)
-                    .map(|cached| (cached.image.clone(), false))
+                    .map(|cached| (cached.image.clone(), None))
                     .or_else(|| {
-                        (!use_current_metrics)
-                            .then(|| cached_raster.map(|cached| (cached.image.clone(), true)))
-                            .flatten()
+                        (!use_current_metrics).then(|| {
+                            cached_raster.as_ref().map(|cached| {
+                                (
+                                    cached.image.clone(),
+                                    Some((cached.cell_width, cached.cell_height)),
+                                )
+                            })
+                        })?
                     });
                 let image = cached_image.or_else(|| {
                     rasterize_sparse_cell(cache, data, state, metrics, root_face, raster_generation)
-                        .map(|image| (image, false))
+                        .map(|image| (image, None))
                 });
-                if let Some((image, scaled)) = image {
+                if let Some((image, source_cell_size)) = image {
                     let position = (
                         PADDING as f32 + f32::from(column) * metrics.cell_width,
                         layout.grid_top + f32::from(row) * metrics.cell_height,
                     );
-                    if scaled {
-                        draw_scaled_cell_image(canvas, &image, position, metrics);
+                    if let Some(source_cell_size) = source_cell_size {
+                        draw_scaled_cell_image(
+                            canvas,
+                            &image,
+                            source_cell_size,
+                            column,
+                            row,
+                            layout.grid_top,
+                            metrics,
+                        );
                     } else {
                         canvas.draw_image(&image, position, None);
                     }
@@ -664,6 +677,8 @@ fn rasterize_sparse_cell(
     *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
         generation: raster_generation,
         image: image.clone(),
+        cell_width: metrics.cell_width,
+        cell_height: metrics.cell_height,
     }));
     Some(image)
 }
@@ -671,17 +686,28 @@ fn rasterize_sparse_cell(
 fn draw_scaled_cell_image(
     canvas: &Canvas,
     image: &skia_safe::Image,
-    position: (f32, f32),
+    source_cell_size: (f32, f32),
+    column: i16,
+    row: i16,
+    grid_top: f32,
     metrics: &CellMetrics,
 ) {
-    canvas.save();
-    canvas.translate(position);
-    canvas.scale((
-        metrics.cell_width / image.width().max(1) as f32,
-        metrics.cell_height / image.height().max(1) as f32,
-    ));
-    canvas.draw_image(image, (0.0, 0.0), None);
-    canvas.restore();
+    let source = Rect::from_xywh(0.0, 0.0, source_cell_size.0, source_cell_size.1);
+    let destination = snapped_cell_rect(column, row, grid_top, metrics);
+    canvas.draw_image_rect(
+        image,
+        Some((&source, skia_safe::canvas::SrcRectConstraint::Strict)),
+        destination,
+        &Paint::default(),
+    );
+}
+
+fn snapped_cell_rect(column: i16, row: i16, grid_top: f32, metrics: &CellMetrics) -> Rect {
+    let left = (PADDING as f32 + f32::from(column) * metrics.cell_width).round();
+    let right = (PADDING as f32 + (f32::from(column) + 1.0) * metrics.cell_width).round();
+    let top = (grid_top + f32::from(row) * metrics.cell_height).round();
+    let bottom = (grid_top + (f32::from(row) + 1.0) * metrics.cell_height).round();
+    Rect::new(left, top, right, bottom)
 }
 
 fn sparse_raster_style_generation(default_face: &Face, theme: &ThemeConfig) -> u64 {

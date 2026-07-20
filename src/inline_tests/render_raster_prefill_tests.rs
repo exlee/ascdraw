@@ -8,6 +8,26 @@ use crate::toolbar::ToolbarState;
 use super::*;
 
 #[test]
+fn snapped_stale_raster_cells_share_physical_boundaries() {
+    let renderer = load_renderer(&AppConfig::default());
+    let mut metrics = renderer.metrics(1.0);
+    metrics.cell_width = 8.25;
+    metrics.cell_height = 15.6;
+    let grid_top = 4.3;
+
+    for column in -20..20 {
+        let current = snapped_cell_rect(column, 0, grid_top, &metrics);
+        let next = snapped_cell_rect(column + 1, 0, grid_top, &metrics);
+        assert_eq!(current.right, next.left);
+    }
+    for row in -20..20 {
+        let current = snapped_cell_rect(0, row, grid_top, &metrics);
+        let next = snapped_cell_rect(0, row + 1, grid_top, &metrics);
+        assert_eq!(current.bottom, next.top);
+    }
+}
+
+#[test]
 fn sparse_prefill_cursor_traverses_signed_coordinates_in_row_major_order() {
     let mut layer = LayerMap::new(LayerId(0), true);
     let face = Face::default();
@@ -99,5 +119,13 @@ fn idle_prefill_rasterizes_atoms_outside_the_rendered_viewport() {
     let offscreen = state.canvas().layers()[0].get(0, 100).unwrap();
     assert!(offscreen.raster_cache.borrow().is_none());
     while renderer.prefill_sparse_rasters(&state, 1.0) {}
-    assert!(offscreen.raster_cache.borrow().is_some());
+    let cached = offscreen.raster_cache.borrow();
+    let cached = cached.as_ref().unwrap();
+    assert_eq!(cached.cell_width, metrics.cell_width);
+    assert_eq!(cached.cell_height, metrics.cell_height);
+}
+
+#[test]
+fn shared_atom_cache_holds_two_thousand_rasters() {
+    assert_eq!(RENDERED_ATOM_CACHE_CAPACITY, 2048);
 }
