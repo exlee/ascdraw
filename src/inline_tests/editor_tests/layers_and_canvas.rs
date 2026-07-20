@@ -719,24 +719,32 @@ fn clearing_an_already_blank_selection_is_an_exact_document_no_op() {
 #[test]
 fn clear_canvas_resets_cells_faces_cursor_selection_and_line_markers() {
     let mut state = state();
-    state.set_lines_for_test(vec![vec![StyledAtom {
-        face: Face {
-            fg: "#123456".into(),
-            bg: "#abcdef".into(),
-            underline: "#fedcba".into(),
-            attributes: vec!["reverse".into()],
-        },
-        contents: "x".into(),
-    }]]);
+    assert!(
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![vec![StyledAtom {
+                face: Face {
+                    fg: "#123456".into(),
+                    bg: "#abcdef".into(),
+                    underline: "#fedcba".into(),
+                    attributes: vec!["reverse".into()],
+                },
+                contents: "x".into(),
+            }]])
+            .unwrap()
+        )
+    );
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 2,
+    });
+    state.move_to(Coord { line: 1, column: 0 });
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
     state.grid.cursor_pos = Coord { line: 3, column: 4 };
     state
         .selection
         .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord::default(),
-        ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
-        base_glyph: "─".into(),
-    });
     state.clear_canvas();
 
     assert_eq!(state.lines_for_test(), vec![Vec::new()]);
@@ -768,17 +776,7 @@ fn clear_canvas_cancels_reachable_drawing_transients() {
 #[test]
 fn clear_canvas_preserves_a_far_cursor_and_later_inserts_there() {
     let mut state = state();
-    state.set_lines_for_test(vec![
-        vec![StyledAtom {
-            face: Face::default(),
-            contents: "drawing".into(),
-        }],
-        Vec::new(),
-        vec![StyledAtom {
-            face: Face::default(),
-            contents: "x".into(),
-        }],
-    ]);
+    state.insert("drawing\n\nx");
     let cursor = Coord {
         line: 5,
         column: 12,
@@ -810,17 +808,24 @@ fn clear_canvas_removes_faces_from_styled_whitespace() {
     let theme = ThemeConfig::default();
     let mut state = Editor::new(&theme, "ascdraw");
     let cursor = Coord { line: 2, column: 3 };
-    state.set_lines_for_test(vec![
-        vec![StyledAtom {
-            face: theme.selection.clone(),
-            contents: " ".into(),
-        }],
-        Vec::new(),
-        vec![StyledAtom {
-            face: theme.tooltip.clone(),
-            contents: "   ".into(),
-        }],
-    ]);
+    assert!(
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![
+                vec![StyledAtom {
+                    face: theme.selection.clone(),
+                    contents: " ".into(),
+                }],
+                Vec::new(),
+                (0..3)
+                    .map(|_| StyledAtom {
+                        face: theme.tooltip.clone(),
+                        contents: " ".into(),
+                    })
+                    .collect(),
+            ])
+            .unwrap()
+        )
+    );
     state.grid.cursor_pos = cursor;
 
     state.clear_canvas();
@@ -925,110 +930,4 @@ fn replace_mode_overwrites_instead_of_inserting() {
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
     state.toggle_replace_mode();
     assert_eq!(state.cursor_mode, CursorMode::Stamp);
-}
-
-#[test]
-fn insert_shifts_line_markers_by_one_cell() {
-    let mut state = state();
-    state.insert("a◆");
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 0, column: 1 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "╴".into(),
-    });
-    state.move_to(Coord::default());
-    state.toggle_text_entry();
-
-    state.write_text("z");
-
-    assert_eq!(contents(&state.lines_for_test()[0]), "za◆");
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 0, column: 2 }
-    );
-}
-
-#[test]
-fn replace_removes_overwritten_markers_and_shifts_following_markers() {
-    let mut state = state();
-    state.insert("a◆");
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 0, column: 1 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "╴".into(),
-    });
-    state.move_to(Coord::default());
-    state.toggle_replace_mode();
-
-    state.write_text("z");
-
-    assert_eq!(contents(&state.lines_for_test()[0]), "z◆");
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 0, column: 1 }
-    );
-
-    state.write_text("x");
-
-    assert_eq!(contents(&state.lines_for_test()[0]), "zx");
-    assert!(state.line_markers_for_test().is_empty());
-}
-
-#[test]
-fn newline_backspace_and_delete_remap_line_markers() {
-    let mut state = state();
-    state.insert("a◆\nb◆");
-    state.extend_line_markers_for_test([
-        PlacedLineMarker {
-            coord: Coord { line: 0, column: 1 },
-            ending: LineEnding::Fixed('◆'),
-            base_glyph: "╴".into(),
-        },
-        PlacedLineMarker {
-            coord: Coord { line: 1, column: 1 },
-            ending: LineEnding::Fixed('◆'),
-            base_glyph: "╴".into(),
-        },
-    ]);
-    assert_eq!(state.line_markers_for_test().len(), 2);
-    state.move_to(Coord { line: 0, column: 1 });
-
-    state.newline();
-
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 1, column: 0 }
-    );
-    assert_eq!(
-        state.line_markers_for_test()[1].coord,
-        Coord { line: 2, column: 1 }
-    );
-
-    state.backspace();
-
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 0, column: 1 }
-    );
-    assert_eq!(
-        state.line_markers_for_test()[1].coord,
-        Coord { line: 1, column: 1 }
-    );
-
-    state.delete();
-
-    assert_eq!(contents(&state.lines_for_test()[0]), "a");
-    assert_eq!(state.line_markers_for_test().len(), 1);
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 1, column: 1 }
-    );
-
-    state.delete();
-
-    assert_eq!(contents(&state.lines_for_test()[0]), "ab◆");
-    assert_eq!(
-        state.line_markers_for_test()[0].coord,
-        Coord { line: 0, column: 2 }
-    );
 }

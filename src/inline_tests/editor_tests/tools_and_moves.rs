@@ -553,36 +553,23 @@ fn pull_right_shifts_ragged_finite_prefixes_without_growing_empty_rows() {
 }
 
 #[test]
-fn pull_preserves_shifted_faces_and_removes_or_remaps_line_markers() {
+fn pull_preserves_shifted_faces() {
     let mut state = utility_state(&["ABCD"], UtilityKind::Pull, Coord { line: 0, column: 0 });
     let mut lines = state.lines_for_test();
     for (index, atom) in lines[0].iter_mut().enumerate() {
         atom.face.fg = format!("#{index}{index}{index}{index}{index}{index}");
     }
-    state.set_lines_for_test(lines);
+    assert!(state.paste_styled_rectangle_at_cursor(&TextRectangle::from_rows(lines).unwrap()));
+    state.move_to(Coord::default());
     state
         .selection
         .select(Coord { line: 0, column: 0 }, Coord { line: 0, column: 3 });
-    state.extend_line_markers_for_test([
-        PlacedLineMarker {
-            coord: Coord { line: 0, column: 1 },
-            ending: LineEnding::None,
-            base_glyph: "B".into(),
-        },
-        PlacedLineMarker {
-            coord: Coord { line: 0, column: 3 },
-            ending: LineEnding::None,
-            base_glyph: "D".into(),
-        },
-    ]);
     assert!(state.apply_utility(Direction::Left));
     assert_eq!(line_contents(&state), vec!["ACD"]);
     assert_eq!(state.lines_for_test()[0][0].face.fg, "#000000");
     assert_eq!(state.lines_for_test()[0][1].face.fg, "#222222");
     assert_eq!(state.lines_for_test()[0][2].face.fg, "#333333");
     assert_eq!(state.selection.active().column, 2);
-    assert_eq!(state.line_markers_for_test().len(), 1);
-    assert_eq!(state.line_markers_for_test()[0].coord.column, 2);
 }
 
 #[test]
@@ -606,7 +593,7 @@ fn pull_vertical_directions_remove_entire_rows_with_nonblank_content() {
 }
 
 #[test]
-fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
+fn pull_row_remaps_every_lower_editor_coordinate() {
     let mut state = utility_state(
         &["A", "B", "C", "D"],
         UtilityKind::Pull,
@@ -615,24 +602,9 @@ fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
     state
         .selection
         .select(Coord { line: 1, column: 0 }, Coord { line: 3, column: 0 });
-    state.extend_line_markers_for_test([
-        PlacedLineMarker {
-            coord: Coord { line: 2, column: 0 },
-            ending: LineEnding::None,
-            base_glyph: "C".into(),
-        },
-        PlacedLineMarker {
-            coord: Coord { line: 3, column: 0 },
-            ending: LineEnding::None,
-            base_glyph: "D".into(),
-        },
-    ]);
-
     assert!(state.apply_utility(Direction::Up));
     assert_eq!(line_contents(&state), vec!["A", "B", "D"]);
     assert_eq!(state.selection.active().line, 2);
-    assert_eq!(state.line_markers_for_test().len(), 1);
-    assert_eq!(state.line_markers_for_test()[0].coord.line, 2);
 }
 
 #[test]
@@ -675,20 +647,14 @@ fn utility_push_at_origin_uses_signed_insertion_targets() {
 }
 
 #[test]
-fn push_remaps_selection_and_marker_coordinates() {
+fn push_remaps_selection_coordinates() {
     let mut state = utility_state(&["abc"], UtilityKind::Push, Coord { line: 0, column: 2 });
     state
         .selection
         .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 0, column: 2 },
-        ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
-        base_glyph: "─".into(),
-    });
     assert!(state.apply_utility(Direction::Left));
     assert_eq!(state.selection.anchor().column, 2);
     assert_eq!(state.selection.active().column, 3);
-    assert_eq!(state.line_markers_for_test()[0].coord.column, 3);
 }
 
 #[test]
@@ -768,14 +734,19 @@ fn clone_move_lift_clones_once_per_shift_press_and_can_clone_after_moving() {
 
 #[test]
 fn clone_move_lift_preserves_faces_and_line_markers_for_every_copy() {
-    let mut state = utility_state(&["A"], UtilityKind::Push, Coord::default());
-    let configured_face = state.theme.tooltip.clone();
-    state.set_cell_face_for_test(Coord::default(), configured_face.clone());
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord::default(),
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "A".into(),
+    let mut state = state();
+    state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+    state.apply_toolbar_action(ToolbarAction::SelectColor(ColorId(3)));
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 11,
     });
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
+    state.clear_selection();
+    state.move_to(Coord::default());
+    let configured_face = state.lines_for_test()[0][0].face.clone();
     state
         .selection
         .select(Coord::default(), Coord { line: 0, column: 1 });
@@ -785,7 +756,7 @@ fn clone_move_lift_preserves_faces_and_line_markers_for_every_copy() {
     assert!(state.clone_move_lift(Direction::Right, 2));
     assert!(state.confirm_move_lift());
 
-    assert_eq!(line_contents(&state), vec!["AAA"]);
+    assert_eq!(line_contents(&state), vec!["◆◆◆"]);
     assert!(
         state.lines_for_test()[0]
             .iter()
@@ -800,26 +771,24 @@ fn clone_move_lift_preserves_faces_and_line_markers_for_every_copy() {
         vec![0, 1, 2]
     );
 
-    let mut overlap = utility_state(&["AB"], UtilityKind::Push, Coord::default());
-    overlap.extend_line_markers_for_test([
-        PlacedLineMarker {
-            coord: Coord::default(),
-            ending: LineEnding::Fixed('◆'),
-            base_glyph: "A".into(),
-        },
-        PlacedLineMarker {
-            coord: Coord { line: 0, column: 1 },
-            ending: LineEnding::Fixed('◆'),
-            base_glyph: "B".into(),
-        },
-    ]);
+    let mut overlap = Editor::new(&ThemeConfig::default(), "ascdraw");
+    overlap.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    for submenu in [0, 1] {
+        overlap.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu,
+            option: 11,
+        });
+    }
+    assert!(overlap.move_or_draw(Direction::Right, true));
+    overlap.end_stroke();
+    overlap.move_to(Coord::default());
     overlap
         .selection
         .select(Coord::default(), Coord { line: 0, column: 1 });
     assert!(overlap.begin_selected_move_lift());
     assert!(overlap.clone_move_lift(Direction::Right, 1));
     assert!(overlap.confirm_move_lift());
-    assert_eq!(line_contents(&overlap), vec!["AAB"]);
+    assert_eq!(line_contents(&overlap), vec!["◆◆◆"]);
     assert_eq!(overlap.line_markers_for_test().len(), 3);
     assert_eq!(
         overlap
@@ -833,15 +802,20 @@ fn clone_move_lift_preserves_faces_and_line_markers_for_every_copy() {
 
 #[test]
 fn move_lift_treats_unedited_cells_as_transparent() {
-    let mut state = utility_state(&["A C", "x─z"], UtilityKind::Push, Coord::default());
+    let mut state = utility_state(&["A C", "x"], UtilityKind::Push, Coord::default());
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 11,
+    });
+    state.move_to(Coord { line: 1, column: 1 });
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
+    state.clear_selection();
+    state.move_to(Coord::default());
     state
         .selection
         .select(Coord::default(), Coord { line: 0, column: 2 });
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 1, column: 1 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "─".into(),
-    });
 
     assert!(state.begin_selected_move_lift());
     assert!(state.move_lift(Direction::Down));
@@ -850,10 +824,10 @@ fn move_lift_treats_unedited_cells_as_transparent() {
         .expect("lifted selection has a composited preview");
     let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(contents(&preview[0]), "");
-    assert_eq!(contents(&preview[1]), "A─C");
+    assert_eq!(contents(&preview[1]), "A◆C");
 
     assert!(state.confirm_move_lift());
-    assert_eq!(line_contents(&state), vec!["", "A─C"]);
+    assert_eq!(line_contents(&state), vec!["", "A◆C"]);
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(
         state.line_markers_for_test()[0].coord,

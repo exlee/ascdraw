@@ -159,3 +159,40 @@ fn line_markers_are_stored_with_their_coordinate_data() {
     );
     assert_eq!(map.line_markers(), vec![marker]);
 }
+
+#[test]
+fn cell_and_row_edits_remap_embedded_line_metadata() {
+    let marker = LineMarker {
+        coord: Coord { line: 0, column: 1 },
+        ending: LineEnding::Fixed('◆'),
+        base_glyph: "╴".to_owned(),
+    };
+    let styled = |contents: &str| StyledAtom {
+        face: Face::default(),
+        contents: contents.to_owned(),
+    };
+    let lines = vec![
+        vec![styled("a"), styled("◆")],
+        vec![styled("b"), styled("◆")],
+    ];
+    let markers = [
+        marker.clone(),
+        LineMarker {
+            coord: Coord { line: 1, column: 1 },
+            ..marker
+        },
+    ];
+    let mut map = LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &markers).unwrap();
+
+    map.insert_cells(0, 0, vec![(Atom::new("z").unwrap(), Face::default())])
+        .unwrap();
+    assert_eq!(map.line_markers()[0].coord, Coord { line: 0, column: 2 });
+
+    map.remove_cells(0, 2, 1).unwrap();
+    assert_eq!(map.line_markers(), vec![markers[1].clone()]);
+
+    map.split_row(0, 1).unwrap();
+    assert_eq!(map.line_markers()[0].coord, Coord { line: 2, column: 1 });
+    assert!(map.join_row_with_next(1).unwrap());
+    assert_eq!(map.line_markers()[0].coord, Coord { line: 1, column: 1 });
+}
