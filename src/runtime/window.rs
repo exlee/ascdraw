@@ -1173,11 +1173,6 @@ impl EditorWindow {
         self.viewport
             .compensate_for_prepend(prepend.0, prepend.1, cell_size);
 
-        if view_mode_changed {
-            self.menu_selections_dirty |= menu_selections_changed;
-            return false;
-        }
-
         // A toolbar-only transition can temporarily clip anchored cells. Do
         // not let viewport normalization turn the exact pixel compensation
         // above into an unrelated canvas pan. Navigation and document edits
@@ -1194,6 +1189,25 @@ impl EditorWindow {
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         self.refresh_content_index();
         let content = self.content_index.cells();
+
+        if view_mode_changed {
+            if !self.state.view_active() {
+                let (cursor, origin) = view_exit_cursor_and_origin(
+                    current,
+                    self.state.grid.cursor_pos,
+                    viewport_cells,
+                    content,
+                );
+                if cursor != self.state.grid.cursor_pos {
+                    self.state.clamp_cursor_to_content(cursor);
+                }
+                if origin != current {
+                    self.viewport.set_origin(origin, cell_size);
+                }
+            }
+            self.menu_selections_dirty |= menu_selections_changed;
+            return false;
+        }
 
         if let Some(origin) = resolve_state_change_origin(
             viewport_policy,
@@ -1506,6 +1520,8 @@ impl EditorWindow {
         };
         let position = self.canvas_position();
         self.state.commit_canvas_mutations()?;
+        let metrics = self.renderer.metrics(self.window.scale_factor());
+        let cell_size = (metrics.cell_width, metrics.cell_height);
         let contents = match format {
             Some(FileKind::Txt) => plain_text(&self.state),
             Some(FileKind::Json) => project_json_contents(&self.state, self.viewport)?,
@@ -1514,6 +1530,7 @@ impl EditorWindow {
                 self.state.canvas(),
                 &self.state.toolbar.durable_selections(),
                 position,
+                cell_size,
             )?,
         };
         let pending = PendingAutosave {
@@ -1586,6 +1603,8 @@ impl EditorWindow {
         let text = (format == Some(FileKind::Txt)).then(|| plain_text(&self.state));
         let state = (format == Some(FileKind::Json)).then(|| self.state.clone());
         let viewport = self.viewport;
+        let metrics = self.renderer.metrics(self.window.scale_factor());
+        let cell_size = (metrics.cell_width, metrics.cell_height);
         let saved = save_document_if_dirty(
             &mut self.document_dirty,
             &mut self.menu_selections_dirty,
@@ -1604,7 +1623,7 @@ impl EditorWindow {
                     viewport,
                 ),
                 Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
-                None => document::save(path, &native_canvas, menu_selections, position),
+                None => document::save(path, &native_canvas, menu_selections, position, cell_size),
             },
         )?;
         if saved {
@@ -1645,8 +1664,10 @@ impl EditorWindow {
         let mut state = Editor::new(&self.state.theme, title.clone());
         let mut viewport = ViewportOffset::default();
         let mut restored_position = false;
+        let mut needs_migration = false;
         self.renderer.restore_zoom(0);
         if let Some(document) = document::load(&path)? {
+            needs_migration = document.needs_migration();
             if let Some(selections) = document.menu_selections {
                 state.restore_menu_selections(&selections);
             }
@@ -1661,7 +1682,7 @@ impl EditorWindow {
         self.window.set_title(&title);
         self.state = state;
         self.document_session = session;
-        self.document_dirty = false;
+        self.document_dirty = needs_migration;
         self.menu_selections_dirty = false;
         self.history = EditHistory::default();
         self.viewport = viewport;
@@ -2000,6 +2021,15 @@ fn resolve_state_change_origin(
     }
 }
 
+fn view_exit_cursor_and_origin(
+    desired: (i64, i64),
+    cursor: Coord,
+    viewport: (usize, usize),
+    content: &[Coord],
+) -> (Coord, (i64, i64)) {
+    normalized_cursor_and_origin(desired, cursor, viewport, content)
+}
+
 pub fn create_editor_window(
     elwt: &ActiveEventLoop,
     config: &AppConfig,
@@ -2024,9 +2054,11 @@ pub fn create_editor_window(
     let renderer = load_renderer(config);
     let mut viewport = ViewportOffset::default();
     let mut restored_position = false;
+    let mut needs_migration = false;
     match document_session {
         DocumentSession::Scratchpad(document_path) | DocumentSession::File(document_path) => {
             if let Some(document) = document::load(document_path)? {
+                needs_migration = document.needs_migration();
                 if let Some(menu_selections) = document.menu_selections {
                     state.restore_menu_selections(&menu_selections);
                 }
@@ -2078,7 +2110,7 @@ pub fn create_editor_window(
         perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
         document_session: document_session.clone(),
-        document_dirty: document_session.is_stdin(),
+        document_dirty: document_session.is_stdin() || needs_migration,
         menu_selections_dirty: false,
         saved_canvas_position: document::CanvasPosition {
             cursor: Coord::default(),
@@ -2924,6 +2956,25 @@ mod tests {
             canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, panned_viewport,),
             initial_screen_position
         );
+    }
+
+    #[test]
+    fn distant_view_landing_returns_to_real_content() {
+        let content = [Coord {
+            line: 12,
+            column: 20,
+        }];
+        let cursor = Coord {
+            line: 1_000,
+            column: 10_000,
+        };
+
+        let (cursor, origin) =
+            view_exit_cursor_and_origin((9_980, 980), cursor, (80, 40), &content);
+
+        assert_eq!(cursor, content[0]);
+        assert!(cursor_is_visible(origin, cursor, (80, 40)));
+        assert!(content_intersects_inner_screen(origin, (80, 40), &content));
     }
 
     #[test]
