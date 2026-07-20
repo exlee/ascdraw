@@ -915,6 +915,7 @@ impl Editor {
         self.sparse_content_cells(false)
     }
 
+    #[cfg(test)]
     pub fn content_cells_including_hidden(&self) -> Vec<Coord> {
         self.sparse_content_cells(true)
     }

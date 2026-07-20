@@ -880,8 +880,6 @@ impl EditorWindow {
     }
 
     pub fn render(&mut self, config: &AppConfig) -> Result<FrameTiming> {
-        let visible = self.state.content_cells();
-        let including_hidden = self.state.content_cells_including_hidden();
         let toolbar_hotspot_hovered = self.toolbar_hotspot_hovered();
         self.surface.render(
             &self.window,
@@ -889,10 +887,6 @@ impl EditorWindow {
             &self.renderer,
             config,
             crate::render::RenderContext {
-                content: crate::render::CanvasContent {
-                    visible: &visible,
-                    including_hidden: &including_hidden,
-                },
                 viewport: self.viewport,
                 toolbar_hotspot_hovered,
             },

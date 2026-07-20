@@ -92,10 +92,9 @@ impl MetalRenderer {
         state: &Editor,
         renderer: &Renderer,
         config: &AppConfig,
-        context: RenderContext<'_>,
+        context: RenderContext,
     ) -> Result<FrameTiming> {
         let RenderContext {
-            content,
             viewport,
             toolbar_hotspot_hovered,
         } = context;
@@ -144,7 +143,6 @@ impl MetalRenderer {
                 width,
                 viewport,
                 toolbar_hotspot_hovered,
-                content,
                 toolbar_cache: &renderer.toolbar_cache,
                 rendered_atom_cache: &renderer.rendered_atom_cache,
             },

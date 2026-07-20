@@ -81,7 +81,7 @@ impl WindowSurface {
         state: &Editor,
         renderer: &Renderer,
         config: &AppConfig,
-        context: RenderContext<'_>,
+        context: RenderContext,
     ) -> Result<FrameTiming> {
         match &mut self.backend {
             #[cfg(target_os = "macos")]

@@ -28,6 +28,106 @@ fn snapped_stale_raster_cells_share_physical_boundaries() {
 }
 
 #[test]
+fn mixed_stale_and_fresh_full_cells_have_no_pixel_seam() {
+    let config = AppConfig::default();
+    let renderer = load_renderer(&config);
+    let mut old_metrics = renderer.metrics(1.0);
+    old_metrics.cell_width = 8.25;
+    old_metrics.cell_height = 15.6;
+    let toolbar_metrics = renderer.title_metrics(1.0);
+    let width = 800;
+    let height = 600;
+    let old_layout = layout_metrics(
+        width,
+        height,
+        &old_metrics,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+        &ToolbarState::default(),
+        config.transparent_menubar,
+        1.0,
+    );
+    let mut state = Editor::new(&config.theme, "test");
+    state.insert("██");
+    state.commit_canvas_mutations().unwrap();
+    let mut old_surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
+    render_cached_sparse_grid_atoms(
+        old_surface.canvas(),
+        state.canvas(),
+        &state,
+        &old_metrics,
+        old_layout,
+        ViewportOffset::default(),
+        width,
+        0,
+        2,
+        0,
+        3,
+        &renderer.rendered_atom_cache,
+    );
+    *state.canvas().layers()[0]
+        .get(0, 1)
+        .unwrap()
+        .raster_cache
+        .borrow_mut() = None;
+
+    let mut new_metrics = old_metrics.clone();
+    new_metrics.cell_width = 10.3;
+    new_metrics.cell_height = 18.2;
+    let new_layout = layout_metrics(
+        width,
+        height,
+        &new_metrics,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+        &ToolbarState::default(),
+        config.transparent_menubar,
+        1.0,
+    );
+    let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+    let background = [
+        root_face.bg.b,
+        root_face.bg.g,
+        root_face.bg.r,
+        root_face.bg.a,
+    ];
+    let foreground = [
+        root_face.fg.b,
+        root_face.fg.g,
+        root_face.fg.r,
+        root_face.fg.a,
+    ];
+    let mut pixels = background.repeat(width * height);
+    let image_info = ImageInfo::new(
+        (width as i32, height as i32),
+        ColorType::BGRA8888,
+        AlphaType::Premul,
+        None,
+    );
+    let mut surface = surfaces::wrap_pixels(&image_info, &mut pixels, width * 4, None).unwrap();
+    render_cached_sparse_grid_atoms(
+        surface.canvas(),
+        state.canvas(),
+        &state,
+        &new_metrics,
+        new_layout,
+        ViewportOffset::default(),
+        width,
+        0,
+        2,
+        0,
+        3,
+        &renderer.rendered_atom_cache,
+    );
+
+    let first = snapped_cell_rect(0, 0, new_layout.grid_top, &new_metrics);
+    let second = snapped_cell_rect(1, 0, new_layout.grid_top, &new_metrics);
+    let y = ((first.top + first.bottom) / 2.0) as usize;
+    for x in first.left as usize..second.right as usize {
+        let offset = (y * width + x) * 4;
+        assert_eq!(&pixels[offset..offset + 4], &foreground, "seam at x={x}");
+    }
+}
+
+#[test]
 fn sparse_prefill_cursor_traverses_signed_coordinates_in_row_major_order() {
     let mut layer = LayerMap::new(LayerId(0), true);
     let face = Face::default();
@@ -123,9 +223,4 @@ fn idle_prefill_rasterizes_atoms_outside_the_rendered_viewport() {
     let cached = cached.as_ref().unwrap();
     assert_eq!(cached.cell_width, metrics.cell_width);
     assert_eq!(cached.cell_height, metrics.cell_height);
-}
-
-#[test]
-fn shared_atom_cache_holds_two_thousand_rasters() {
-    assert_eq!(RENDERED_ATOM_CACHE_CAPACITY, 2048);
 }

@@ -1,13 +1,14 @@
+use std::collections::HashSet;
+
 use skia_safe::{Canvas, Paint, Rect};
 
+use crate::canvas::LayerStack;
 use crate::editor::Editor;
 use crate::face_resolution::{ResolvedFace, resolve_derived_face};
 use crate::layout::{ScreenRect, VisibleCanvasCells};
 use crate::model::Coord;
 
-use super::{
-    CanvasContent, CellMetrics, FALLBACK_BG, FALLBACK_FG, draw_text_cluster, is_drawing_mode,
-};
+use super::{CellMetrics, FALLBACK_BG, FALLBACK_FG, draw_text_cluster, is_drawing_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MinimapBounds {
@@ -18,7 +19,7 @@ struct MinimapBounds {
 }
 
 impl MinimapBounds {
-    fn canvas(content: &[Coord], viewport: VisibleCanvasCells) -> Self {
+    fn canvas(content: impl IntoIterator<Item = Coord>, viewport: VisibleCanvasCells) -> Self {
         let mut bounds = Self {
             left: 0,
             top: 0,
@@ -26,12 +27,18 @@ impl MinimapBounds {
             bottom: i64::try_from(viewport.rows.max(1)).unwrap_or(i64::MAX),
         };
         for coord in content {
-            let column = i64::try_from(coord.column).unwrap_or(i64::MAX);
-            let line = i64::try_from(coord.line).unwrap_or(i64::MAX);
-            bounds.right = bounds.right.max(column.saturating_add(1));
-            bounds.bottom = bounds.bottom.max(line.saturating_add(1));
+            bounds.include(coord);
         }
         bounds
+    }
+
+    fn include(&mut self, coord: Coord) {
+        let column = i64::from(coord.column);
+        let line = i64::from(coord.line);
+        self.left = self.left.min(column);
+        self.top = self.top.min(line);
+        self.right = self.right.max(column.saturating_add(1));
+        self.bottom = self.bottom.max(line.saturating_add(1));
     }
 
     fn viewport(viewport: VisibleCanvasCells) -> Self {
@@ -176,7 +183,10 @@ fn density_level(coverage: f64) -> u8 {
     ((coverage.clamp(0.0, 1.0) * 10.0 - 1e-9).ceil() as u8).clamp(1, 10)
 }
 
-fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<f64>> {
+fn occupancy(
+    content: impl IntoIterator<Item = Coord>,
+    geometry: MinimapGeometry,
+) -> Option<Vec<f64>> {
     let len = usize::try_from(geometry.columns).ok().and_then(|columns| {
         usize::try_from(geometry.rows)
             .ok()
@@ -221,7 +231,6 @@ fn occupancy(content: &[Coord], geometry: MinimapGeometry) -> Option<Vec<f64>> {
 pub(super) fn render(
     canvas: &Canvas,
     state: &Editor,
-    content: CanvasContent<'_>,
     viewport: VisibleCanvasCells,
     panel: ScreenRect,
     border_metrics: &CellMetrics,
@@ -243,7 +252,7 @@ pub(super) fn render(
     } else {
         cursor_face.bg
     };
-    let canvas_bounds = MinimapBounds::canvas(content.including_hidden, viewport);
+    let (canvas_bounds, visible_content) = sparse_minimap_content(state.canvas(), viewport);
     let required_bounds = canvas_bounds.union(MinimapBounds::viewport(viewport));
     let content_panel = ScreenRect {
         left: panel.left + border_metrics.cell_width,
@@ -278,7 +287,12 @@ pub(super) fn render(
     foreground
         .set_anti_alias(false)
         .set_color(default_face.fg.to_color());
-    let Some(occupancy) = occupancy(content.visible, geometry) else {
+    let Some(occupancy) = occupancy(
+        visible_content
+            .into_iter()
+            .map(|(line, column)| Coord { line, column }),
+        geometry,
+    ) else {
         canvas.restore();
         return;
     };
@@ -373,6 +387,29 @@ pub(super) fn render(
     }
 }
 
+fn sparse_minimap_content(
+    layers: &LayerStack,
+    viewport: VisibleCanvasCells,
+) -> (MinimapBounds, HashSet<(i16, i16)>) {
+    let mut bounds = MinimapBounds::canvas(std::iter::empty(), viewport);
+    let mut visible = HashSet::new();
+    let effective_count = layers.effective_layers().len();
+    for (index, layer) in layers.layers().iter().enumerate() {
+        for (&line, row) in layer.rows() {
+            for (&column, data) in row {
+                if data.atom.contents().chars().all(char::is_whitespace) {
+                    continue;
+                }
+                bounds.include(Coord { line, column });
+                if index < effective_count && layer.visible {
+                    visible.insert((line, column));
+                }
+            }
+        }
+    }
+    (bounds, visible)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,7 +425,7 @@ mod tests {
             line: 9,
             column: 39,
         }];
-        let canvas = MinimapBounds::canvas(&content, viewport);
+        let canvas = MinimapBounds::canvas(content.iter().copied(), viewport);
         let panel = ScreenRect {
             left: 0.0,
             top: 0.0,
@@ -461,7 +498,7 @@ mod tests {
             Coord { line: 7, column: 7 },
         ];
 
-        let occupancy = occupancy(&content, geometry).unwrap();
+        let occupancy = occupancy(content.iter().copied(), geometry).unwrap();
 
         assert_eq!(
             occupancy.len(),
@@ -490,7 +527,7 @@ mod tests {
             .flat_map(|line| (0..4).map(move |column| Coord { line, column }))
             .collect::<Vec<_>>();
 
-        let occupancy = occupancy(&content, geometry).unwrap();
+        let occupancy = occupancy(content.iter().copied(), geometry).unwrap();
 
         assert_eq!(geometry.columns, 4);
         assert_eq!(geometry.rows, 4);

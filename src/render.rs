@@ -48,14 +48,7 @@ const TOOLBAR_SELECTION_PADDING: f32 = 1.0;
 const OUTLINE_STROKE_WIDTH_RATIO: f32 = 0.06;
 const MARCHING_ANTS_MILLIS_PER_PIXEL: f32 = 40.0;
 
-#[derive(Clone, Copy)]
-pub(crate) struct CanvasContent<'a> {
-    pub(crate) visible: &'a [Coord],
-    pub(crate) including_hidden: &'a [Coord],
-}
-
-pub(crate) struct RenderContext<'a> {
-    pub(crate) content: CanvasContent<'a>,
+pub(crate) struct RenderContext {
     pub(crate) viewport: ViewportOffset,
     pub(crate) toolbar_hotspot_hovered: bool,
 }
@@ -121,7 +114,6 @@ struct RenderFrame<'a> {
     width: usize,
     viewport: ViewportOffset,
     toolbar_hotspot_hovered: bool,
-    content: CanvasContent<'a>,
     toolbar_cache: &'a RefCell<Option<ToolbarCache>>,
     rendered_atom_cache: &'a RefCell<RenderedAtomCache>,
 }
@@ -153,7 +145,7 @@ struct ToolbarCache {
     image: skia_safe::Image,
 }
 
-const RENDERED_ATOM_CACHE_CAPACITY: usize = 2048;
+const RENDERED_ATOM_CACHE_CAPACITY: usize = 512;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct RenderedAtomKey {
@@ -190,10 +182,9 @@ pub fn render(
     state: &Editor,
     renderer: &Renderer,
     config: &AppConfig,
-    context: RenderContext<'_>,
+    context: RenderContext,
 ) -> Result<FrameTiming> {
     let RenderContext {
-        content,
         viewport,
         toolbar_hotspot_hovered,
     } = context;
@@ -244,7 +235,6 @@ pub fn render(
             width,
             viewport,
             toolbar_hotspot_hovered,
-            content,
             toolbar_cache: &renderer.toolbar_cache,
             rendered_atom_cache: &renderer.rendered_atom_cache,
         },
@@ -280,7 +270,6 @@ fn render_canvas(
         width,
         viewport,
         toolbar_hotspot_hovered,
-        content,
         toolbar_cache,
         rendered_atom_cache,
     } = frame;
@@ -376,7 +365,6 @@ fn render_canvas(
     minimap::render(
         canvas,
         state,
-        content,
         visible_cells,
         minimap_panel,
         toolbar_metrics,
@@ -593,42 +581,27 @@ fn render_cached_sparse_grid_atoms(
         for (&row, cells) in layer.rows().range(row_start..row_end) {
             for (&column, data) in cells.range(column_start..column_end) {
                 let cached_raster = data.raster_cache.borrow().clone();
-                let cached_image = cached_raster
+                let raster = cached_raster
                     .as_ref()
                     .filter(|cached| cached.generation == raster_generation)
-                    .map(|cached| (cached.image.clone(), None))
+                    .cloned()
                     .or_else(|| {
-                        (!use_current_metrics).then(|| {
-                            cached_raster.as_ref().map(|cached| {
-                                (
-                                    cached.image.clone(),
-                                    Some((cached.cell_width, cached.cell_height)),
-                                )
-                            })
-                        })?
-                    });
-                let image = cached_image.or_else(|| {
-                    rasterize_sparse_cell(cache, data, state, metrics, root_face, raster_generation)
-                        .map(|image| (image, None))
-                });
-                if let Some((image, source_cell_size)) = image {
-                    let position = (
-                        PADDING as f32 + f32::from(column) * metrics.cell_width,
-                        layout.grid_top + f32::from(row) * metrics.cell_height,
-                    );
-                    if let Some(source_cell_size) = source_cell_size {
-                        draw_scaled_cell_image(
-                            canvas,
-                            &image,
-                            source_cell_size,
-                            column,
-                            row,
-                            layout.grid_top,
+                        (!use_current_metrics)
+                            .then(|| cached_raster.clone())
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        rasterize_sparse_cell(
+                            cache,
+                            data,
+                            state,
                             metrics,
-                        );
-                    } else {
-                        canvas.draw_image(&image, position, None);
-                    }
+                            root_face,
+                            raster_generation,
+                        )
+                    });
+                if let Some(raster) = raster {
+                    draw_cell_raster(canvas, &raster, column, row, layout.grid_top, metrics);
                 }
             }
         }
@@ -643,7 +616,7 @@ fn rasterize_sparse_cell(
     metrics: &CellMetrics,
     root_face: ResolvedFace,
     raster_generation: u64,
-) -> Option<skia_safe::Image> {
+) -> Option<Rc<crate::canvas::Rasterized>> {
     let atom = StyledAtom {
         face: data.face.as_ref().clone(),
         contents: data.atom.contents().to_owned(),
@@ -674,28 +647,28 @@ fn rasterize_sparse_cell(
         metrics,
     );
     let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
-    *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
+    let raster = Rc::new(crate::canvas::Rasterized {
         generation: raster_generation,
-        image: image.clone(),
+        image,
         cell_width: metrics.cell_width,
         cell_height: metrics.cell_height,
-    }));
-    Some(image)
+    });
+    *data.raster_cache.borrow_mut() = Some(Rc::clone(&raster));
+    Some(raster)
 }
 
-fn draw_scaled_cell_image(
+fn draw_cell_raster(
     canvas: &Canvas,
-    image: &skia_safe::Image,
-    source_cell_size: (f32, f32),
+    raster: &crate::canvas::Rasterized,
     column: i16,
     row: i16,
     grid_top: f32,
     metrics: &CellMetrics,
 ) {
-    let source = Rect::from_xywh(0.0, 0.0, source_cell_size.0, source_cell_size.1);
+    let source = Rect::from_xywh(0.0, 0.0, raster.cell_width, raster.cell_height);
     let destination = snapped_cell_rect(column, row, grid_top, metrics);
     canvas.draw_image_rect(
-        image,
+        &raster.image,
         Some((&source, skia_safe::canvas::SrcRectConstraint::Strict)),
         destination,
         &Paint::default(),
