@@ -1488,14 +1488,13 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
         state.toggle_shape_preview();
         state.move_cursor(crate::model::Direction::Right);
-        let expected = state.canvas().layers()[state.canvas().active_index()].atoms_in_region(
-            CanvasRegion {
+        let expected =
+            state.canvas().layers()[state.canvas().active_index()].atoms_in_region(CanvasRegion {
                 left: 0,
                 top: 0,
                 width: 2,
                 height: 1,
-            },
-        );
+            });
         let mut platform = MockPlatform {
             image: Some(sample_image()),
             ..MockPlatform::default()

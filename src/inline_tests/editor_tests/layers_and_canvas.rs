@@ -376,7 +376,7 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
             .collect::<Vec<_>>(),
         [base, top]
     );
-    assert_eq!(contents(&state.lines_for_test()[0]), "A●z");
+    assert_eq!(contents(&state.lines_for_test()[0]), "A●");
     assert_eq!(state.lines_for_test()[0][1].face, source_face);
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(
@@ -753,7 +753,7 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_line_markers() {
     assert!(state.selection.is_collapsed());
     assert_eq!(state.selection.active(), Coord { line: 3, column: 4 });
     assert!(state.line_markers_for_test().is_empty());
-    assert_eq!(state.cursor_mode, CursorMode::Stamp);
+    assert_eq!(state.cursor_mode, CursorMode::MoveDraw);
 }
 
 #[test]

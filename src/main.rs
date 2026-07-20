@@ -2370,7 +2370,7 @@ mod tests {
             line_contents(
                 &state.move_lift_render_canvas().unwrap().layers()
                     [state.move_lift_render_canvas().unwrap().active_index()]
-                    .to_dense()[0],
+                .to_dense()[0],
             )
             .trim_end(),
             " AA"
@@ -2420,7 +2420,7 @@ mod tests {
             line_contents(
                 &state.move_lift_render_canvas().unwrap().layers()
                     [state.move_lift_render_canvas().unwrap().active_index()]
-                    .to_dense()[0],
+                .to_dense()[0],
             ),
             "AAA"
         );
