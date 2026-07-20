@@ -296,14 +296,8 @@ fn render_canvas(
         viewport,
         (metrics.cell_width, metrics.cell_height),
     );
-    let first_row = usize::try_from(visible_cells.origin.1.max(0)).unwrap_or(usize::MAX);
-    let first_column = usize::try_from(visible_cells.origin.0.max(0)).unwrap_or(usize::MAX);
-    let max_row = first_row
-        .saturating_add(visible_cells.rows)
-        .saturating_add(2);
-    let max_column = first_column
-        .saturating_add(visible_cells.columns)
-        .saturating_add(2);
+    let visible_rows = signed_visible_range(visible_cells.origin.1, visible_cells.rows);
+    let visible_columns = signed_visible_range(visible_cells.origin.0, visible_cells.columns);
     let sparse_move_preview = state.move_lift_render_canvas();
     let sparse_line_preview = sparse_move_preview
         .is_none()
@@ -316,20 +310,20 @@ fn render_canvas(
         .or(sparse_line_preview)
         .or(shape_preview_canvas.as_ref());
     let sparse_render_canvas = sparse_preview_canvas.unwrap_or_else(|| state.canvas());
-    render_cached_sparse_grid_atoms(
-        canvas,
-        sparse_render_canvas,
-        state,
-        metrics,
-        layout,
-        viewport,
-        width,
-        first_row,
-        max_row,
-        first_column,
-        max_column,
-        rendered_atom_cache,
-    );
+    if let (Some(rows), Some(columns)) = (visible_rows, visible_columns) {
+        render_cached_sparse_grid_atoms(
+            canvas,
+            sparse_render_canvas,
+            state,
+            metrics,
+            layout,
+            viewport,
+            width,
+            rows,
+            columns,
+            rendered_atom_cache,
+        );
+    }
 
     canvas.save();
     canvas.clip_rect(
@@ -377,6 +371,15 @@ fn render_canvas(
         grid: grid_time,
         minimap: minimap_started.elapsed(),
     }
+}
+
+fn signed_visible_range(origin: i64, cells: usize) -> Option<(i16, i16)> {
+    let end = origin
+        .saturating_add(i64::try_from(cells).unwrap_or(i64::MAX))
+        .saturating_add(1);
+    let start = origin.max(i64::from(i16::MIN));
+    let end = end.min(i64::from(i16::MAX));
+    (start <= end).then(|| (start as i16, end as i16))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -543,10 +546,8 @@ fn render_cached_sparse_grid_atoms(
     layout: LayoutMetrics,
     viewport: ViewportOffset,
     width: usize,
-    first_row: usize,
-    max_row: usize,
-    first_column: usize,
-    max_column: usize,
+    rows: (i16, i16),
+    columns: (i16, i16),
     cache: &RefCell<RenderedAtomCache>,
 ) {
     canvas.save();
@@ -561,10 +562,6 @@ fn render_cached_sparse_grid_atoms(
         false,
     );
     canvas.translate((viewport.x as f32, viewport.y as f32));
-    let row_start = i16::try_from(first_row).unwrap_or(i16::MAX);
-    let row_end = i16::try_from(max_row).unwrap_or(i16::MAX);
-    let column_start = i16::try_from(first_column).unwrap_or(i16::MAX);
-    let column_end = i16::try_from(max_column).unwrap_or(i16::MAX);
     let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
     let style_generation = sparse_raster_style_generation(&state.grid.default_face, &state.theme);
     let metrics_generation = sparse_raster_metrics_generation(metrics);
@@ -580,8 +577,8 @@ fn render_cached_sparse_grid_atoms(
         .filter(|layer| layer.visible)
     {
         let mut atlas_batches = HashMap::<u32, AtlasBatch>::new();
-        for (&row, cells) in layer.rows().range(row_start..row_end) {
-            for (&column, data) in cells.range(column_start..column_end) {
+        for (&row, cells) in layer.rows().range(rows.0..=rows.1) {
+            for (&column, data) in cells.range(columns.0..=columns.1) {
                 if render_sparse_cell_graphic(
                     canvas,
                     data,
@@ -2367,15 +2364,23 @@ mod tests {
             layout,
             ViewportOffset::default(),
             width as usize,
-            0,
-            2,
-            0,
-            2,
+            (0, 2),
+            (0, 2),
             &cache,
         );
 
         let coordinate = state.canvas().layers()[0].get(0, 0).unwrap();
         assert!(coordinate.raster_cache.borrow().is_some());
+    }
+
+    #[test]
+    fn visible_sparse_range_preserves_negative_coordinates_and_canvas_limits() {
+        assert_eq!(signed_visible_range(-3, 2), Some((-3, 0)));
+        assert_eq!(
+            signed_visible_range(i64::from(i16::MIN) - 5, 6),
+            Some((i16::MIN, i16::MIN + 2))
+        );
+        assert_eq!(signed_visible_range(i64::from(i16::MAX) + 1, 2), None);
     }
 
     #[test]

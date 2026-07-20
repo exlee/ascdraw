@@ -373,7 +373,7 @@ mod tests {
         );
         assert_eq!(
             action_start(&data, ToolbarAction::SelectColor(ColorId(7))),
-            157
+            width - 3
         );
 
         for action in [
@@ -402,8 +402,10 @@ mod tests {
         let header = boxed_toolbar_spans(&toolbar.toolbar_spans(MAIN_LABEL_ROW), width);
         let palette = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width);
 
-        assert_eq!(action_start(&header, ToolbarAction::BeginColorsPath), 98);
-        assert_eq!(action_start(&palette, ToolbarAction::BeginColorPath(0)), 98);
+        assert_eq!(
+            action_start(&header, ToolbarAction::BeginColorsPath),
+            action_start(&palette, ToolbarAction::BeginColorPath(0))
+        );
     }
 
     #[test]

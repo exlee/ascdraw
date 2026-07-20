@@ -79,6 +79,28 @@ fn composition_ignores_whitespace_and_disabled_stack_uses_base_only() {
 }
 
 #[test]
+fn combined_dense_exchange_normalizes_signed_visible_layer_bounds() {
+    let mut base = LayerMap::new(LayerId(0), true);
+    base.set_data(2, -3, data("a", Face::default()));
+    let mut top = LayerMap::new(LayerId(1), true);
+    top.set_data(-1, 1, data("b", Face::default()));
+    let mut hidden = LayerMap::new(LayerId(2), false);
+    hidden.set_data(-8, -8, data("x", Face::default()));
+    let stack = LayerStack::new(vec![base, top, hidden], true).unwrap();
+
+    let composite = crate::dense_exchange::composite_visible_bounds(&stack).unwrap();
+    assert_eq!(composite.len(), 4);
+    assert!(composite.iter().all(|row| row.len() == 5));
+    assert_eq!(composite[0][4].contents, "b");
+    assert_eq!(composite[3][0].contents, "a");
+
+    let layers = crate::dense_exchange::visible_layers_in_combined_bounds(&stack);
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[0][3][0].contents, "a");
+    assert_eq!(layers[1][0][4].contents, "b");
+}
+
+#[test]
 fn bounds_follow_insertions_and_edge_deletions() {
     let mut layer = LayerMap::new(LayerId(0), true);
     layer
@@ -148,34 +170,23 @@ fn line_markers_are_stored_with_their_coordinate_data() {
         face: Face::default(),
         contents: "◆".to_owned(),
     }]];
-    let marker = LineMarker {
-        coord: Coord::default(),
+    let line_data = LineData {
         ending: LineEnding::Fixed('◆'),
         base_glyph: "╴".to_owned(),
     };
 
-    let map = crate::dense_exchange::from_dense_with_markers(
-        LayerId(0),
-        true,
-        &lines,
-        std::slice::from_ref(&marker),
-    )
-    .unwrap();
+    let mut map = crate::dense_exchange::from_dense(LayerId(0), true, &lines).unwrap();
+    assert!(map.set_line_data(0, 0, Some(line_data.clone())));
 
     assert_eq!(
         map.get(0, 0).and_then(|data| data.line.as_ref()),
-        Some(&LineData {
-            ending: marker.ending,
-            base_glyph: marker.base_glyph.clone(),
-        })
+        Some(&line_data)
     );
-    assert_eq!(map.line_markers(), vec![marker]);
 }
 
 #[test]
 fn cell_and_row_edits_remap_embedded_line_metadata() {
-    let marker = LineMarker {
-        coord: Coord { line: 0, column: 1 },
+    let line_data = LineData {
         ending: LineEnding::Fixed('◆'),
         base_glyph: "╴".to_owned(),
     };
@@ -187,27 +198,22 @@ fn cell_and_row_edits_remap_embedded_line_metadata() {
         vec![styled("a"), styled("◆")],
         vec![styled("b"), styled("◆")],
     ];
-    let markers = [
-        marker.clone(),
-        LineMarker {
-            coord: Coord { line: 1, column: 1 },
-            ..marker
-        },
-    ];
-    let mut map =
-        crate::dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &markers).unwrap();
+    let mut map = crate::dense_exchange::from_dense(LayerId(0), true, &lines).unwrap();
+    assert!(map.set_line_data(1, 0, Some(line_data.clone())));
+    assert!(map.set_line_data(1, 1, Some(line_data.clone())));
 
     map.insert_cells(0, 0, vec![(Atom::new("z").unwrap(), Face::default())])
         .unwrap();
-    assert_eq!(map.line_markers()[0].coord, Coord { line: 0, column: 2 });
+    assert_eq!(map.line_at(Coord { line: 0, column: 2 }), Some(&line_data));
 
     map.remove_cells(0, 2, 1).unwrap();
-    assert_eq!(map.line_markers(), vec![markers[1].clone()]);
+    assert!(map.line_at(Coord { line: 0, column: 2 }).is_none());
+    assert_eq!(map.line_at(Coord { line: 1, column: 1 }), Some(&line_data));
 
     map.split_row(0, 1).unwrap();
-    assert_eq!(map.line_markers()[0].coord, Coord { line: 2, column: 1 });
+    assert_eq!(map.line_at(Coord { line: 2, column: 1 }), Some(&line_data));
     assert!(map.join_row_with_next(1).unwrap());
-    assert_eq!(map.line_markers()[0].coord, Coord { line: 1, column: 2 });
+    assert_eq!(map.line_at(Coord { line: 1, column: 2 }), Some(&line_data));
 }
 
 #[test]
@@ -216,25 +222,31 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
         face: Face::default(),
         contents: contents.to_owned(),
     };
-    let marker = |line, column, contents: &str| LineMarker {
-        coord: Coord { line, column },
+    let marker = |contents: &str| LineData {
         ending: LineEnding::Fixed('◆'),
         base_glyph: contents.to_owned(),
     };
-    let mut columns = crate::dense_exchange::from_dense_with_markers(
+    let mut columns = crate::dense_exchange::from_dense(
         LayerId(0),
         true,
         &[vec![styled("A"), styled("B"), styled("C"), styled("D")]],
-        &[marker(0, 1, "B"), marker(0, 3, "D")],
     )
     .unwrap();
+    assert!(columns.set_line_data(1, 0, Some(marker("B"))));
+    assert!(columns.set_line_data(3, 0, Some(marker("D"))));
 
     columns.pull_column_left(1, &BTreeSet::from([0])).unwrap();
-    assert_eq!(columns.line_markers(), vec![marker(0, 2, "D")]);
+    assert_eq!(
+        columns.line_at(Coord { line: 0, column: 2 }),
+        Some(&marker("D"))
+    );
     columns.insert_column(2).unwrap();
-    assert_eq!(columns.line_markers(), vec![marker(0, 3, "D")]);
+    assert_eq!(
+        columns.line_at(Coord { line: 0, column: 3 }),
+        Some(&marker("D"))
+    );
 
-    let mut rows = crate::dense_exchange::from_dense_with_markers(
+    let mut rows = crate::dense_exchange::from_dense(
         LayerId(0),
         true,
         &[
@@ -243,10 +255,14 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
             vec![styled("C")],
             vec![styled("D")],
         ],
-        &[marker(2, 0, "C"), marker(3, 0, "D")],
     )
     .unwrap();
+    assert!(rows.set_line_data(0, 2, Some(marker("C"))));
+    assert!(rows.set_line_data(0, 3, Some(marker("D"))));
 
     rows.remove_row(2).unwrap();
-    assert_eq!(rows.line_markers(), vec![marker(2, 0, "D")]);
+    assert_eq!(
+        rows.line_at(Coord { line: 2, column: 0 }),
+        Some(&marker("D"))
+    );
 }

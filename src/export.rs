@@ -647,24 +647,8 @@ pub(crate) fn load_project_json(
 
 fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
     let rows = match loaded {
-        LoadedJson::Native(document) => flatten_visible_layers(
-            &document
-                .canvas
-                .effective_layers()
-                .iter()
-                .filter(|layer| layer.visible)
-                .map(dense_exchange::to_dense)
-                .collect::<Vec<_>>(),
-        ),
-        LoadedJson::Project(project) => flatten_visible_layers(
-            &project
-                .canvas
-                .effective_layers()
-                .iter()
-                .filter(|layer| layer.visible)
-                .map(|layer| dense_exchange::to_dense(layer))
-                .collect::<Vec<_>>(),
-        ),
+        LoadedJson::Native(document) => dense_exchange::composite_visible_bounds(&document.canvas)?,
+        LoadedJson::Project(project) => dense_exchange::composite_visible_bounds(&project.canvas)?,
         LoadedJson::Legacy(lines) => lines,
     };
     TextRectangle::from_rows(rows)
@@ -940,7 +924,7 @@ pub(crate) fn canvas_from_text(text: &str) -> Result<LayerStack> {
 
 pub(crate) fn canvas_from_dense_lines(mut lines: Vec<Vec<StyledAtom>>) -> Result<LayerStack> {
     truncate_dense_lines(&mut lines);
-    let map = dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &[])?;
+    let map = dense_exchange::from_dense(LayerId(0), true, &lines)?;
     LayerStack::new(vec![map], false)
 }
 
@@ -1011,7 +995,7 @@ mod tests {
                     .map(|layer| LegacyLayer {
                         id: layer.id,
                         visible: layer.visible,
-                        lines: dense_exchange::to_dense(layer),
+                        lines: crate::test_support::dense_layer(layer),
                     })
                     .collect(),
                 active_layer: Some(state.active_layer_id()),
@@ -1456,7 +1440,7 @@ mod tests {
         };
         assert_eq!(
             contents(
-                dense_exchange::to_dense(&document.canvas.layers()[0])
+                crate::test_support::dense_layer(&document.canvas.layers()[0])
                     .last()
                     .unwrap(),
             ),
@@ -1861,12 +1845,12 @@ mod tests {
         assert_eq!(layers[0].id, base);
         assert!(!layers[0].visible);
         assert_eq!(
-            dense_exchange::to_dense(&layers[0])[0][0].face,
+            crate::test_support::dense_layer(&layers[0])[0][0].face,
             state.theme.selection
         );
         assert_eq!(layers[1].id, upper);
         assert_eq!(
-            dense_exchange::to_dense(&layers[1])[0][0].face,
+            crate::test_support::dense_layer(&layers[1])[0][0].face,
             state.theme.cursor_block
         );
         assert_eq!(restored.canvas.active_id(), upper);
@@ -1898,7 +1882,7 @@ mod tests {
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].id, LayerId(0));
         assert!(layers[0].visible);
-        let lines = dense_exchange::to_dense(&layers[0]);
+        let lines = crate::test_support::dense_layer(&layers[0]);
         assert_eq!(contents(&lines[0]), "a");
         assert!(
             lines

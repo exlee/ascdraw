@@ -30,13 +30,6 @@ pub struct LineData {
     pub base_glyph: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LineMarker {
-    pub(crate) coord: Coord,
-    pub(crate) ending: LineEnding,
-    pub(crate) base_glyph: String,
-}
-
 #[derive(Debug)]
 pub struct CoordData {
     pub face: Rc<Face>,
@@ -126,24 +119,15 @@ impl LayerMap {
             .unwrap_or(0)
     }
 
-    pub(crate) fn line_markers(&self) -> Vec<LineMarker> {
-        self.rows
-            .iter()
-            .flat_map(|(&line, row)| {
-                row.iter().filter_map(move |(&column, data)| {
-                    let line_data = data.line.as_ref()?;
-                    Some(LineMarker {
-                        coord: Coord { line, column },
-                        ending: line_data.ending,
-                        base_glyph: line_data.base_glyph.clone(),
-                    })
-                })
-            })
-            .collect()
-    }
-
     pub(crate) fn line_at(&self, coord: Coord) -> Option<&LineData> {
         self.get(coord.line, coord.column)?.line.as_ref()
+    }
+
+    pub(crate) fn has_line_data_in(&self, bounds: SelectionBounds) -> bool {
+        self.rows.range(bounds.top..=bounds.bottom).any(|(_, row)| {
+            row.range(bounds.left..=bounds.right)
+                .any(|(_, data)| data.line.is_some())
+        })
     }
 
     pub(crate) fn take_line_at(&mut self, coord: Coord) -> Option<LineData> {
@@ -502,6 +486,20 @@ impl LayerMap {
         bounds: SelectionBounds,
         replacement: Option<(Atom, Face)>,
     ) -> Result<()> {
+        if replacement.is_none() {
+            let stored = self
+                .rows
+                .range(bounds.top..=bounds.bottom)
+                .flat_map(|(&line, row)| {
+                    row.range(bounds.left..=bounds.right)
+                        .map(move |(&column, _)| (column, line))
+                })
+                .collect::<Vec<_>>();
+            for (column, line) in stored {
+                self.delete_at(column, line);
+            }
+            return Ok(());
+        }
         for line in bounds.top..=bounds.bottom {
             let y = line;
             for column in bounds.left..=bounds.right {
@@ -517,19 +515,6 @@ impl LayerMap {
 
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
         record_cell_before(self.id, y, x, self.get(y, x));
-        let Some(data) = self.rows.get_mut(&y).and_then(|row| row.get_mut(&x)) else {
-            return false;
-        };
-        data.line = line;
-        true
-    }
-
-    pub(crate) fn set_line_data_untracked(
-        &mut self,
-        x: i16,
-        y: i16,
-        line: Option<LineData>,
-    ) -> bool {
         let Some(data) = self.rows.get_mut(&y).and_then(|row| row.get_mut(&x)) else {
             return false;
         };
@@ -722,10 +707,6 @@ impl LayerStack {
 
     pub(crate) fn active_row_exists(&self, line: i16) -> bool {
         self.layers[self.active].rows().contains_key(&line)
-    }
-
-    pub(crate) fn active_line_markers(&self) -> Vec<LineMarker> {
-        self.layers[self.active].line_markers()
     }
 
     pub(crate) fn line_at(&self, coord: Coord) -> Option<&LineData> {

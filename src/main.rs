@@ -34,6 +34,9 @@ mod perf;
 mod render;
 mod runtime;
 pub mod selection;
+#[cfg(test)]
+#[path = "inline_tests/test_support.rs"]
+mod test_support;
 mod title_policy;
 mod toolbar;
 mod toolbar_stamp;
@@ -1577,7 +1580,9 @@ mod tests {
         assert_eq!(
             state
                 .line_preview_render_canvas()
-                .map(|canvas| { dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]) })
+                .map(|canvas| {
+                    test_support::dense_layer(&canvas.layers()[canvas.active_index()])
+                })
                 .expect("line preview is composited")
                 .iter()
                 .flatten()
@@ -1779,7 +1784,9 @@ mod tests {
         assert_eq!(
             state
                 .line_preview_render_canvas()
-                .map(|canvas| { dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]) })
+                .map(|canvas| {
+                    test_support::dense_layer(&canvas.layers()[canvas.active_index()])
+                })
                 .expect("earlier preview segment remains active")
                 .iter()
                 .flatten()
@@ -1832,7 +1839,7 @@ mod tests {
 
         let preview = state
             .shape_preview_canvas()
-            .map(|canvas| dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]))
+            .map(|canvas| test_support::dense_layer(&canvas.layers()[canvas.active_index()]))
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
         assert!(apply_edit_command(
@@ -2385,7 +2392,7 @@ mod tests {
         assert_eq!(state.selection_bounds().left, 2);
         assert_eq!(
             line_contents(
-                &dense_exchange::to_dense(
+                &test_support::dense_layer(
                     &state.move_lift_render_canvas().unwrap().layers()
                         [state.move_lift_render_canvas().unwrap().active_index()],
                 )[0]
@@ -2436,7 +2443,7 @@ mod tests {
 
         assert_eq!(
             line_contents(
-                &dense_exchange::to_dense(
+                &test_support::dense_layer(
                     &state.move_lift_render_canvas().unwrap().layers()
                         [state.move_lift_render_canvas().unwrap().active_index()],
                 )[0]

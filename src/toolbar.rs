@@ -1693,16 +1693,6 @@ mod tests {
         }
     }
 
-    impl ToolbarSpan {
-        fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
-            if shifted {
-                self.shift_action.or(self.action)
-            } else {
-                self.action
-            }
-        }
-    }
-
     fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
         let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
         submenu_prefix_width_for_pages(label, category, page_count)
@@ -2007,7 +1997,11 @@ mod tests {
         assert_eq!(toolbar.menu_row_count(), 5);
         assert_eq!(toolbar.content_rows(), 8);
         assert_eq!(toolbar.rows(), 10);
-        assert_eq!(toolbar_height_for_width(&toolbar, usize::MAX, 18.0), 198.0);
+        assert_eq!(
+            toolbar_height_for_width(&toolbar, usize::MAX, 18.0),
+            toolbar.rows() as f32 * 18.0
+                + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
+        );
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert_eq!(toolbar.menu_row_count(), 5);
@@ -2017,10 +2011,20 @@ mod tests {
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Shapes));
         assert_eq!(toolbar.menu_row_count(), 2);
         assert_eq!(toolbar.rows(), 7);
+        assert_eq!(
+            toolbar_height_for_width(&toolbar, usize::MAX, 18.0),
+            toolbar.rows() as f32 * 18.0
+                + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
+        );
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Utilities));
         assert_eq!(toolbar.menu_row_count(), 1);
         assert_eq!(toolbar.rows(), 6);
+        assert_eq!(
+            toolbar_height_for_width(&toolbar, usize::MAX, 18.0),
+            toolbar.rows() as f32 * 18.0
+                + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
+        );
     }
 
     #[test]
@@ -2746,27 +2750,6 @@ mod tests {
         assert!(toolbar.handle_shortcut(&Key::Character("2".into()), ModifiersState::SHIFT));
         assert_eq!(toolbar.stamp(), "■");
         assert_eq!(toolbar.pending_shortcut(), None);
-    }
-
-    #[test]
-    fn toolbar_spans_can_resolve_alternate_shift_actions() {
-        let mut span = plain_span("x".to_owned());
-        span.action = Some(ToolbarAction::SelectMain(MainMode::Stamp));
-        span.shift_action = Some(ToolbarAction::SelectMain(MainMode::Line));
-
-        assert_eq!(
-            span.action_for_shift(false),
-            Some(ToolbarAction::SelectMain(MainMode::Stamp))
-        );
-        assert_eq!(
-            span.action_for_shift(true),
-            Some(ToolbarAction::SelectMain(MainMode::Line))
-        );
-        span.shift_action = None;
-        assert_eq!(
-            span.action_for_shift(true),
-            Some(ToolbarAction::SelectMain(MainMode::Stamp))
-        );
     }
 
     #[test]

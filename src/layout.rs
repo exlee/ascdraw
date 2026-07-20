@@ -502,6 +502,12 @@ mod tests {
             content_top_padding_for_scale_factor(2.0, true),
             (PADDING + 48) as f32
         );
+        let opaque_top = content_top_padding_for_scale_factor(1.0, false) + 100.0;
+        let transparent_top = content_top_padding_for_scale_factor(1.0, true) + 100.0;
+        assert!(
+            vertical_geometry(600, opaque_top, 16.0, 18.0).0
+                > vertical_geometry(600, transparent_top, 16.0, 18.0).0
+        );
     }
 
     #[test]

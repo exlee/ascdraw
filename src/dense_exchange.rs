@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::canvas::{LayerMap, LayerStack, LineData, LineMarker};
+use crate::canvas::{LayerMap, LayerStack};
 use crate::model::{Atom, Coord, Face, LayerId, StyledAtom};
 use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
 
@@ -50,15 +50,6 @@ pub(crate) fn from_dense(
             }
         }
     }
-    from_dense_with_markers(id, visible, lines, &[])
-}
-
-pub(crate) fn from_dense_with_markers(
-    id: LayerId,
-    visible: bool,
-    lines: &[Vec<StyledAtom>],
-    line_markers: &[LineMarker],
-) -> Result<LayerMap> {
     let mut map = LayerMap::new(id, visible);
     for (line_index, row) in lines.iter().enumerate() {
         let line = i16::try_from(line_index).context("canvas line exceeds signed i16 range")?;
@@ -76,59 +67,7 @@ pub(crate) fn from_dense_with_markers(
             }
         }
     }
-    for marker in line_markers {
-        map.set_line_data_untracked(
-            marker.coord.column,
-            marker.coord.line,
-            Some(LineData {
-                ending: marker.ending,
-                base_glyph: marker.base_glyph.clone(),
-            }),
-        );
-    }
     Ok(map)
-}
-
-pub(crate) fn to_dense(map: &LayerMap) -> Vec<Vec<StyledAtom>> {
-    let height = map
-        .rows()
-        .last_key_value()
-        .and_then(|(&line, _)| usize::try_from(line).ok())
-        .map_or(1, |line| line.saturating_add(1));
-    (0..height)
-        .map(|line| {
-            let row = i16::try_from(line)
-                .ok()
-                .and_then(|line| map.rows().get(&line));
-            let width = row.map_or(0, |row| {
-                row.iter()
-                    .filter_map(|(&column, data)| {
-                        usize::try_from(column).ok().map(|column| {
-                            column
-                                .saturating_add(UnicodeWidthStr::width(data.atom.contents()).max(1))
-                        })
-                    })
-                    .max()
-                    .unwrap_or(0)
-            });
-            let mut atoms = Vec::new();
-            let mut column = 0usize;
-            while column < width {
-                let data = i16::try_from(column)
-                    .ok()
-                    .and_then(|column| row.and_then(|row| row.get(&column)));
-                if let Some(data) = data {
-                    column =
-                        column.saturating_add(UnicodeWidthStr::width(data.atom.contents()).max(1));
-                    atoms.push(styled(data));
-                } else {
-                    atoms.push(default_blank());
-                    column += 1;
-                }
-            }
-            atoms
-        })
-        .collect()
 }
 
 pub(crate) fn composite_region(
@@ -150,14 +89,52 @@ pub(crate) fn composite_region(
                 .iter()
                 .filter(|layer| layer.visible)
                 .filter_map(|layer| layer.get(line, column))
-                .filter(|data| !data.atom.contents().chars().all(char::is_whitespace))
-                .next_back()
+                .rfind(|data| !data.atom.contents().chars().all(char::is_whitespace))
                 .map_or_else(default_blank, styled);
             row.push(atom);
         }
         rows.push(row);
     }
     Some(rows)
+}
+
+pub(crate) fn composite_visible_bounds(stack: &LayerStack) -> Option<Vec<Vec<StyledAtom>>> {
+    composite_region(stack, visible_bounds_region(stack)?)
+}
+
+pub(crate) fn visible_layers_in_combined_bounds(stack: &LayerStack) -> Vec<Vec<Vec<StyledAtom>>> {
+    let layers = stack
+        .effective_layers()
+        .iter()
+        .filter(|layer| layer.visible)
+        .collect::<Vec<_>>();
+    let Some(region) = visible_bounds_region(stack) else {
+        return layers.into_iter().map(|_| vec![Vec::new()]).collect();
+    };
+    layers
+        .into_iter()
+        .map(|layer| atoms_in_region(layer, region))
+        .collect()
+}
+
+fn visible_bounds_region(stack: &LayerStack) -> Option<CanvasRegion> {
+    let bounds = stack
+        .effective_layers()
+        .iter()
+        .filter(|layer| layer.visible)
+        .filter_map(LayerMap::bounds)
+        .reduce(|left, right| crate::canvas::LayerBounds {
+            min_x: left.min_x.min(right.min_x),
+            min_y: left.min_y.min(right.min_y),
+            max_x: left.max_x.max(right.max_x),
+            max_y: left.max_y.max(right.max_y),
+        })?;
+    Some(CanvasRegion {
+        left: i64::from(bounds.min_x),
+        top: i64::from(bounds.min_y),
+        width: usize::try_from(i32::from(bounds.max_x) - i32::from(bounds.min_x) + 1).ok()?,
+        height: usize::try_from(i32::from(bounds.max_y) - i32::from(bounds.min_y) + 1).ok()?,
+    })
 }
 
 pub(crate) fn overwrite_rectangle(

@@ -201,7 +201,7 @@ fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
 
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "┌──┐");
     assert_eq!(contents(&preview[1]), "│  │");
     assert_eq!(contents(&preview[2]), "└──┘");
@@ -313,7 +313,7 @@ fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
 
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(
         preview
             .iter()
@@ -376,7 +376,7 @@ fn reversed_rounded_shape_extends_one_cell_past_content_and_adds_missing_rows() 
     let expected = ["╭───╮", "│   │", "│   │", "│   │", "╰───╯"];
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(
         preview
             .iter()
@@ -476,7 +476,7 @@ fn rounded_shape_preview_uses_selected_fill() {
 
     let preview_canvas = state.shape_preview_canvas().unwrap();
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "╭──╮");
     assert_eq!(contents(&preview[1]), "│░░│");
     assert_eq!(contents(&preview[2]), "╰──╯");
@@ -694,7 +694,15 @@ fn push_remaps_selection_coordinates() {
 fn move_lift_previews_without_mutation_then_composes_edited_cells() {
     let mut state = utility_state(&["abXX", "cdYY"], UtilityKind::Push, Coord::default());
     let configured_face = state.theme.tooltip.clone();
-    state.set_cell_face_for_test(Coord::default(), configured_face.clone());
+    assert!(
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![vec![StyledAtom {
+                contents: "a".to_owned(),
+                face: configured_face.clone(),
+            }]])
+            .unwrap(),
+        )
+    );
     state
         .selection
         .select(Coord::default(), Coord { line: 1, column: 1 });
@@ -708,7 +716,7 @@ fn move_lift_previews_without_mutation_then_composes_edited_cells() {
         .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "  ab");
     assert_eq!(contents(&preview[1]), "  cd");
     assert_eq!(preview[0][2].face, configured_face);
@@ -741,19 +749,19 @@ fn clone_move_lift_clones_once_per_shift_press_and_can_clone_after_moving() {
     assert_eq!(initial.edit_snapshot(), before);
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "AA");
 
     assert!(initial.clone_move_lift(Direction::Right, 1));
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "A A");
 
     assert!(initial.clone_move_lift(Direction::Left, 2));
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "AAA");
     assert!(initial.confirm_move_lift());
     assert_eq!(line_contents(&initial), vec!["AAA"]);
@@ -860,7 +868,7 @@ fn move_lift_treats_unedited_cells_as_transparent() {
         .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
     let preview =
-        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "");
     assert_eq!(contents(&preview[1]), "A◆C");
 

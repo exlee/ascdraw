@@ -1,5 +1,5 @@
 use super::*;
-use crate::canvas::{CoordData, LayerMap, LineMarker as PlacedLineMarker};
+use crate::canvas::{CoordData, LayerMap};
 use crate::drawing::LineEnding;
 use crate::editor_event::EditorState;
 use crate::model::{ColorId, StyledAtom};
@@ -8,6 +8,13 @@ use crate::toolbar::{ToggleKind, UtilityKind};
 #[derive(Debug, Clone)]
 pub(crate) struct LayerView {
     lines: Vec<Vec<StyledAtom>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlacedLineMarker {
+    pub(crate) coord: Coord,
+    pub(crate) ending: LineEnding,
+    pub(crate) base_glyph: String,
 }
 
 impl Editor {
@@ -24,9 +31,8 @@ impl Editor {
     pub(crate) fn set_lines_for_test(&mut self, lines: Vec<Vec<StyledAtom>>) {
         let active = self.canvas.active_id();
         let visible = self.canvas.layers()[self.canvas.active_index()].visible;
-        let markers = self.canvas.active_line_markers();
         let mut replacement = Some(
-            crate::dense_exchange::from_dense_with_markers(active, visible, &lines, &markers)
+            crate::dense_exchange::from_dense(active, visible, &lines)
                 .expect("test canvas contains valid one-cell atoms"),
         );
         self.canvas.mutate_layers(|id, layer| {
@@ -37,7 +43,7 @@ impl Editor {
     }
 
     pub(crate) fn lines_for_test(&self) -> Vec<Vec<StyledAtom>> {
-        crate::dense_exchange::to_dense(&self.canvas.layers()[self.canvas.active_index()])
+        crate::test_support::dense_layer(&self.canvas.layers()[self.canvas.active_index()])
     }
 
     pub(crate) fn active_layer_for_test(&self) -> &LayerMap {
@@ -46,6 +52,21 @@ impl Editor {
 
     pub(crate) fn active_cell_for_test(&self, coord: Coord) -> Option<&CoordData> {
         self.canvas.active_cell(coord)
+    }
+
+    pub(crate) fn selected_text(&self) -> String {
+        crate::dense_exchange::selected_atoms(
+            &self.canvas.layers()[self.canvas.active_index()],
+            self.selection.bounds(),
+        )
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|atom| atom.contents)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 
     pub(crate) fn set_cell_face_for_test(&mut self, coord: Coord, face: Face) {
@@ -60,7 +81,20 @@ impl Editor {
     }
 
     pub(crate) fn line_markers_for_test(&self) -> Vec<PlacedLineMarker> {
-        self.canvas.active_line_markers()
+        self.active_layer_for_test()
+            .rows()
+            .iter()
+            .flat_map(|(&line, row)| {
+                row.iter().filter_map(move |(&column, data)| {
+                    let line_data = data.line.as_ref()?;
+                    Some(PlacedLineMarker {
+                        coord: Coord { line, column },
+                        ending: line_data.ending,
+                        base_glyph: line_data.base_glyph.clone(),
+                    })
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn layer_views(&self) -> Vec<LayerView> {
@@ -68,7 +102,7 @@ impl Editor {
             .layers()
             .iter()
             .map(|layer| LayerView {
-                lines: crate::dense_exchange::to_dense(layer),
+                lines: crate::test_support::dense_layer(layer),
             })
             .collect()
     }

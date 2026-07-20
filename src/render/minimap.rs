@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use skia_safe::{Canvas, Paint, Rect};
 
@@ -183,49 +183,45 @@ fn density_level(coverage: f64) -> u8 {
     ((coverage.clamp(0.0, 1.0) * 10.0 - 1e-9).ceil() as u8).clamp(1, 10)
 }
 
-fn occupancy(
-    content: impl IntoIterator<Item = Coord>,
-    geometry: MinimapGeometry,
-) -> Option<Vec<f64>> {
+fn empty_occupancy(geometry: MinimapGeometry) -> Option<Vec<f64>> {
     let len = usize::try_from(geometry.columns).ok().and_then(|columns| {
         usize::try_from(geometry.rows)
             .ok()
             .and_then(|rows| columns.checked_mul(rows))
     })?;
-    let mut occupancy = vec![0.0; len];
+    Some(vec![0.0; len])
+}
+
+fn add_occupancy(occupancy: &mut [f64], geometry: MinimapGeometry, coord: Coord) {
     let scale = geometry.canvas_cells_per_cell;
     let tile_area = scale * scale;
-    for coord in content {
-        let source_left = coord.column as f64;
-        let source_top = coord.line as f64;
-        let source_right = source_left + 1.0;
-        let source_bottom = source_top + 1.0;
-        let first_column = ((source_left - geometry.world_left) / scale).floor() as i64;
-        let last_column = ((source_right - geometry.world_left) / scale).ceil() as i64 - 1;
-        let first_row = ((source_top - geometry.world_top) / scale).floor() as i64;
-        let last_row = ((source_bottom - geometry.world_top) / scale).ceil() as i64 - 1;
+    let source_left = coord.column as f64;
+    let source_top = coord.line as f64;
+    let source_right = source_left + 1.0;
+    let source_bottom = source_top + 1.0;
+    let first_column = ((source_left - geometry.world_left) / scale).floor() as i64;
+    let last_column = ((source_right - geometry.world_left) / scale).ceil() as i64 - 1;
+    let first_row = ((source_top - geometry.world_top) / scale).floor() as i64;
+    let last_row = ((source_bottom - geometry.world_top) / scale).ceil() as i64 - 1;
 
-        for row in first_row.max(0)..=last_row.min(geometry.rows - 1) {
-            let tile_top = geometry.world_top + row as f64 * scale;
-            let overlap_height = source_bottom.min(tile_top + scale) - source_top.max(tile_top);
-            if overlap_height <= 0.0 {
+    for row in first_row.max(0)..=last_row.min(geometry.rows - 1) {
+        let tile_top = geometry.world_top + row as f64 * scale;
+        let overlap_height = source_bottom.min(tile_top + scale) - source_top.max(tile_top);
+        if overlap_height <= 0.0 {
+            continue;
+        }
+        for column in first_column.max(0)..=last_column.min(geometry.columns - 1) {
+            let tile_left = geometry.world_left + column as f64 * scale;
+            let overlap_width = source_right.min(tile_left + scale) - source_left.max(tile_left);
+            if overlap_width <= 0.0 {
                 continue;
             }
-            for column in first_column.max(0)..=last_column.min(geometry.columns - 1) {
-                let tile_left = geometry.world_left + column as f64 * scale;
-                let overlap_width =
-                    source_right.min(tile_left + scale) - source_left.max(tile_left);
-                if overlap_width <= 0.0 {
-                    continue;
-                }
-                let index = row.saturating_mul(geometry.columns).saturating_add(column);
-                if let Ok(index) = usize::try_from(index) {
-                    occupancy[index] += overlap_width * overlap_height / tile_area;
-                }
+            let index = row.saturating_mul(geometry.columns).saturating_add(column);
+            if let Ok(index) = usize::try_from(index) {
+                occupancy[index] += overlap_width * overlap_height / tile_area;
             }
         }
     }
-    Some(occupancy)
 }
 
 pub(super) fn render(
@@ -252,7 +248,7 @@ pub(super) fn render(
     } else {
         cursor_face.bg
     };
-    let (canvas_bounds, visible_content) = sparse_minimap_content(state.canvas(), viewport);
+    let canvas_bounds = sparse_minimap_bounds(state.canvas(), viewport);
     let required_bounds = canvas_bounds.union(MinimapBounds::viewport(viewport));
     let content_panel = ScreenRect {
         left: panel.left + border_metrics.cell_width,
@@ -287,15 +283,13 @@ pub(super) fn render(
     foreground
         .set_anti_alias(false)
         .set_color(default_face.fg.to_color());
-    let Some(occupancy) = occupancy(
-        visible_content
-            .into_iter()
-            .map(|(line, column)| Coord { line, column }),
-        geometry,
-    ) else {
+    let Some(mut occupancy) = empty_occupancy(geometry) else {
         canvas.restore();
         return;
     };
+    for_each_visible_coord(state.canvas(), |coord| {
+        add_occupancy(&mut occupancy, geometry, coord)
+    });
     for (index, occupied) in occupancy
         .into_iter()
         .enumerate()
@@ -387,32 +381,64 @@ pub(super) fn render(
     }
 }
 
-fn sparse_minimap_content(
-    layers: &LayerStack,
-    viewport: VisibleCanvasCells,
-) -> (MinimapBounds, HashSet<(i16, i16)>) {
+fn sparse_minimap_bounds(layers: &LayerStack, viewport: VisibleCanvasCells) -> MinimapBounds {
     let mut bounds = MinimapBounds::canvas(std::iter::empty(), viewport);
-    let mut visible = HashSet::new();
-    let effective_count = layers.effective_layers().len();
-    for (index, layer) in layers.layers().iter().enumerate() {
+    for layer in layers.layers() {
         for (&line, row) in layer.rows() {
             for (&column, data) in row {
-                if data.atom.contents().chars().all(char::is_whitespace) {
-                    continue;
-                }
-                bounds.include(Coord { line, column });
-                if index < effective_count && layer.visible {
-                    visible.insert((line, column));
+                if !data.atom.contents().chars().all(char::is_whitespace) {
+                    bounds.include(Coord { line, column });
                 }
             }
         }
     }
-    (bounds, visible)
+    bounds
+}
+
+fn for_each_visible_coord(layers: &LayerStack, mut apply: impl FnMut(Coord)) {
+    let mut rows = layers
+        .effective_layers()
+        .iter()
+        .filter(|layer| layer.visible)
+        .map(|layer| layer.rows().iter().peekable())
+        .collect::<Vec<_>>();
+    loop {
+        let Some(line) = rows
+            .iter_mut()
+            .filter_map(|rows| rows.peek().map(|&(&line, _)| line))
+            .min()
+        else {
+            break;
+        };
+        let mut columns = BTreeSet::new();
+        for rows in &mut rows {
+            if rows.peek().is_some_and(|&(&row_line, _)| row_line == line) {
+                let (_, row) = rows.next().expect("peeked sparse row exists");
+                columns.extend(row.iter().filter_map(|(&column, data)| {
+                    (!data.atom.contents().chars().all(char::is_whitespace)).then_some(column)
+                }));
+            }
+        }
+        for column in columns {
+            apply(Coord { line, column });
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn occupancy(
+        content: impl IntoIterator<Item = Coord>,
+        geometry: MinimapGeometry,
+    ) -> Option<Vec<f64>> {
+        let mut occupancy = empty_occupancy(geometry)?;
+        for coord in content {
+            add_occupancy(&mut occupancy, geometry, coord);
+        }
+        Some(occupancy)
+    }
 
     #[test]
     fn keeps_micro_cells_fixed_and_scales_canvas_coverage_fluidly() {
@@ -537,6 +563,48 @@ mod tests {
         assert_eq!(
             occupancy.iter().filter(|coverage| **coverage > 0.0).count(),
             1
+        );
+    }
+
+    #[test]
+    fn visible_sparse_scan_deduplicates_composed_layer_coordinates() {
+        let mut base = crate::canvas::LayerMap::new(crate::model::LayerId(0), true);
+        base.set_at(
+            -2,
+            -3,
+            crate::model::Atom::new("a").unwrap(),
+            &crate::model::Face::default(),
+        )
+        .unwrap();
+        let mut top = crate::canvas::LayerMap::new(crate::model::LayerId(1), true);
+        top.set_at(
+            -2,
+            -3,
+            crate::model::Atom::new("b").unwrap(),
+            &crate::model::Face::default(),
+        )
+        .unwrap();
+        top.set_at(
+            4,
+            5,
+            crate::model::Atom::new("c").unwrap(),
+            &crate::model::Face::default(),
+        )
+        .unwrap();
+        let stack = LayerStack::new(vec![base, top], true).unwrap();
+        let mut coords = Vec::new();
+
+        for_each_visible_coord(&stack, |coord| coords.push(coord));
+
+        assert_eq!(
+            coords,
+            [
+                Coord {
+                    line: -3,
+                    column: -2,
+                },
+                Coord { line: 5, column: 4 },
+            ]
         );
     }
 }

@@ -344,7 +344,7 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
     state.clear_selection();
     state.move_to(Coord::default());
     assert!(state.paste_text_rectangle("A"));
-    state.move_to(Coord { line: 0, column: 2 });
+    state.move_to(Coord { line: 0, column: 4 });
     assert!(state.paste_text_rectangle("z"));
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
@@ -381,7 +381,7 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
             .collect::<Vec<_>>(),
         [base, top]
     );
-    assert_eq!(sparse_row_contents(&state, 0), "A●");
+    assert_eq!(sparse_row_contents(&state, 0), "A●  z");
     assert_eq!(
         state
             .active_cell_for_test(Coord { line: 0, column: 1 })
@@ -466,7 +466,16 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     state.insert("A");
     assert!(state.select_layer(upper));
     state.insert(" B");
-    state.set_cell_face_for_test(Coord { line: 0, column: 1 }, state.theme.tooltip.clone());
+    state.move_to(Coord { line: 0, column: 1 });
+    assert!(
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![vec![StyledAtom {
+                contents: "B".to_owned(),
+                face: state.theme.tooltip.clone(),
+            }]])
+            .unwrap(),
+        )
+    );
     let upper_face = state
         .active_cell_for_test(Coord { line: 0, column: 1 })
         .unwrap()

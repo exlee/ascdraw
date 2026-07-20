@@ -101,7 +101,7 @@ mod tests {
         });
         let loaded = load_document(&document.to_string()).unwrap();
         assert_eq!(
-            crate::dense_exchange::to_dense(&loaded.canvas.layers()[0])[0].len(),
+            crate::test_support::dense_layer(&loaded.canvas.layers()[0])[0].len(),
             3
         );
 

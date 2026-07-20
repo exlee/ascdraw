@@ -96,10 +96,8 @@ fn direct_full_cells_have_no_pixel_seam_during_zoom() {
         old_layout,
         ViewportOffset::default(),
         width,
-        0,
-        2,
-        0,
-        3,
+        (0, 2),
+        (0, 3),
         &renderer.rendered_atom_cache,
     );
     let mut new_metrics = old_metrics.clone();
@@ -143,10 +141,8 @@ fn direct_full_cells_have_no_pixel_seam_during_zoom() {
         new_layout,
         ViewportOffset::default(),
         width,
-        0,
-        2,
-        0,
-        3,
+        (0, 2),
+        (0, 3),
         &renderer.rendered_atom_cache,
     );
 
@@ -241,10 +237,8 @@ fn idle_prefill_rasterizes_atoms_outside_the_rendered_viewport() {
         layout,
         ViewportOffset::default(),
         width,
-        0,
-        2,
-        0,
-        2,
+        (0, 2),
+        (0, 2),
         &renderer.rendered_atom_cache,
     );
 
@@ -290,10 +284,8 @@ fn decorated_diagonal_raster_fallback_preserves_intentional_overflow() {
         layout,
         ViewportOffset::default(),
         width,
-        0,
-        2,
-        0,
-        2,
+        (0, 2),
+        (0, 2),
         &renderer.rendered_atom_cache,
     );
 

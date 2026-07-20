@@ -41,7 +41,7 @@ fn sparse_json_round_trip_and_canonical_deletion() {
     let sparse: SparseDocument = serde_json::from_str(&serialized).unwrap();
     let loaded = sparse_document(sparse).unwrap();
     assert_eq!(
-        crate::dense_exchange::to_dense(&loaded.canvas.layers()[0])[0][0].contents,
+        crate::test_support::dense_layer(&loaded.canvas.layers()[0])[0][0].contents,
         "x"
     );
 }

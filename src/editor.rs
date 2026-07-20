@@ -574,22 +574,6 @@ impl Editor {
         self.selection.bounds()
     }
 
-    #[allow(dead_code)] // Public extraction hook for the queued export implementation.
-    pub fn selected_text(&self) -> String {
-        crate::dense_exchange::selected_atoms(
-            &self.canvas.layers()[self.canvas.active_index()],
-            self.selection.bounds(),
-        )
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|atom| atom.contents)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-    }
-
     pub fn paste_text_rectangle(&mut self, text: &str) -> bool {
         self.cancel_line_preview();
         let Some(mut rectangle) = TextRectangle::from_text(text) else {
@@ -670,11 +654,8 @@ impl Editor {
         if rectangle.width > MAX_CANVAS_WIDTH || rectangle.rows.len() > MAX_CANVAS_HEIGHT {
             return false;
         }
-        let removed_marker = self
-            .canvas
-            .active_line_markers()
-            .iter()
-            .any(|marker| bounds.contains(marker.coord));
+        let removed_marker =
+            self.canvas.layers()[self.canvas.active_index()].has_line_data_in(bounds);
         let unchanged = crate::dense_exchange::selected_atoms(
             &self.canvas.layers()[self.canvas.active_index()],
             bounds,

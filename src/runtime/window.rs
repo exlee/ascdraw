@@ -851,14 +851,7 @@ impl EditorWindow {
     }
 
     pub fn capture_canvas(&self, path: &Path, config: &AppConfig) -> Result<(usize, usize)> {
-        let layers = self
-            .state
-            .canvas()
-            .effective_layers()
-            .iter()
-            .filter(|layer| layer.visible)
-            .map(crate::dense_exchange::to_dense)
-            .collect::<Vec<_>>();
+        let layers = crate::dense_exchange::visible_layers_in_combined_bounds(self.state.canvas());
         let image = render_canvas_layers_image(
             &self.renderer,
             &layers,

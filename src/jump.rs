@@ -195,7 +195,7 @@ impl JumpMode {
             .line
             .saturating_add(line_delta)
             .saturating_add(sector_rows / 2);
-        if next_center_column < 0 || next_center_line < 0 {
+        if i16::try_from(next_center_column).is_err() || i16::try_from(next_center_line).is_err() {
             return false;
         }
 
@@ -289,14 +289,14 @@ fn visible_bounds(visible: VisibleCanvasCells) -> Option<JumpBounds> {
         .origin
         .0
         .saturating_add(i64::try_from(visible.columns).unwrap_or(i64::MAX))
-        .max(0);
+        .min(i64::from(i16::MAX) + 1);
     let bottom = visible
         .origin
         .1
         .saturating_add(i64::try_from(visible.rows).unwrap_or(i64::MAX))
-        .max(0);
-    let left = visible.origin.0.max(0);
-    let top = visible.origin.1.max(0);
+        .min(i64::from(i16::MAX) + 1);
+    let left = visible.origin.0.max(i64::from(i16::MIN));
+    let top = visible.origin.1.max(i64::from(i16::MIN));
     if right <= left || bottom <= top {
         return None;
     }
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_initial_movement_does_not_start_the_timer() {
+    fn initial_movement_can_pan_across_zero() {
         let now = Instant::now();
         let mut jump = start(80, 24);
         jump.handle_key(&Key::Character("h".into()), ModifiersState::empty(), now);
@@ -638,13 +638,14 @@ mod tests {
         jump.deadline = None;
         assert_eq!(
             jump.handle_key(&Key::Character("h".into()), ModifiersState::empty(), now),
-            JumpUpdate::Pending
+            JumpUpdate::Changed
         );
-        assert_eq!(jump.deadline(), None);
+        assert_eq!(jump.deadline(), Some(now + Duration::from_millis(10)));
+        assert!(jump.take_viewport_pan().columns < 0);
     }
 
     #[test]
-    fn negative_visible_coordinates_are_clipped_before_fixed_grid_layout() {
+    fn negative_visible_coordinates_are_preserved_in_fixed_grid_layout() {
         let jump = JumpMode::new(
             VisibleCanvasCells {
                 origin: (-2, -1),
@@ -654,7 +655,7 @@ mod tests {
             Coord::default(),
             Duration::from_millis(10),
         )
-        .expect("visible nonnegative canvas");
+        .expect("visible signed canvas");
         let overlay = jump.overlay();
         assert_eq!(overlay.sectors.len(), 1);
         assert_eq!(overlay.sectors[0].line, -7);
