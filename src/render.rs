@@ -2281,7 +2281,7 @@ mod tests {
     use crate::canvas::{LayerMap, LayerStack};
     use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::{Atom, ColorId, Coord, Direction, LayerId, StyledAtom};
+    use crate::model::{Atom, ColorId, Coord, Direction, LayerId};
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 

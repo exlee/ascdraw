@@ -691,12 +691,12 @@ fn restoring_durable_menu_state_syncs_mode_and_clears_transient_editor_state() {
     assert!(!state.toolbar.export_menu_open());
     assert_eq!(state.toolbar.pending_shortcut(), None);
 
-    let mut selection = state();
+    let mut selection = Editor::new(&ThemeConfig::default(), "ascdraw");
     selection.extend_selection(Direction::Right);
     selection.restore_menu_selections(&selections);
     assert!(selection.selection.is_collapsed());
 
-    let mut replace = state();
+    let mut replace = Editor::new(&ThemeConfig::default(), "ascdraw");
     assert!(replace.begin_single_replace());
     replace.restore_menu_selections(&selections);
     assert!(!replace.single_replace_pending);
