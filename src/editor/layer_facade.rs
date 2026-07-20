@@ -55,29 +55,23 @@ impl Editor {
 
     pub fn toggle_layer_visibility(&mut self, id: LayerId) -> bool {
         self.sync_layer_mode_before_operation();
-        let changed = self
-            .canvas
+        self.canvas
             .index_of(id)
-            .is_some_and(|index| self.canvas.toggle_visibility(index));
-        changed
+            .is_some_and(|index| self.canvas.toggle_visibility(index))
     }
 
     pub fn move_layer_up(&mut self, id: LayerId) -> bool {
         self.sync_layer_mode_before_operation();
-        let changed = self
-            .canvas
+        self.canvas
             .index_of(id)
-            .is_some_and(|index| self.canvas.move_up(index));
-        changed
+            .is_some_and(|index| self.canvas.move_up(index))
     }
 
     pub fn move_layer_down(&mut self, id: LayerId) -> bool {
         self.sync_layer_mode_before_operation();
-        let changed = self
-            .canvas
+        self.canvas
             .index_of(id)
-            .is_some_and(|index| self.canvas.move_down(index));
-        changed
+            .is_some_and(|index| self.canvas.move_down(index))
     }
 
     pub fn merge_layer_up(&mut self, id: LayerId) -> bool {

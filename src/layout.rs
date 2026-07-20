@@ -186,23 +186,15 @@ pub fn content_intersects_inner_screen(
     let horizontal = inner_screen_offsets(viewport.0);
     let vertical = inner_screen_offsets(viewport.1);
     content.iter().any(|coord| {
-        let x = i64::try_from(coord.column)
-            .unwrap_or(i64::MAX)
-            .saturating_sub(origin.0);
-        let y = i64::try_from(coord.line)
-            .unwrap_or(i64::MAX)
-            .saturating_sub(origin.1);
+        let x = i64::from(coord.column).saturating_sub(origin.0);
+        let y = i64::from(coord.line).saturating_sub(origin.1);
         (horizontal.0..=horizontal.1).contains(&x) && (vertical.0..=vertical.1).contains(&y)
     })
 }
 
 pub fn cursor_is_visible(origin: (i64, i64), cursor: Coord, viewport: (usize, usize)) -> bool {
-    let x = i64::try_from(cursor.column)
-        .unwrap_or(i64::MAX)
-        .saturating_sub(origin.0);
-    let y = i64::try_from(cursor.line)
-        .unwrap_or(i64::MAX)
-        .saturating_sub(origin.1);
+    let x = i64::from(cursor.column).saturating_sub(origin.0);
+    let y = i64::from(cursor.line).saturating_sub(origin.1);
     (0..i64::try_from(viewport.0.max(1)).unwrap_or(i64::MAX)).contains(&x)
         && (0..i64::try_from(viewport.1.max(1)).unwrap_or(i64::MAX)).contains(&y)
 }
@@ -220,8 +212,8 @@ pub fn constrained_origin(
     viewport: (usize, usize),
     content: &[Coord],
 ) -> Option<(i64, i64)> {
-    let cursor_x = i64::try_from(cursor.column).unwrap_or(i64::MAX);
-    let cursor_y = i64::try_from(cursor.line).unwrap_or(i64::MAX);
+    let cursor_x = i64::from(cursor.column);
+    let cursor_y = i64::from(cursor.line);
     let cursor_ranges = (
         (
             cursor_x
@@ -246,8 +238,8 @@ pub fn constrained_origin(
     content
         .iter()
         .filter_map(|coord| {
-            let x = i64::try_from(coord.column).unwrap_or(i64::MAX);
-            let y = i64::try_from(coord.line).unwrap_or(i64::MAX);
+            let x = i64::from(coord.column);
+            let y = i64::from(coord.line);
             let x_range = (
                 cursor_ranges.0.0.max(x.saturating_sub(horizontal.1)),
                 cursor_ranges.0.1.min(x.saturating_sub(horizontal.0)),

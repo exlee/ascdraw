@@ -379,7 +379,7 @@ fn signed_visible_range(origin: i64, cells: usize) -> Option<(i16, i16)> {
         .saturating_add(1);
     let start = origin.max(i64::from(i16::MIN));
     let end = end.min(i64::from(i16::MAX));
-    (start <= end).then(|| (start as i16, end as i16))
+    (start <= end).then_some((start as i16, end as i16))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -874,7 +874,7 @@ fn cached_atom_image_for_key(
     if width == 0 || width > 128 {
         return None;
     }
-    if let Some(image) = cache.borrow().images.get(&key) {
+    if let Some(image) = cache.borrow().images.get(key) {
         return Some(image.clone());
     }
 
@@ -2363,7 +2363,7 @@ mod tests {
             &metrics,
             layout,
             ViewportOffset::default(),
-            width as usize,
+            width,
             (0, 2),
             (0, 2),
             &cache,

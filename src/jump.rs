@@ -221,10 +221,10 @@ fn centered_offset(container: usize, content: usize) -> i64 {
 }
 
 fn initial_grid(bounds: JumpBounds, cursor: Coord) -> (Vec<JumpBounds>, usize, usize, usize) {
-    let selected_line = i64::try_from(cursor.line).unwrap_or(i64::MAX)
-        - i64::try_from(INITIAL_SECTOR_ROWS / 2).unwrap_or(i64::MAX);
-    let selected_column = i64::try_from(cursor.column).unwrap_or(i64::MAX)
-        - i64::try_from(INITIAL_SECTOR_COLUMNS / 2).unwrap_or(i64::MAX);
+    let selected_line =
+        i64::from(cursor.line) - i64::try_from(INITIAL_SECTOR_ROWS / 2).unwrap_or(i64::MAX);
+    let selected_column =
+        i64::from(cursor.column) - i64::try_from(INITIAL_SECTOR_COLUMNS / 2).unwrap_or(i64::MAX);
     let sector_columns = i64::try_from(INITIAL_SECTOR_COLUMNS).unwrap_or(i64::MAX);
     let sector_rows = i64::try_from(INITIAL_SECTOR_ROWS).unwrap_or(i64::MAX);
     let mut grid_column = selected_column;

@@ -54,7 +54,7 @@ impl RasterRefreshThrottle {
     }
 
     pub(super) fn promote_if_due(&mut self, now: Instant) -> bool {
-        if !self.deadline().is_some_and(|deadline| now >= deadline) {
+        if self.deadline().is_none_or(|deadline| now < deadline) {
             return false;
         }
         self.accepted_metrics_generation = self.pending_metrics_generation.take();

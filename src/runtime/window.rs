@@ -1732,11 +1732,9 @@ fn center_viewport(
         column: max.column - (max.column - min.column) / 2,
     };
     let origin = (
-        i64::try_from(center.column)
-            .unwrap_or(i64::MAX)
+        i64::from(center.column)
             .saturating_sub(i64::try_from(viewport_cells.0 / 2).unwrap_or(i64::MAX)),
-        i64::try_from(center.line)
-            .unwrap_or(i64::MAX)
+        i64::from(center.line)
             .saturating_sub(i64::try_from(viewport_cells.1 / 2).unwrap_or(i64::MAX)),
     );
     let old_viewport = *viewport;

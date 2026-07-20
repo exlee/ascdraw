@@ -433,8 +433,8 @@ pub fn plain_text(state: &Editor) -> String {
         .max()
         .expect("nonempty content has a maximum line");
     let region = CanvasRegion {
-        left: i64::try_from(left).unwrap_or(i64::MAX),
-        top: i64::try_from(top).unwrap_or(i64::MAX),
+        left: i64::from(left),
+        top: i64::from(top),
         width: usize::try_from(i32::from(right) - i32::from(left) + 1).unwrap_or(usize::MAX),
         height: usize::try_from(i32::from(bottom) - i32::from(top) + 1).unwrap_or(usize::MAX),
     };
@@ -1285,7 +1285,7 @@ mod tests {
         }
         let mut platform = MockPlatform::default();
 
-        copy_selection(&mut state, &mut platform).unwrap();
+        copy_selection(&state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("AABBB"));
 
         assert!(cut_selection(&mut state, &mut platform).unwrap());
@@ -1312,14 +1312,14 @@ mod tests {
         let toolbar_rows = state.toolbar.rows();
         let mut platform = MockPlatform::default();
 
-        copy_selection(&mut state, &mut platform).unwrap();
+        copy_selection(&state, &mut platform).unwrap();
 
         assert_eq!(platform.clipboard.as_deref(), Some("◇"));
         assert_eq!(state.toolbar.main_mode(), MainMode::Line);
         assert_eq!(state.toolbar.rows(), toolbar_rows);
 
         state.extend_selection(crate::model::Direction::Right);
-        copy_selection(&mut state, &mut platform).unwrap();
+        copy_selection(&state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("◇x"));
         assert_eq!(state.toolbar.main_mode(), MainMode::Line);
         assert_eq!(state.toolbar.rows(), toolbar_rows);
@@ -1623,7 +1623,7 @@ mod tests {
         state.extend_selection(crate::model::Direction::Down);
         let before = state.clone();
         let mut platform = MockPlatform::default();
-        copy_selection(&mut state, &mut platform).unwrap();
+        copy_selection(&state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("ab \n   \nz  "));
         assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);
