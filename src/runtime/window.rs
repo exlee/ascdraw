@@ -131,7 +131,6 @@ pub struct EditorWindow {
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
     history: EditHistory,
-    content_index: ContentIndex,
     perf: PerfDiagnostics,
     transparent_menubar: bool,
     document_session: DocumentSession,
@@ -147,56 +146,6 @@ struct PendingAutosave {
     position: document::CanvasPosition,
     document_dirty: bool,
     menu_selections_dirty: bool,
-}
-
-#[derive(Debug)]
-struct ContentIndex {
-    cells: Vec<Coord>,
-    cells_including_hidden: Vec<Coord>,
-    dirty: bool,
-    #[cfg(test)]
-    rebuilds: usize,
-}
-
-impl ContentIndex {
-    fn new(state: &Editor) -> Self {
-        Self {
-            cells: state.content_cells(),
-            cells_including_hidden: state.content_cells_including_hidden(),
-            dirty: false,
-            #[cfg(test)]
-            rebuilds: 1,
-        }
-    }
-
-    fn invalidate(&mut self) {
-        self.dirty = true;
-    }
-
-    fn refresh(&mut self, state: &Editor) {
-        if self.dirty {
-            self.cells = state.content_cells();
-            self.cells_including_hidden = state.content_cells_including_hidden();
-            self.dirty = false;
-            #[cfg(test)]
-            {
-                self.rebuilds += 1;
-            }
-        }
-    }
-
-    fn cells(&self) -> &[Coord] {
-        &self.cells
-    }
-
-    fn cells_including_hidden(&self) -> &[Coord] {
-        &self.cells_including_hidden
-    }
-
-    #[cfg(test)]
-    fn rebuilds(&self) -> usize {
-        self.rebuilds
-    }
 }
 
 #[cfg(debug_assertions)]
@@ -649,9 +598,6 @@ impl EditorWindow {
                 _ => unreachable!(),
             };
         }
-        if drag.document_changed {
-            self.content_index.invalidate();
-        }
         self.pause_state_change(&mut drag.checkpoint);
         self.mouse_drag = Some(drag);
         self.request_redraw();
@@ -933,12 +879,9 @@ impl EditorWindow {
         self.document_dirty = true;
     }
 
-    fn refresh_content_index(&mut self) {
-        self.content_index.refresh(&self.state);
-    }
-
     pub fn render(&mut self, config: &AppConfig) -> Result<FrameTiming> {
-        self.refresh_content_index();
+        let visible = self.state.content_cells();
+        let including_hidden = self.state.content_cells_including_hidden();
         let toolbar_hotspot_hovered = self.toolbar_hotspot_hovered();
         self.surface.render(
             &self.window,
@@ -947,8 +890,8 @@ impl EditorWindow {
             config,
             crate::render::RenderContext {
                 content: crate::render::CanvasContent {
-                    visible: self.content_index.cells(),
-                    including_hidden: self.content_index.cells_including_hidden(),
+                    visible: &visible,
+                    including_hidden: &including_hidden,
                 },
                 viewport: self.viewport,
                 toolbar_hotspot_hovered,
@@ -1024,13 +967,12 @@ impl EditorWindow {
         let metrics = self.renderer.metrics(scale_factor);
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
-        self.refresh_content_index();
-        let content = self.content_index.cells();
+        let content = self.state.content_cells();
         resolve_navigation_origin(
             self.viewport.origin(cell_size),
             cursor,
             (layout.cols.max(1), layout.rows.max(1)),
-            content,
+            &content,
         )
     }
 
@@ -1059,7 +1001,6 @@ impl EditorWindow {
         self.state
             .apply_history_delta(&snapshot.canvas, snapshot.forward);
         self.state.restore_history_state(snapshot.edit);
-        self.content_index.invalidate();
         self.viewport = snapshot.viewport;
         self.ensure_cursor_in_viewport();
         self.mark_document_dirty();
@@ -1148,9 +1089,6 @@ impl EditorWindow {
             &checkpoint.toolbar,
             &self.state.toolbar,
         );
-        if document_changed {
-            self.content_index.invalidate();
-        }
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let view_mode_changed = checkpoint.was_viewing != self.state.view_active();
@@ -1164,8 +1102,7 @@ impl EditorWindow {
 
         let current = self.viewport.origin(cell_size);
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        self.refresh_content_index();
-        let content = self.content_index.cells();
+        let content = self.state.content_cells();
 
         if view_mode_changed {
             if !self.state.view_active() {
@@ -1173,7 +1110,7 @@ impl EditorWindow {
                     current,
                     self.state.grid.cursor_pos,
                     viewport_cells,
-                    content,
+                    &content,
                 );
                 if cursor != self.state.grid.cursor_pos {
                     self.state.clamp_cursor_to_content(cursor);
@@ -1191,7 +1128,7 @@ impl EditorWindow {
             current,
             self.state.grid.cursor_pos,
             viewport_cells,
-            content,
+            &content,
         ) {
             self.menu_selections_dirty |= menu_selections_changed;
             if origin != current {
@@ -1207,7 +1144,7 @@ impl EditorWindow {
                     viewport_policy,
                     StateChangeViewportPolicy::CursorOnly | StateChangeViewportPolicy::Stable
                 ) || content.is_empty()
-                    || content_intersects_inner_screen(origin, viewport_cells, content)
+                    || content_intersects_inner_screen(origin, viewport_cells, &content)
             );
             if !document_changed {
                 return false;
@@ -1224,7 +1161,6 @@ impl EditorWindow {
         self.state.apply_history_delta(&canvas, false);
         self.state.restore_history_state(previous.edit);
         self.state.toolbar = checkpoint.toolbar;
-        self.content_index.invalidate();
         self.viewport = previous.viewport;
         false
     }
@@ -1234,7 +1170,6 @@ impl EditorWindow {
             durable_menu_selections_changed(&checkpoint.toolbar, &self.state.toolbar);
         self.state.compact_blank_runs_preserving_cursor();
         let canvas = self.state.finish_history_capture();
-        self.content_index.invalidate();
         self.ensure_cursor_in_viewport();
         let previous = checkpoint.history;
         let current = self.history_snapshot();
@@ -1254,11 +1189,10 @@ impl EditorWindow {
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         let current = self.viewport.origin(cell_size);
-        self.refresh_content_index();
-        let content = self.content_index.cells();
+        let content = self.state.content_cells();
         let old_cursor = self.state.grid.cursor_pos;
         let (cursor, origin) =
-            normalized_cursor_and_origin(current, old_cursor, viewport_cells, content);
+            normalized_cursor_and_origin(current, old_cursor, viewport_cells, &content);
         if cursor != old_cursor {
             self.state.clamp_cursor_to_content(cursor);
         }
@@ -1271,7 +1205,8 @@ impl EditorWindow {
             viewport_cells
         ));
         debug_assert!(
-            content.is_empty() || content_intersects_inner_screen(origin, viewport_cells, content)
+            content.is_empty()
+                || content_intersects_inner_screen(origin, viewport_cells, &content)
         );
     }
 
@@ -1282,12 +1217,11 @@ impl EditorWindow {
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let layout = self.current_layout();
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
-        self.refresh_content_index();
-        let content = self.content_index.cells();
+        let content = self.state.content_cells();
         let changed = match command {
             ViewCommand::Pan(direction) => pan_viewport(&mut self.viewport, direction, cell_size),
             ViewCommand::Center => {
-                center_viewport(&mut self.viewport, cell_size, viewport_cells, content)
+                center_viewport(&mut self.viewport, cell_size, viewport_cells, &content)
             }
         };
         if changed {
@@ -1380,13 +1314,13 @@ impl EditorWindow {
         );
 
         let viewport_cells = (new_layout.cols.max(1), new_layout.rows.max(1));
-        self.refresh_content_index();
-        let content = self.content_index.cells();
+        let content = self.state.content_cells();
         let origin = self.viewport.origin(new_cell_size);
-        if !content.is_empty() && !content_intersects_inner_screen(origin, viewport_cells, content)
+        if !content.is_empty()
+            && !content_intersects_inner_screen(origin, viewport_cells, &content)
         {
             if let Some(origin) =
-                constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, content)
+                constrained_origin(origin, self.state.grid.cursor_pos, viewport_cells, &content)
             {
                 self.viewport.set_origin(origin, new_cell_size);
             } else {
@@ -1394,7 +1328,7 @@ impl EditorWindow {
                     origin,
                     self.state.grid.cursor_pos,
                     viewport_cells,
-                    content,
+                    &content,
                 );
                 self.state.clamp_cursor_to_content(cursor);
                 self.viewport.set_origin(origin, new_cell_size);
@@ -2001,7 +1935,6 @@ pub fn create_editor_window(
         }
         DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
     }
-    let content_index = ContentIndex::new(&state);
     let mut editor = EditorWindow {
         window,
         surface,
@@ -2022,7 +1955,6 @@ pub fn create_editor_window(
         renderer,
         viewport,
         history: EditHistory::default(),
-        content_index,
         perf: PerfDiagnostics::from_env(),
         transparent_menubar: config.transparent_menubar,
         document_session: document_session.clone(),
@@ -2320,32 +2252,6 @@ mod tests {
                 .collect(),
         );
         state
-    }
-
-    #[test]
-    fn content_index_rebuilds_only_after_document_invalidation() {
-        let mut state = state_with_rows(&["a"]);
-        let mut index = ContentIndex::new(&state);
-
-        index.refresh(&state);
-        index.refresh(&state);
-        assert_eq!(index.rebuilds(), 1);
-        assert_eq!(index.cells(), &[Coord::default()]);
-
-        let mut lines = state.lines_for_test();
-        lines[0].push(StyledAtom {
-            face: Face::default(),
-            contents: "b".to_owned(),
-        });
-        state.set_lines_for_test(lines);
-        index.invalidate();
-        index.refresh(&state);
-
-        assert_eq!(index.rebuilds(), 2);
-        assert_eq!(
-            index.cells(),
-            &[Coord::default(), Coord { line: 0, column: 1 }]
-        );
     }
 
     #[test]
