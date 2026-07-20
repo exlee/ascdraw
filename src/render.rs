@@ -4,6 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
@@ -35,6 +36,7 @@ mod jump;
 #[cfg(target_os = "macos")]
 mod metal;
 mod minimap;
+mod raster_cache;
 mod window_surface;
 pub use export_png::{CanvasImage, render_canvas_image, render_canvas_layers_image};
 pub use window_surface::WindowSurface;
@@ -170,6 +172,7 @@ struct RenderedAtomKey {
 struct RenderedAtomCache {
     images: HashMap<RenderedAtomKey, skia_safe::Image>,
     insertion_order: VecDeque<RenderedAtomKey>,
+    refresh: raster_cache::RasterRefreshThrottle,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -572,8 +575,14 @@ fn render_cached_sparse_grid_atoms(
     let column_start = i16::try_from(first_column).unwrap_or(i16::MAX);
     let column_end = i16::try_from(max_column).unwrap_or(i16::MAX);
     let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
-    let raster_generation =
-        sparse_raster_generation(&state.grid.default_face, &state.theme, metrics);
+    let style_generation = sparse_raster_style_generation(&state.grid.default_face, &state.theme);
+    let metrics_generation = sparse_raster_metrics_generation(metrics);
+    let raster_generation = sparse_raster_generation(style_generation, metrics_generation);
+    let use_current_metrics = cache.borrow_mut().refresh.use_current_metrics(
+        style_generation,
+        metrics_generation,
+        Instant::now(),
+    );
     for layer in layers
         .effective_layers()
         .iter()
@@ -581,13 +590,16 @@ fn render_cached_sparse_grid_atoms(
     {
         for (&row, cells) in layer.rows().range(row_start..row_end) {
             for (&column, data) in cells.range(column_start..column_end) {
-                let cached_image = {
-                    data.raster_cache
-                        .borrow()
-                        .as_ref()
-                        .filter(|cached| cached.generation == raster_generation)
-                        .map(|cached| cached.image.clone())
-                };
+                let cached_raster = data.raster_cache.borrow().clone();
+                let cached_image = cached_raster
+                    .as_ref()
+                    .filter(|cached| cached.generation == raster_generation)
+                    .map(|cached| (cached.image.clone(), false))
+                    .or_else(|| {
+                        (!use_current_metrics)
+                            .then(|| cached_raster.map(|cached| (cached.image.clone(), true)))
+                            .flatten()
+                    });
                 let image = cached_image.or_else(|| {
                     let atom = StyledAtom {
                         face: data.face.as_ref().clone(),
@@ -623,17 +635,18 @@ fn render_cached_sparse_grid_atoms(
                         generation: raster_generation,
                         image: image.clone(),
                     }));
-                    Some(image)
+                    Some((image, false))
                 });
-                if let Some(image) = image {
-                    canvas.draw_image(
-                        &image,
-                        (
-                            PADDING as f32 + f32::from(column) * metrics.cell_width,
-                            layout.grid_top + f32::from(row) * metrics.cell_height,
-                        ),
-                        None,
+                if let Some((image, scaled)) = image {
+                    let position = (
+                        PADDING as f32 + f32::from(column) * metrics.cell_width,
+                        layout.grid_top + f32::from(row) * metrics.cell_height,
                     );
+                    if scaled {
+                        draw_scaled_cell_image(canvas, &image, position, metrics);
+                    } else {
+                        canvas.draw_image(&image, position, None);
+                    }
                 }
             }
         }
@@ -641,18 +654,42 @@ fn render_cached_sparse_grid_atoms(
     canvas.restore();
 }
 
-fn sparse_raster_generation(
-    default_face: &Face,
-    theme: &ThemeConfig,
+fn draw_scaled_cell_image(
+    canvas: &Canvas,
+    image: &skia_safe::Image,
+    position: (f32, f32),
     metrics: &CellMetrics,
-) -> u64 {
+) {
+    canvas.save();
+    canvas.translate(position);
+    canvas.scale((
+        metrics.cell_width / image.width().max(1) as f32,
+        metrics.cell_height / image.height().max(1) as f32,
+    ));
+    canvas.draw_image(image, (0.0, 0.0), None);
+    canvas.restore();
+}
+
+fn sparse_raster_style_generation(default_face: &Face, theme: &ThemeConfig) -> u64 {
     let mut hasher = DefaultHasher::new();
     default_face.hash(&mut hasher);
     theme.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn sparse_raster_metrics_generation(metrics: &CellMetrics) -> u64 {
+    let mut hasher = DefaultHasher::new();
     metrics.cell_width.to_bits().hash(&mut hasher);
     metrics.cell_height.to_bits().hash(&mut hasher);
     metrics.baseline_offset.to_bits().hash(&mut hasher);
     metrics.underline_offset.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn sparse_raster_generation(style_generation: u64, metrics_generation: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    style_generation.hash(&mut hasher);
+    metrics_generation.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1794,6 +1831,17 @@ impl Renderer {
         (bytes, cache.images.len(), RENDERED_ATOM_CACHE_CAPACITY)
     }
 
+    pub fn rendered_atom_refresh_deadline(&self) -> Option<Instant> {
+        self.rendered_atom_cache.borrow().refresh.deadline()
+    }
+
+    pub fn promote_rendered_atom_refresh_if_due(&self, now: Instant) -> bool {
+        self.rendered_atom_cache
+            .borrow_mut()
+            .refresh
+            .promote_if_due(now)
+    }
+
     pub fn zoom(&self) -> i32 {
         (self.logical_font_size.get() - self.default_logical_font_size).round() as i32
     }
@@ -1839,14 +1887,6 @@ impl Renderer {
 
         self.logical_font_size.set(next);
         self.content_metrics_cache.borrow_mut().take();
-        // Don't empty Toolbar on font size reset
-        // its fonts do not change size
-        //self.toolbar_cache.borrow_mut().take();
-        self.rendered_atom_cache.borrow_mut().images.clear();
-        self.rendered_atom_cache
-            .borrow_mut()
-            .insertion_order
-            .clear();
         true
     }
 
@@ -1857,14 +1897,6 @@ impl Renderer {
 
         self.logical_font_size.set(self.default_logical_font_size);
         self.content_metrics_cache.borrow_mut().take();
-        // Don't empty Toolbar on font size reset
-        // its fonts do not change size
-        // self.toolbar_cache.borrow_mut().take();
-        self.rendered_atom_cache.borrow_mut().images.clear();
-        self.rendered_atom_cache
-            .borrow_mut()
-            .insertion_order
-            .clear();
         true
     }
 

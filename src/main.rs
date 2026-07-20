@@ -245,6 +245,9 @@ fn try_main() -> Result<ExitCode> {
                     next_cache_report = now + Duration::from_secs(10);
                 }
                 for editor in windows.values_mut() {
+                    if editor.renderer.promote_rendered_atom_refresh_if_due(now) {
+                        editor.request_redraw();
+                    }
                     if editor
                         .state
                         .jump_deadline()
@@ -819,7 +822,14 @@ fn try_main() -> Result<ExitCode> {
         let periodic_deadline = now + Duration::from_millis(500);
         let next_deadline = windows
             .values()
-            .filter_map(|editor| editor.state.jump_deadline())
+            .flat_map(|editor| {
+                [
+                    editor.state.jump_deadline(),
+                    editor.renderer.rendered_atom_refresh_deadline(),
+                ]
+                .into_iter()
+                .flatten()
+            })
             .min()
             .unwrap_or(periodic_deadline)
             .min(periodic_deadline);
