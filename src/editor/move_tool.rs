@@ -1,10 +1,10 @@
-use unicode_width::UnicodeWidthStr;
-
 use crate::canvas::{LayerMap, LayerStack, LineData};
-use crate::model::{Atom, Coord, Direction, Face, LayerId, StyledAtom};
-use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
+#[cfg(test)]
+use crate::model::StyledAtom;
+use crate::model::{Atom, Coord, Direction, Face, LayerId};
+use crate::selection::{CanvasSelection, SelectionBounds};
 
-use super::{EditSnapshot, Editor, PlacedLineMarker};
+use super::{EditSnapshot, Editor};
 
 #[derive(Debug, Clone)]
 pub(super) struct MoveLift {
@@ -25,15 +25,14 @@ pub(super) struct MoveLift {
 struct LiftedLayer {
     id: LayerId,
     edited_atoms: Vec<LiftedAtom>,
-    markers: Vec<PlacedLineMarker>,
 }
 
 #[derive(Debug, Clone)]
 struct LiftedAtom {
     offset: Coord,
-    width: usize,
     atom: Atom,
     face: Face,
+    line: Option<LineData>,
 }
 
 impl Editor {
@@ -59,24 +58,12 @@ impl Editor {
         self.canvas = source_snapshot.canvas.clone();
         let source_selection = self.selection;
         let source_bounds = source_selection.bounds();
-        let source_origin = Coord {
-            line: source_bounds.top,
-            column: source_bounds.left,
-        };
         let layers = source_snapshot
             .canvas
             .layers()
             .iter()
             .filter(|layer| layer.visible)
-            .map(|layer| {
-                lifted_layer(
-                    layer.id,
-                    layer.selected_atoms(source_bounds),
-                    layer.line_markers(),
-                    source_origin,
-                    source_bounds,
-                )
-            })
+            .map(|layer| lifted_layer(layer, source_bounds))
             .collect();
         self.move_lift = Some(MoveLift {
             source_snapshot,
@@ -229,31 +216,29 @@ impl Editor {
     }
 }
 
-fn lifted_layer(
-    id: LayerId,
-    rows: Vec<Vec<StyledAtom>>,
-    markers: Vec<PlacedLineMarker>,
-    source_origin: Coord,
-    source_bounds: SelectionBounds,
-) -> LiftedLayer {
-    let rectangle = TextRectangle {
-        rows,
-        width: source_bounds.width(),
-    };
-    let edited_atoms = lifted_edited_atoms(&rectangle);
-    let markers = markers
-        .into_iter()
-        .filter(|marker| lifted_atoms_cover(&edited_atoms, source_origin, marker.coord))
-        .map(|mut marker| {
-            marker.coord.line -= source_bounds.top;
-            marker.coord.column -= source_bounds.left;
-            marker
-        })
-        .collect();
+fn lifted_layer(layer: &LayerMap, bounds: SelectionBounds) -> LiftedLayer {
+    let mut edited_atoms = Vec::new();
+    for (&line, row) in layer.rows().range(bounds.top..=bounds.bottom) {
+        for (&column, data) in row.range(bounds.left..=bounds.right) {
+            if data.atom.contents().chars().all(char::is_whitespace) {
+                continue;
+            }
+            edited_atoms.push(LiftedAtom {
+                offset: Coord {
+                    line: i16::try_from(i32::from(line) - i32::from(bounds.top))
+                        .expect("lifted line offset fits signed canvas range"),
+                    column: i16::try_from(i32::from(column) - i32::from(bounds.left))
+                        .expect("lifted column offset fits signed canvas range"),
+                },
+                atom: data.atom.as_ref().clone(),
+                face: data.face.as_ref().clone(),
+                line: data.line.clone(),
+            });
+        }
+    }
     LiftedLayer {
-        id,
+        id: layer.id,
         edited_atoms,
-        markers,
     }
 }
 
@@ -276,16 +261,9 @@ fn apply_sparse_move(
             let coord = offset_origin(*origin, atom.offset);
             map.set_at(coord.column, coord.line, atom.atom.clone(), &atom.face)
                 .expect("moved atom occupies one sparse cell");
-        }
-        for marker in &layer.markers {
-            let coord = offset_origin(*origin, marker.coord);
-            map.set_line_at(
-                coord,
-                LineData {
-                    ending: marker.ending,
-                    base_glyph: marker.base_glyph.clone(),
-                },
-            );
+            if let Some(line) = atom.line.as_ref() {
+                map.set_line_at(coord, line.clone());
+            }
         }
     }
 }
@@ -303,42 +281,6 @@ impl MoveLift {
     }
 }
 
-fn lifted_edited_atoms(rectangle: &TextRectangle) -> Vec<LiftedAtom> {
-    let mut lifted = Vec::new();
-    for (line, row) in rectangle.rows.iter().enumerate() {
-        let mut column: usize = 0;
-        for atom in row {
-            let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
-            if !atom.contents.chars().all(char::is_whitespace) {
-                let line = i16::try_from(line).expect("lifted line fits signed canvas range");
-                let column = i16::try_from(column).expect("lifted column fits signed canvas range");
-                lifted.push(LiftedAtom {
-                    offset: Coord { line, column },
-                    width,
-                    atom: Atom::new(atom.contents.clone())
-                        .expect("lifted atoms are validated one-cell graphemes"),
-                    face: atom.face.clone(),
-                });
-            }
-            column = column.saturating_add(width);
-        }
-    }
-    lifted
-}
-
-fn lifted_atoms_cover(atoms: &[LiftedAtom], origin: Coord, coord: Coord) -> bool {
-    atoms.iter().any(|atom| {
-        let width = i16::try_from(atom.width).unwrap_or(i16::MAX);
-        coord.line == origin.line.saturating_add(atom.offset.line)
-            && (origin.column.saturating_add(atom.offset.column)
-                ..origin
-                    .column
-                    .saturating_add(atom.offset.column)
-                    .saturating_add(width))
-                .contains(&coord.column)
-    })
-}
-
 fn move_lift_destinations(lift: &MoveLift) -> Vec<Coord> {
     let mut destinations = lift.clone_origins.clone();
     if !destinations.contains(&lift.origin) {
@@ -351,9 +293,7 @@ fn lifted_atom_bounds(origin: Coord, atom: &LiftedAtom) -> SelectionBounds {
     let origin = offset_origin(origin, atom.offset);
     SelectionBounds {
         left: origin.column,
-        right: origin
-            .column
-            .saturating_add(i16::try_from(atom.width.saturating_sub(1)).unwrap_or(i16::MAX)),
+        right: origin.column,
         top: origin.line,
         bottom: origin.line,
     }

@@ -32,6 +32,7 @@ mod shape_tool;
 mod state;
 mod text_tool;
 mod utility;
+#[cfg(test)]
 use crate::canvas::LineMarker as PlacedLineMarker;
 pub(super) use grid::adjacent_coord;
 #[cfg(test)]

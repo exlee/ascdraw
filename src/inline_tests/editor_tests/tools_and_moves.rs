@@ -982,6 +982,51 @@ fn move_lift_extends_into_negative_canvas_coordinates() {
 }
 
 #[test]
+fn move_lift_reads_negative_sparse_cells_with_face_and_line_data() {
+    let mut state = state();
+    let source = Coord {
+        line: -4,
+        column: -7,
+    };
+    let destination = Coord {
+        line: -3,
+        column: -7,
+    };
+    let face = state.theme.tooltip.clone();
+    state
+        .canvas
+        .set_at(source, Atom::new("A").unwrap(), &face)
+        .unwrap();
+    assert!(state.canvas.set_line_at(
+        source,
+        crate::canvas::LineData {
+            ending: LineEnding::Fixed('◆'),
+            base_glyph: "A".into(),
+        },
+    ));
+    state.selection.select(
+        source,
+        Coord {
+            line: source.line,
+            column: source.column + 1,
+        },
+    );
+
+    assert!(state.begin_selected_move_lift());
+    assert!(state.move_lift(Direction::Down));
+    assert!(state.confirm_move_lift());
+
+    assert!(state.canvas.active_cell(source).is_none());
+    let moved = state.canvas.active_cell(destination).unwrap();
+    assert_eq!(moved.atom.contents(), "A");
+    assert_eq!(moved.face.as_ref(), &face);
+    assert_eq!(
+        state.canvas.line_at(destination).unwrap().ending,
+        LineEnding::Fixed('◆')
+    );
+}
+
+#[test]
 fn move_lift_handles_overlapping_destinations() {
     let mut overlap = utility_state(&["abcd"], UtilityKind::Push, Coord { line: 0, column: 2 });
     overlap
