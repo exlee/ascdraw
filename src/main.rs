@@ -7,8 +7,6 @@ use anyhow::Result;
 use clap::Parser;
 use winit::event::{ElementState, Event, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-#[cfg(test)]
-use winit::keyboard::Key;
 use winit::keyboard::ModifiersState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::WindowId;
@@ -57,16 +55,12 @@ use input::{
     move_selection_direction_command, ordered_direction_command_for_direction,
     pointer_position_to_canvas_coord, pointer_position_to_toolbar_position, view_command,
 };
-#[cfg(test)]
-use input::{clipboard_command, history_command};
 use runtime::automation_dispatch::{
     PendingAutomationMap, complete_present, fail_all_pending, fail_pending_for_window,
     handle_automation,
 };
 use runtime::background::BackgroundWorker;
 use runtime::config_watch::{UserConfigWatch, poll_user_config_updates};
-#[cfg(test)]
-use runtime::input_dispatch::history_group_for_key;
 use runtime::input_dispatch::{ChangePolicy, change_policy_for_key, navigation_target};
 use runtime::window::{
     CommandContext, DocumentSession, EditorWindow, close_window, create_editor_window,
@@ -921,17 +915,6 @@ fn paste_toolbar_under_cursor(editor: &mut EditorWindow, box_width: usize) -> bo
     changed
 }
 
-#[cfg(test)]
-fn handle_clipboard_shortcut(
-    state: &mut Editor,
-    key: &Key,
-    modifiers: ModifiersState,
-    platform: &mut impl export::ExportPlatform,
-) -> Option<Result<bool>> {
-    let command = clipboard_command(key, modifiers)?;
-    Some(handle_clipboard_command(state, command, platform))
-}
-
 fn handle_clipboard_command(
     state: &mut Editor,
     command: ClipboardCommand,
@@ -1264,40 +1247,6 @@ pub(crate) fn handle_cursor_direction(
     Some(apply_edit_command(state, command))
 }
 
-#[cfg(test)]
-fn handle_editor_key(
-    state: &mut Editor,
-    key: &Key,
-    text: Option<&str>,
-    repeat: bool,
-    modifiers: ModifiersState,
-) -> Option<bool> {
-    let mut ordered = input::OrderedModifierTracker::default();
-    ordered.update(modifiers);
-    let key_type = classify_key(
-        state.state(),
-        state.cursor_mode.accepts_text(),
-        KeyInput {
-            key,
-            text,
-            repeat,
-            modifiers,
-        },
-    );
-    dispatch_editor_event(
-        state,
-        key_type,
-        &ordered,
-        layout::VisibleCanvasCells {
-            origin: (0, 0),
-            columns: 80,
-            rows: 24,
-        },
-        app::JumpConfig::default().inactivity(),
-        Instant::now(),
-    )
-}
-
 pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bool {
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
@@ -1389,9 +1338,86 @@ pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bo
 mod tests {
     use super::*;
     use crate::app::{AppConfig, CursorMode};
+    use crate::editor_event::{EditorState, KeyInput, classify_key};
     use crate::model::{Coord, Direction};
+    use crate::runtime::input_dispatch::history_group_for_key;
     use crate::toolbar::{MainMode, PendingShortcut, ToggleKind, ToolbarAction};
-    use winit::keyboard::NamedKey;
+    use winit::keyboard::{Key, NamedKey};
+
+    fn history_command(
+        key: &Key,
+        modifiers: ModifiersState,
+        mode: CursorMode,
+    ) -> Option<HistoryCommand> {
+        classify_key(
+            EditorState::NavigationMode,
+            mode.accepts_text(),
+            KeyInput {
+                key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        )
+        .history_command()
+    }
+
+    fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
+        classify_key(
+            EditorState::NavigationMode,
+            false,
+            KeyInput {
+                key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        )
+        .clipboard_command()
+    }
+
+    fn handle_clipboard_shortcut(
+        state: &mut Editor,
+        key: &Key,
+        modifiers: ModifiersState,
+        platform: &mut impl export::ExportPlatform,
+    ) -> Option<Result<bool>> {
+        let command = clipboard_command(key, modifiers)?;
+        Some(handle_clipboard_command(state, command, platform))
+    }
+
+    fn handle_editor_key(
+        state: &mut Editor,
+        key: &Key,
+        text: Option<&str>,
+        repeat: bool,
+        modifiers: ModifiersState,
+    ) -> Option<bool> {
+        let mut ordered = input::OrderedModifierTracker::default();
+        ordered.update(modifiers);
+        let key_type = classify_key(
+            state.state(),
+            state.cursor_mode.accepts_text(),
+            KeyInput {
+                key,
+                text,
+                repeat,
+                modifiers,
+            },
+        );
+        dispatch_editor_event(
+            state,
+            key_type,
+            &ordered,
+            layout::VisibleCanvasCells {
+                origin: (0, 0),
+                columns: 80,
+                rows: 24,
+            },
+            app::JumpConfig::default().inactivity(),
+            Instant::now(),
+        )
+    }
 
     #[test]
     fn dash_document_uses_stdin_without_resolving_the_scratchpad() {

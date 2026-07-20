@@ -447,13 +447,7 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     });
     assert!(state.select_layer(upper));
     state.set_lines_for_test(lines_from_text(" B"));
-    state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
-    state.color_written_bounds(SelectionBounds {
-        left: 1,
-        right: 1,
-        top: 0,
-        bottom: 0,
-    });
+    state.set_cell_face_for_test(Coord { line: 0, column: 1 }, state.theme.tooltip.clone());
     let upper_face = state.lines_for_test()[0][1].face.clone();
     assert_ne!(upper_face, Face::default());
     state.move_to(Coord::default());

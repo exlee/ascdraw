@@ -9,11 +9,3 @@ pub struct PersistedLayer {
     pub visible: bool,
     pub lines: Vec<Vec<StyledAtom>>,
 }
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub struct LayerView {
-    pub id: LayerId,
-    pub visible: bool,
-    pub lines: Vec<Vec<StyledAtom>>,
-}

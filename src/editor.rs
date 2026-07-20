@@ -1,11 +1,7 @@
-#[cfg(test)]
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::app::{CursorMode, ThemeConfig};
-#[cfg(test)]
-use crate::drawing::LineEnding;
 use crate::drawing::is_line_glyph;
 use crate::jump::JumpMode;
 use crate::model::{
@@ -32,11 +28,7 @@ mod shape_tool;
 mod state;
 mod text_tool;
 mod utility;
-#[cfg(test)]
-use crate::canvas::LineMarker as PlacedLineMarker;
 pub(super) use grid::adjacent_coord;
-#[cfg(test)]
-pub use layers::LayerView;
 pub use layers::PersistedLayer;
 use line_preview::LinePreview;
 use line_tool::ActiveStroke;
@@ -105,50 +97,6 @@ impl PartialEq for EditSnapshot {
 
 impl Eq for EditSnapshot {}
 
-#[cfg(test)]
-impl Editor {
-    pub(crate) fn set_lines_for_test(&mut self, lines: Vec<Vec<StyledAtom>>) {
-        let markers = self.canvas.active_line_markers();
-        self.canvas
-            .commit_active_with_markers(&lines, &markers)
-            .expect("test canvas contains valid one-cell atoms");
-    }
-
-    pub(crate) fn lines_for_test(&self) -> Vec<Vec<StyledAtom>> {
-        self.canvas.active_dense_lines()
-    }
-
-    pub(crate) fn set_cell_face_for_test(&mut self, coord: Coord, face: Face) {
-        assert!(self.canvas.set_face_at(coord, face));
-    }
-
-    fn line_markers_for_test(&self) -> Vec<PlacedLineMarker> {
-        self.canvas.active_line_markers()
-    }
-
-    fn set_line_markers_for_test(&mut self, markers: Vec<PlacedLineMarker>) {
-        let lines = self.canvas.active_dense_lines();
-        self.canvas
-            .commit_active_with_markers(&lines, &markers)
-            .expect("test line markers must address valid cells");
-    }
-
-    fn push_line_marker_for_test(&mut self, marker: PlacedLineMarker) {
-        let mut markers = self.line_markers_for_test();
-        markers.push(marker);
-        self.set_line_markers_for_test(markers);
-    }
-
-    fn extend_line_markers_for_test(
-        &mut self,
-        markers: impl IntoIterator<Item = PlacedLineMarker>,
-    ) {
-        let mut combined = self.line_markers_for_test();
-        combined.extend(markers);
-        self.set_line_markers_for_test(combined);
-    }
-}
-
 impl Editor {
     pub(crate) fn commit_canvas_mutations(&mut self) -> anyhow::Result<()> {
         self.canvas.set_enabled(self.toolbar.multi_layer_mode());
@@ -210,44 +158,9 @@ impl Editor {
         }
     }
 
-    #[cfg(test)]
-    pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        self.toolbar_spans_for_width(row, usize::MAX)
-    }
-
-    #[cfg(test)]
-    pub fn toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
-        self.toolbar
-            .toolbar_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
-    }
-
     pub fn boxed_toolbar_spans_for_width(&self, row: usize, box_width: usize) -> Vec<ToolbarSpan> {
         self.toolbar
             .boxed_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
-    }
-
-    pub fn select_custom_stamp(&mut self, text: &str) -> bool {
-        let Some(rectangle) = TextRectangle::from_text(text) else {
-            return false;
-        };
-        let [row] = rectangle.rows.as_slice() else {
-            return false;
-        };
-        let [atom] = row.as_slice() else {
-            return false;
-        };
-        if rectangle.width != 1 || UnicodeWidthStr::width(atom.contents.as_str()) != 1 {
-            return false;
-        }
-
-        self.end_stroke();
-        self.cancel_line_preview();
-        self.cancel_move_lift();
-        self.shape_preview = None;
-        self.toolbar.select_custom_stamp(atom.contents.clone());
-        self.sync_cursor_mode_with_toolbar();
-        self.commit_canvas();
-        true
     }
 
     pub fn cursor_coordinates(&self) -> (i128, i128) {
@@ -515,15 +428,6 @@ impl Editor {
             line: i16::try_from(line).unwrap_or(if line < 0 { i16::MIN } else { i16::MAX }),
             column: i16::try_from(column).unwrap_or(if column < 0 { i16::MIN } else { i16::MAX }),
         }
-    }
-
-    pub fn extend_selection_to(&mut self, coord: Coord) {
-        let anchor = self.selection.anchor();
-        self.cancel_line_preview();
-        self.cancel_move_lift();
-        self.end_stroke();
-        self.move_to_without_ending_stroke(coord);
-        self.selection.select(anchor, self.grid.cursor_pos);
     }
 
     /// Used when a smaller viewport can no longer contain both the active
@@ -874,11 +778,6 @@ impl Editor {
 
     pub fn content_cells(&self) -> Vec<Coord> {
         self.sparse_content_cells(false)
-    }
-
-    #[cfg(test)]
-    pub fn content_cells_including_hidden(&self) -> Vec<Coord> {
-        self.sparse_content_cells(true)
     }
 
     fn sparse_content_cells(&self, include_hidden: bool) -> Vec<Coord> {

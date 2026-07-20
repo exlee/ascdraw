@@ -1,6 +1,3 @@
-#[cfg(test)]
-use unicode_width::UnicodeWidthStr;
-
 use crate::model::{BASE_COLORS, BRIGHT_COLORS, ColorId};
 
 use super::{
@@ -74,6 +71,7 @@ mod tests {
     use crate::toolbar::{
         MAIN_LABEL_ROW, MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans,
     };
+    use unicode_width::UnicodeWidthStr;
     use winit::keyboard::{Key, ModifiersState};
 
     fn text(spans: Vec<ToolbarSpan>) -> String {

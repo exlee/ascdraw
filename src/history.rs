@@ -162,11 +162,6 @@ impl EditHistory {
         push_bounded(&mut self.undo, change);
         Some(restore)
     }
-
-    #[cfg(test)]
-    pub(crate) fn lengths(&self) -> (usize, usize) {
-        (self.undo.len(), self.redo.len())
-    }
 }
 
 fn push_bounded(stack: &mut VecDeque<HistoryChange>, change: HistoryChange) {
@@ -239,7 +234,7 @@ mod tests {
             );
         }
         assert!(history.finish_transaction());
-        assert_eq!(history.lengths(), (1, 0));
+        assert_eq!((history.undo.len(), history.redo.len()), (1, 0));
         restore(&mut editor, history.undo().unwrap());
         assert!(editor.content_cells().is_empty());
         restore(&mut editor, history.redo().unwrap());
@@ -261,7 +256,7 @@ mod tests {
             });
         history.record_grouped_change(HistoryGroup::TextSession, before, after, delta);
         assert!(!history.finish_transaction());
-        assert_eq!(history.lengths(), (0, 0));
+        assert_eq!((history.undo.len(), history.redo.len()), (0, 0));
     }
 
     #[test]
@@ -275,7 +270,7 @@ mod tests {
                 });
             history.record_change(before, after, delta);
         }
-        assert_eq!(history.lengths(), (HISTORY_LIMIT, 0));
+        assert_eq!((history.undo.len(), history.redo.len()), (HISTORY_LIMIT, 0));
         for _ in 0..HISTORY_LIMIT {
             restore(&mut editor, history.undo().unwrap());
         }

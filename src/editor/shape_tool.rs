@@ -1,8 +1,6 @@
 use crate::app::CursorMode;
 use crate::canvas::LayerStack;
 use crate::drawing::{LineStyle, glyph_with_connection};
-#[cfg(test)]
-use crate::model::StyledAtom;
 use crate::model::{Atom, Coord, Direction};
 use crate::toolbar::ShapeKind;
 
@@ -72,23 +70,6 @@ impl Editor {
             self.canvas
                 .set_at(coord, atom, &face)
                 .expect("shape glyphs occupy one sparse cell");
-        }
-    }
-
-    #[cfg(test)]
-    pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
-        #[cfg(not(test))]
-        return None;
-        #[cfg(test)]
-        {
-            if let Some(lines) = self.lines_with_move_lift_preview() {
-                return Some(lines);
-            }
-            if let Some(lines) = self.lines_with_line_preview() {
-                return Some(lines);
-            }
-            self.shape_preview_canvas()
-                .map(|canvas| canvas.active_dense_lines())
         }
     }
 

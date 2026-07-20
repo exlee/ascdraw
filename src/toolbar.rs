@@ -2,16 +2,9 @@ use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-#[cfg(test)]
-use crate::drawing::DECORATORS;
 use crate::drawing::{ARROWS, CornerStyle, LINE_ENDINGS, LineEnding, LineStyle};
 use crate::export::ExportAction;
 use crate::model::{LayerId, LayerSummary};
-#[cfg(test)]
-use crate::{
-    drawing::{DIRECTIONAL_ENDINGS, line_ending_glyph},
-    model::Direction,
-};
 
 mod colors;
 mod layers;
@@ -34,12 +27,6 @@ pub(crate) const MENU_FIRST_ROW: usize = 3;
 const OPTIONS_PER_PAGE: usize = 10;
 const GAP: &str = "    ";
 pub const TOOLTIP_ROTATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-
-#[cfg(test)]
-pub fn toolbar_height(toolbar: &ToolbarState, cell_height: f32) -> f32 {
-    let rows = toolbar.rows();
-    rows as f32 * cell_height + rows.saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
-}
 
 pub fn toolbar_height_for_width(toolbar: &ToolbarState, box_width: usize, cell_height: f32) -> f32 {
     let rows = toolbar.rows_for_width(box_width);
@@ -111,37 +98,8 @@ pub fn toolbar_bottom_border_spans(
     width: usize,
     minimap_width: usize,
     coordinates: (i128, i128),
-    custom_stamp: bool,
 ) -> Vec<ToolbarSpan> {
-    let mut spans = toolbar_minimap_border_spans(width, minimap_width, coordinates);
-    if custom_stamp && width >= 4 {
-        let mut border = spans[0].contents.chars().collect::<Vec<_>>();
-        border[2] = '┴';
-        spans[0].contents = border.into_iter().collect();
-    }
-    spans
-}
-
-fn custom_stamp_cap_spans(width: usize) -> Vec<ToolbarSpan> {
-    let contents = match width {
-        0 => return Vec::new(),
-        1 => "├".to_owned(),
-        2 => "├│".to_owned(),
-        3 => "├─┐".to_owned(),
-        _ => format!("├─┐{}│", " ".repeat(width - 4)),
-    };
-    vec![plain_span(contents)]
-}
-
-fn custom_stamp_glyph_spans(width: usize, stamp: &str) -> Vec<ToolbarSpan> {
-    let contents = match width {
-        0 => return Vec::new(),
-        1 => "│".to_owned(),
-        2 => "││".to_owned(),
-        3 => format!("│{stamp}│"),
-        _ => format!("│{stamp}│{}│", " ".repeat(width - 4)),
-    };
-    vec![plain_span(contents)]
+    toolbar_minimap_border_spans(width, minimap_width, coordinates)
 }
 
 pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSpan> {
@@ -347,21 +305,6 @@ impl RoutingMode {
 // Stamp contains Uniline's standalone drawing vocabularies. Connected box-drawing
 // lines remain the responsibility of the connection-mask engine in drawing.rs;
 // only the three standalone diagonal operators are repeated here.
-#[cfg(test)]
-const SQUARES_AND_DIAMONDS: [&str; 6] = ["□", "■", "▫", "▪", "◆", "◊"];
-#[cfg(test)]
-const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø"];
-#[cfg(test)]
-const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
-#[cfg(test)]
-const ARROW_ROTATIONS: [[&str; 4]; 6] = [
-    ["△", "▽", "◁", "▷"],
-    ["▲", "▼", "◀", "▶"],
-    ["↑", "↓", "←", "→"],
-    ["▵", "▿", "◃", "▹"],
-    ["▴", "▾", "◂", "▸"],
-    ["↕", "↕", "↔", "↔"],
-];
 const GREY_SHADING: [&str; 4] = ["░", "▒", "▓", "█"];
 const STAMP_DECORATORS: [&str; 20] = [
     "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
@@ -412,7 +355,6 @@ pub struct ToolbarState {
     line_selected: [usize; LINE_LABELS.len()],
     stamp_selected: [usize; STAMP_LABELS.len()],
     stamp_active_category: usize,
-    custom_stamp: Option<String>,
     shape_selected: [usize; SHAPE_LABELS.len()],
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
@@ -538,11 +480,6 @@ impl MenuLayout<'_> {
 }
 
 impl ToolbarState {
-    #[cfg(test)]
-    pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
-        self.handle_shortcut_with_layers(key, modifiers, &[])
-    }
-
     pub fn handle_shortcut_with_layers(
         &mut self,
         key: &Key,
@@ -903,11 +840,6 @@ impl ToolbarState {
         self.shift_layer
     }
 
-    #[cfg(test)]
-    pub fn menu_row_count(&self) -> usize {
-        self.menu_row_count_for_width(usize::MAX)
-    }
-
     pub fn menu_row_count_for_width(&self, box_width: usize) -> usize {
         self.left_menu_row_count_for_width(box_width)
             .max(self.auxiliary_panel_row_count_for_width(box_width))
@@ -923,41 +855,16 @@ impl ToolbarState {
         }
     }
 
-    #[cfg(test)]
-    pub fn content_rows(&self) -> usize {
-        self.content_rows_for_width(usize::MAX)
-    }
-
     pub fn content_rows_for_width(&self, box_width: usize) -> usize {
         self.standard_content_rows_for_width(box_width)
-            + usize::from(self.custom_stamp.is_some()) * 2
     }
 
     fn standard_content_rows_for_width(&self, box_width: usize) -> usize {
         MENU_FIRST_ROW + self.menu_row_count_for_width(box_width)
     }
 
-    #[cfg(test)]
-    pub fn rows(&self) -> usize {
-        self.rows_for_width(usize::MAX)
-    }
-
     pub fn rows_for_width(&self, box_width: usize) -> usize {
         self.content_rows_for_width(box_width) + 2
-    }
-
-    #[cfg(test)]
-    pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
-        self.toolbar_spans_with_layers(row, &[])
-    }
-
-    #[cfg(test)]
-    pub fn toolbar_spans_with_layers(
-        &self,
-        row: usize,
-        layers: &[LayerSummary],
-    ) -> Vec<ToolbarSpan> {
-        self.toolbar_spans_with_layers_for_width(row, usize::MAX, layers)
     }
 
     pub fn toolbar_spans_with_layers_for_width(
@@ -1009,15 +916,6 @@ impl ToolbarState {
         box_width: usize,
         layers: &[LayerSummary],
     ) -> Vec<ToolbarSpan> {
-        let indicator_row = self.standard_content_rows_for_width(box_width);
-        if self.custom_stamp.is_some() && row == indicator_row {
-            return custom_stamp_cap_spans(box_width);
-        }
-        if let Some(stamp) = self.custom_stamp.as_deref()
-            && row == indicator_row + 1
-        {
-            return custom_stamp_glyph_spans(box_width, stamp);
-        }
         boxed_toolbar_spans(
             &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
             box_width,
@@ -1352,21 +1250,7 @@ impl ToolbarState {
     }
 
     pub fn stamp(&self) -> &str {
-        self.custom_stamp.as_deref().unwrap_or_else(|| {
-            STAMP_OPTIONS[self.stamp_active_category]
-                [self.stamp_selected[self.stamp_active_category]]
-        })
-    }
-
-    pub fn custom_stamp(&self) -> Option<&str> {
-        self.custom_stamp.as_deref()
-    }
-
-    pub(crate) fn select_custom_stamp(&mut self, stamp: String) {
-        self.close_export_menu();
-        self.cancel_shortcut();
-        self.custom_stamp = Some(stamp);
-        self.main_mode = MainMode::Stamp;
+        STAMP_OPTIONS[self.stamp_active_category][self.stamp_selected[self.stamp_active_category]]
     }
 
     pub fn shape_kind(&self) -> ShapeKind {
@@ -1394,11 +1278,6 @@ impl ToolbarState {
             2 => UtilityKind::View,
             _ => unreachable!("utility selection is always normalized"),
         }
-    }
-
-    #[cfg(test)]
-    pub fn action_at(&self, row: usize, column: usize, box_width: usize) -> Option<ToolbarAction> {
-        self.action_at_with_layers(row, column, box_width, &[])
     }
 
     pub fn action_at_with_layers(
@@ -1453,9 +1332,6 @@ impl ToolbarState {
                 let Some(selected) = selected else {
                     return false;
                 };
-                if self.main_mode == MainMode::Stamp {
-                    self.custom_stamp = None;
-                }
                 *selected = option;
                 true
             }
@@ -1550,11 +1426,7 @@ impl ToolbarState {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
-                exclusive_submenu: Some(
-                    self.custom_stamp
-                        .as_ref()
-                        .map_or(self.stamp_active_category, |_| usize::MAX),
-                ),
+                exclusive_submenu: Some(self.stamp_active_category),
                 page_lengths: &STAMP_PAGE_LENGTHS,
             }),
             MainMode::Shapes => Some(MenuLayout {
@@ -1752,44 +1624,103 @@ fn line_ending(selected: usize) -> LineEnding {
 }
 
 #[cfg(test)]
-impl ToolbarSpan {
-    pub fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
-        if shifted {
-            self.shift_action.or(self.action)
-        } else {
-            self.action
-        }
-    }
-}
-
-#[cfg(test)]
-fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
-    let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
-    submenu_prefix_width_for_pages(label, category, page_count)
-}
-
-#[cfg(test)]
-fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
-    let columns = submenu_option_column_widths(options);
-    submenu_cell_width_for_columns(prefix_width, &columns)
-}
-
-#[cfg(test)]
-fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
-    let mut widths = vec![0; options.len().min(OPTIONS_PER_PAGE)];
-    for (index, option) in options.iter().enumerate() {
-        widths[index % OPTIONS_PER_PAGE] =
-            widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
-    }
-    widths
-}
-
-#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::{
+        drawing::{DirectionalEnding, line_ending_glyph},
+        model::Direction,
+    };
     use unicode_segmentation::UnicodeSegmentation;
+
+    const SQUARES_AND_DIAMONDS: [&str; 6] = ["□", "■", "▫", "▪", "◆", "◊"];
+    const DOTS_AND_CIRCLES: [&str; 7] = ["·", "∙", "•", "●", "◦", "Ø", "ø"];
+    const CROSSES_AND_OPERATORS: [&str; 7] = ["╳", "╱", "╲", "÷", "×", "±", "¤"];
+    const DIRECTIONAL_ENDINGS: [DirectionalEnding; 6] = [
+        DirectionalEnding::WhiteTriangle,
+        DirectionalEnding::BlackTriangle,
+        DirectionalEnding::Arrow,
+        DirectionalEnding::WhiteSmallTriangle,
+        DirectionalEnding::BlackSmallTriangle,
+        DirectionalEnding::Bidirectional,
+    ];
+    const ARROW_ROTATIONS: [[&str; 4]; 6] = [
+        ["△", "▽", "◁", "▷"],
+        ["▲", "▼", "◀", "▶"],
+        ["↑", "↓", "←", "→"],
+        ["▵", "▿", "◃", "▹"],
+        ["▴", "▾", "◂", "▸"],
+        ["↕", "↕", "↔", "↔"],
+    ];
+
+    impl ToolbarState {
+        pub fn handle_shortcut(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
+            self.handle_shortcut_with_layers(key, modifiers, &[])
+        }
+
+        pub fn menu_row_count(&self) -> usize {
+            self.menu_row_count_for_width(usize::MAX)
+        }
+
+        pub fn content_rows(&self) -> usize {
+            self.content_rows_for_width(usize::MAX)
+        }
+
+        pub fn rows(&self) -> usize {
+            self.rows_for_width(usize::MAX)
+        }
+
+        pub fn toolbar_spans(&self, row: usize) -> Vec<ToolbarSpan> {
+            self.toolbar_spans_with_layers(row, &[])
+        }
+
+        pub fn toolbar_spans_with_layers(
+            &self,
+            row: usize,
+            layers: &[LayerSummary],
+        ) -> Vec<ToolbarSpan> {
+            self.toolbar_spans_with_layers_for_width(row, usize::MAX, layers)
+        }
+
+        pub fn action_at(
+            &self,
+            row: usize,
+            column: usize,
+            box_width: usize,
+        ) -> Option<ToolbarAction> {
+            self.action_at_with_layers(row, column, box_width, &[])
+        }
+    }
+
+    impl ToolbarSpan {
+        fn action_for_shift(&self, shifted: bool) -> Option<ToolbarAction> {
+            if shifted {
+                self.shift_action.or(self.action)
+            } else {
+                self.action
+            }
+        }
+    }
+
+    fn submenu_prefix_width(label: &str, category: usize, option_count: usize) -> usize {
+        let page_count = option_count.div_ceil(OPTIONS_PER_PAGE);
+        submenu_prefix_width_for_pages(label, category, page_count)
+    }
+
+    fn submenu_cell_width(prefix_width: usize, options: &[&str]) -> usize {
+        let columns = submenu_option_column_widths(options);
+        submenu_cell_width_for_columns(prefix_width, &columns)
+    }
+
+    fn submenu_option_column_widths(options: &[&str]) -> Vec<usize> {
+        let mut widths = vec![0; options.len().min(OPTIONS_PER_PAGE)];
+        for (index, option) in options.iter().enumerate() {
+            widths[index % OPTIONS_PER_PAGE] =
+                widths[index % OPTIONS_PER_PAGE].max(UnicodeWidthStr::width(*option));
+        }
+        widths
+    }
 
     fn press(toolbar: &mut ToolbarState, key: &str) {
         assert!(toolbar.handle_shortcut(&Key::Character(key.into()), ModifiersState::empty()));
@@ -2070,52 +2001,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_stamp_indicator_attaches_to_the_lower_left_border() {
-        let mut toolbar = ToolbarState::default();
-        let standard_rows = toolbar.content_rows();
-        toolbar.select_custom_stamp("▼".to_owned());
-
-        assert_eq!(toolbar.content_rows(), standard_rows + 2);
-        assert!(
-            (MENU_FIRST_ROW..MENU_FIRST_ROW + toolbar.menu_row_count())
-                .all(|row| { toolbar.toolbar_spans(row).iter().all(|span| !span.selected) })
-        );
-        let cap_row = toolbar.content_rows_for_width(12) - 2;
-        let glyph_row = toolbar.content_rows_for_width(12) - 1;
-        assert_eq!(
-            spans_text(&toolbar.boxed_spans_with_layers_for_width(cap_row, 12, &[])),
-            "├─┐        │"
-        );
-        assert_eq!(
-            spans_text(&toolbar.boxed_spans_with_layers_for_width(glyph_row, 12, &[])),
-            "│▼│        │"
-        );
-        assert_eq!(
-            spans_text(&toolbar_bottom_border_spans(12, 0, (0, 0), true)),
-            "└─┴────────┘"
-        );
-
-        for width in 0..12 {
-            let content_rows = toolbar.content_rows_for_width(width);
-            for row in [content_rows - 2, content_rows - 1] {
-                assert_eq!(
-                    UnicodeWidthStr::width(
-                        spans_text(&toolbar.boxed_spans_with_layers_for_width(row, width, &[]))
-                            .as_str()
-                    ),
-                    width
-                );
-            }
-            assert_eq!(
-                UnicodeWidthStr::width(
-                    spans_text(&toolbar_bottom_border_spans(width, 0, (0, 0), true)).as_str()
-                ),
-                width
-            );
-        }
-    }
-
-    #[test]
     fn boxed_toolbar_height_tracks_only_actual_menu_rows() {
         let mut toolbar = ToolbarState::default();
         assert_eq!(toolbar_content_row(0), 1);
@@ -2123,7 +2008,7 @@ mod tests {
         assert_eq!(toolbar.content_rows(), 8);
         assert_eq!(toolbar.rows(), 10);
         assert_eq!(
-            toolbar_height(&toolbar, 18.0),
+            toolbar_height_for_width(&toolbar, usize::MAX, 18.0),
             toolbar.rows() as f32 * 18.0
                 + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
         );
@@ -2326,10 +2211,10 @@ mod tests {
     fn line_endings_exactly_map_the_documented_directional_and_decorator_sets() {
         assert_eq!(
             LINE_ENDINGS.len(),
-            1 + DIRECTIONAL_ENDINGS.len() + DECORATORS.len()
+            1 + DIRECTIONAL_ENDINGS.len() + STAMP_DECORATORS.len()
         );
-        assert_eq!(&LINE_START_OPTIONS[7..], DECORATORS);
-        assert_eq!(&LINE_END_OPTIONS[7..], DECORATORS);
+        assert_eq!(&LINE_START_OPTIONS[7..], STAMP_DECORATORS);
+        assert_eq!(&LINE_END_OPTIONS[7..], STAMP_DECORATORS);
         assert_eq!(&LINE_START_OPTIONS[1..7], ["◁", "◀", "←", "◃", "◂", "↔"]);
         assert_eq!(&LINE_END_OPTIONS[1..7], ["▷", "▶", "→", "▹", "▸", "↔"]);
 
@@ -3770,9 +3655,9 @@ mod tests {
 
     #[test]
     fn stamp_families_exactly_match_the_documented_uniline_sets() {
-        assert_eq!(&DECORATORS[..6], SQUARES_AND_DIAMONDS);
-        assert_eq!(&DECORATORS[6..13], DOTS_AND_CIRCLES);
-        assert_eq!(&DECORATORS[13..], CROSSES_AND_OPERATORS);
+        assert_eq!(&STAMP_DECORATORS[..6], SQUARES_AND_DIAMONDS);
+        assert_eq!(&STAMP_DECORATORS[6..13], DOTS_AND_CIRCLES);
+        assert_eq!(&STAMP_DECORATORS[13..], CROSSES_AND_OPERATORS);
         assert_eq!(
             STAMP_DECORATORS.iter().copied().collect::<String>(),
             "□■▫▪◆◊·∙•●◦Øø╳╱╲÷×±¤"

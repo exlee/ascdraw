@@ -15,20 +15,7 @@ use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
 
 mod history;
 pub use history::HistoryCanvasDelta;
-#[cfg(test)]
-use history::record_replacement_before;
 use history::{record_cell_before, record_layer_before, record_row_before};
-
-#[allow(dead_code)]
-pub type Raster = Rc<Atom>;
-
-thread_local! {
-    static BLANK_ATOM: Rc<Atom> = Rc::new(Atom::new(" ").expect("blank is one cell"));
-}
-
-fn blank_atom() -> Rc<Atom> {
-    BLANK_ATOM.with(Rc::clone)
-}
 
 #[derive(Debug, Clone)]
 pub struct Rasterized {
@@ -266,22 +253,6 @@ impl LayerMap {
             self.set_data_untracked(y, x, data);
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
-        let (line, column) = (coord.line, coord.column);
-        let Some(data) = self
-            .rows
-            .get_mut(&line)
-            .and_then(|row| row.get_mut(&column))
-        else {
-            return false;
-        };
-        record_cell_before(self.id, line, column, Some(data));
-        data.face = Rc::new(face);
-        *data.raster_cache.borrow_mut() = None;
-        true
     }
 
     pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<StyledAtom>> {
@@ -821,11 +792,6 @@ impl LayerStack {
         self.layers[self.active].get(coord.line, coord.column)
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
-        self.layers[self.active].set_face_at(coord, face)
-    }
-
     pub(crate) fn delete_at(&mut self, coord: Coord) -> bool {
         self.layers[self.active].delete_at(coord.column, coord.line)
     }
@@ -853,11 +819,6 @@ impl LayerStack {
     pub(crate) fn join_row_with_next(&mut self, line: i16) -> Result<bool> {
         let joined = self.layers[self.active].join_row_with_next(line)?;
         Ok(joined)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_dense_lines(&self) -> Vec<Vec<StyledAtom>> {
-        self.layers[self.active].to_dense()
     }
 
     pub(crate) fn replace_active_bounds(
@@ -986,20 +947,6 @@ impl LayerStack {
         self.enabled = enabled;
     }
 
-    #[cfg(test)]
-    pub(crate) fn commit_active_with_markers(
-        &mut self,
-        lines: &[Vec<StyledAtom>],
-        markers: &[LineMarker],
-    ) -> Result<()> {
-        let layer = &self.layers[self.active];
-        let replacement =
-            LayerMap::from_dense_with_markers(layer.id, layer.visible, lines, markers)?;
-        record_replacement_before(layer, &replacement);
-        self.layers[self.active] = replacement;
-        Ok(())
-    }
-
     pub(crate) fn activate(&mut self, index: usize) -> bool {
         if index >= self.layers.len() || index == self.active {
             return false;
@@ -1109,39 +1056,6 @@ impl LayerStack {
         } else {
             &self.layers[..1]
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn at(&self, line: i16, column: i16) -> Raster {
-        let layers = if self.enabled {
-            self.layers.as_slice()
-        } else {
-            &self.layers[..1]
-        };
-        layers
-            .iter()
-            .filter(|layer| layer.visible)
-            .filter_map(|layer| layer.get(line, column))
-            .map(|data| Rc::clone(&data.atom))
-            .next_back()
-            .unwrap_or_else(blank_atom)
-    }
-
-    #[allow(dead_code)]
-    pub fn top_at(&self, line: i16, column: i16) -> Raster {
-        let layers = if self.enabled {
-            self.layers.as_slice()
-        } else {
-            &self.layers[..1]
-        };
-        layers
-            .iter()
-            .filter(|layer| layer.visible)
-            .filter_map(|layer| layer.get(line, column))
-            .filter(|data| !data.atom.contents().chars().all(char::is_whitespace))
-            .map(|data| Rc::clone(&data.atom))
-            .next_back()
-            .unwrap_or_else(blank_atom)
     }
 
     pub fn composite_region(&self, region: CanvasRegion) -> Option<Vec<Vec<StyledAtom>>> {

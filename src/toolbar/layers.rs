@@ -1,6 +1,3 @@
-#[cfg(test)]
-use unicode_width::UnicodeWidthStr;
-
 use crate::model::{LayerId, LayerSummary, MAX_LAYERS};
 
 use super::{
@@ -162,6 +159,7 @@ mod tests {
     use crate::toolbar::{
         MAIN_LABEL_ROW, MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans,
     };
+    use unicode_width::UnicodeWidthStr;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
 
     fn text(spans: Vec<ToolbarSpan>) -> String {

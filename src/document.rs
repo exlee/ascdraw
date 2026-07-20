@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 use crate::canvas::{LayerMap, LayerStack};
 use crate::editor::PersistedLayer;
 use crate::layout::ViewportOffset;
-#[cfg(test)]
-use crate::model::StyledAtom;
 use crate::model::{Atom, Coord, Face, LayerId};
 use crate::toolbar::DurableMenuSelections;
 

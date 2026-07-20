@@ -74,16 +74,6 @@ pub(super) fn record_row_before(layer: &LayerMap, line: i16) {
     }
 }
 
-#[cfg(test)]
-pub(super) fn record_replacement_before(current: &LayerMap, replacement: &LayerMap) {
-    record_layer_before(current);
-    for (&line, row) in &replacement.rows {
-        for &column in row.keys() {
-            record_cell_before(current.id, line, column, current.get(line, column));
-        }
-    }
-}
-
 impl HistoryCanvasDelta {
     pub fn is_empty(&self) -> bool {
         self.before == self.after && self.cells.is_empty()

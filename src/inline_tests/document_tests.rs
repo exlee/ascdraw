@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::StyledAtom;
 
 fn canvas(layers: &[PersistedLayer]) -> LayerStack {
     let maps = layers

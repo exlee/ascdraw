@@ -44,16 +44,6 @@ pub enum DirectionalEnding {
     Bidirectional,
 }
 
-#[cfg(test)]
-pub const DIRECTIONAL_ENDINGS: [DirectionalEnding; 6] = [
-    DirectionalEnding::WhiteTriangle,
-    DirectionalEnding::BlackTriangle,
-    DirectionalEnding::Arrow,
-    DirectionalEnding::WhiteSmallTriangle,
-    DirectionalEnding::BlackSmallTriangle,
-    DirectionalEnding::Bidirectional,
-];
-
 pub const ARROWS: [&str; 22] = [
     "△", "▽", "◁", "▷", "▲", "▼", "◀", "▶", "↑", "↓", "←", "→", "▵", "▿", "◃", "▹", "▴", "▾", "◂",
     "▸", "↕", "↔",
@@ -340,14 +330,21 @@ fn double_glyph_for_connections(connections: u8) -> char {
 }
 
 #[cfg(test)]
-pub const DECORATORS: [&str; 20] = [
-    "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×", "±",
-    "¤",
-];
-
-#[cfg(test)]
 mod tests {
     use super::*;
+
+    const DIRECTIONAL_ENDINGS: [DirectionalEnding; 6] = [
+        DirectionalEnding::WhiteTriangle,
+        DirectionalEnding::BlackTriangle,
+        DirectionalEnding::Arrow,
+        DirectionalEnding::WhiteSmallTriangle,
+        DirectionalEnding::BlackSmallTriangle,
+        DirectionalEnding::Bidirectional,
+    ];
+    const DECORATORS: [&str; 20] = [
+        "□", "■", "▫", "▪", "◆", "◊", "·", "∙", "•", "●", "◦", "Ø", "ø", "╳", "╱", "╲", "÷", "×",
+        "±", "¤",
+    ];
 
     #[test]
     fn turns_a_vertical_line_into_a_tee() {

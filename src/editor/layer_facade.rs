@@ -5,33 +5,8 @@ impl Editor {
         self.canvas.summaries()
     }
 
-    #[cfg(test)]
-    pub fn layer_views(&self) -> Vec<LayerView> {
-        self.canvas
-            .layers()
-            .iter()
-            .map(|layer| LayerView {
-                id: layer.id,
-                visible: layer.visible,
-                lines: layer.to_dense(),
-            })
-            .collect()
-    }
-
     pub fn active_layer_id(&self) -> LayerId {
         self.canvas.active_id()
-    }
-
-    #[cfg(test)]
-    pub fn persisted_layers(&self) -> Vec<PersistedLayer> {
-        self.layer_views()
-            .into_iter()
-            .map(|layer| PersistedLayer {
-                id: layer.id,
-                visible: layer.visible,
-                lines: layer.lines,
-            })
-            .collect()
     }
 
     pub fn restore_layers(

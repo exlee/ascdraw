@@ -93,24 +93,12 @@ fn selection_extends_into_negative_coordinates_without_moving_anchor() {
 }
 
 #[test]
-fn extending_selection_to_a_blank_cell_above_content_preserves_its_anchor() {
-    let mut state = state();
-    state.set_lines_for_test(lines_from_text("\n\n\ncontent"));
-    state.move_to(Coord { line: 3, column: 2 });
-
-    state.extend_selection_to(Coord { line: 0, column: 1 });
-
-    assert_eq!(state.selection.anchor(), Coord { line: 3, column: 2 });
-    assert_eq!(state.selection.active(), Coord { line: 0, column: 1 });
-    assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-}
-
-#[test]
 fn moving_to_a_drag_start_collapses_a_previous_selection() {
     let mut state = state();
     state.set_lines_for_test(lines_from_text("abcdef"));
-    state.move_to(Coord { line: 0, column: 5 });
-    state.extend_selection_to(Coord { line: 0, column: 1 });
+    state
+        .selection
+        .select(Coord { line: 0, column: 5 }, Coord { line: 0, column: 1 });
 
     state.move_to(Coord { line: 0, column: 3 });
 

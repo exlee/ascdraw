@@ -1,6 +1,4 @@
 use crate::canvas::{LayerMap, LayerStack, LineData};
-#[cfg(test)]
-use crate::model::StyledAtom;
 use crate::model::{Atom, Coord, Direction, Face, LayerId};
 use crate::selection::{CanvasSelection, SelectionBounds};
 
@@ -161,26 +159,6 @@ impl Editor {
 
     pub fn move_lift_bounds(&self) -> Option<SelectionBounds> {
         self.move_lift.as_ref().map(MoveLift::bounds)
-    }
-
-    #[cfg(test)]
-    pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
-        self.move_lift_render_canvas()
-            .map(LayerStack::active_dense_lines)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn move_lift_render_lines_for_layer(
-        &self,
-        id: LayerId,
-    ) -> Option<Vec<Vec<StyledAtom>>> {
-        self.move_lift_render_canvas().and_then(|canvas| {
-            canvas
-                .layers()
-                .iter()
-                .find(|layer| layer.id == id && layer.visible)
-                .map(LayerMap::to_dense)
-        })
     }
 
     pub(crate) fn move_lift_render_canvas(&self) -> Option<&LayerStack> {

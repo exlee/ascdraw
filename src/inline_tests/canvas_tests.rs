@@ -38,7 +38,7 @@ fn insertion_beyond_content_extends_logical_row_to_the_inserted_cell() {
 }
 
 #[test]
-fn top_at_ignores_whitespace_and_disabled_stack_uses_base_only() {
+fn composition_ignores_whitespace_and_disabled_stack_uses_base_only() {
     let mut base = LayerMap::new(LayerId(0), true);
     base.set_data(2, -3, data("a", Face::default()));
     let mut top = LayerMap::new(LayerId(1), true);
@@ -48,13 +48,26 @@ fn top_at_ignores_whitespace_and_disabled_stack_uses_base_only() {
     };
     top.set_data(2, -3, data(" ", styled));
     let stack = LayerStack::new(vec![base.clone(), top], true).unwrap();
-    assert_eq!(stack.at(2, -3).contents(), " ");
-    assert_eq!(stack.top_at(2, -3).contents(), "a");
+    assert_eq!(
+        stack.effective_layers()[1]
+            .get(2, -3)
+            .unwrap()
+            .atom
+            .contents(),
+        " "
+    );
+    let region = CanvasRegion {
+        left: -3,
+        top: 2,
+        width: 1,
+        height: 1,
+    };
+    assert_eq!(stack.composite_region(region).unwrap()[0][0].contents, "a");
 
     let mut overlay = LayerMap::new(LayerId(1), true);
     overlay.set_data(2, -3, data("b", Face::default()));
     let stack = LayerStack::new(vec![base, overlay], false).unwrap();
-    assert_eq!(stack.top_at(2, -3).contents(), "a");
+    assert_eq!(stack.composite_region(region).unwrap()[0][0].contents, "a");
 }
 
 #[test]

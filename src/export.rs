@@ -13,8 +13,6 @@ use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
-#[cfg(test)]
-use crate::selection::region_atoms;
 use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle};
 use crate::toolbar::DurableMenuSelections;
 
@@ -620,38 +618,6 @@ enum LoadedJson {
     Legacy(Vec<Vec<StyledAtom>>),
 }
 
-#[cfg(test)]
-fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument {
-    ProjectDocument {
-        format: PROJECT_FORMAT.to_owned(),
-        version: PROJECT_VERSION,
-        canvas: ProjectCanvas {
-            rows: Vec::new(),
-            layers: state.persisted_layers(),
-            active_layer: Some(state.active_layer_id()),
-        },
-        cursor: state.grid.cursor_pos,
-        selection: state.selection,
-        viewport,
-        menu_selections: state.toolbar.durable_selections(),
-    }
-}
-
-#[cfg(test)]
-fn save_native_json_for_test(path: &Path, state: &Editor, viewport: ViewportOffset) -> Result<()> {
-    document::save(
-        path,
-        state.canvas(),
-        &state.toolbar.durable_selections(),
-        CanvasPosition {
-            cursor: state.grid.cursor_pos,
-            viewport,
-            zoom: 0,
-        },
-        (1.0, 1.0),
-    )
-}
-
 pub(crate) fn load_project_json(
     path: &Path,
     state: &mut Editor,
@@ -994,6 +960,7 @@ fn blank_atom() -> StyledAtom {
 mod tests {
     use super::*;
     use crate::history::{EditHistory, HistorySnapshot};
+    use crate::selection::region_atoms;
 
     fn contents(line: &[StyledAtom]) -> String {
         line.iter().map(|atom| atom.contents.as_str()).collect()
@@ -1001,6 +968,45 @@ mod tests {
     use crate::app::{CursorMode, ThemeConfig};
     use crate::model::Coord;
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
+
+    fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument {
+        ProjectDocument {
+            format: PROJECT_FORMAT.to_owned(),
+            version: PROJECT_VERSION,
+            canvas: ProjectCanvas {
+                rows: Vec::new(),
+                layers: state
+                    .canvas()
+                    .layers()
+                    .iter()
+                    .map(|layer| PersistedLayer {
+                        id: layer.id,
+                        visible: layer.visible,
+                        lines: layer.to_dense(),
+                    })
+                    .collect(),
+                active_layer: Some(state.active_layer_id()),
+            },
+            cursor: state.grid.cursor_pos,
+            selection: state.selection,
+            viewport,
+            menu_selections: state.toolbar.durable_selections(),
+        }
+    }
+
+    fn save_native_json(path: &Path, state: &Editor, viewport: ViewportOffset) -> Result<()> {
+        document::save(
+            path,
+            state.canvas(),
+            &state.toolbar.durable_selections(),
+            CanvasPosition {
+                cursor: state.grid.cursor_pos,
+                viewport,
+                zoom: 0,
+            },
+            (1.0, 1.0),
+        )
+    }
 
     #[test]
     fn plain_text_preserves_ragged_rows_without_blank_canvas_padding() {
@@ -1297,7 +1303,6 @@ mod tests {
 
         assert_eq!(platform.clipboard.as_deref(), Some("◇"));
         assert_eq!(state.toolbar.main_mode(), MainMode::Line);
-        assert_eq!(state.toolbar.custom_stamp(), None);
         assert_eq!(state.toolbar.rows(), toolbar_rows);
 
         state.extend_selection(crate::model::Direction::Right);
@@ -1926,7 +1931,7 @@ mod tests {
         let mut source = Editor::new(&ThemeConfig::default(), "source");
         source.set_lines_for_test(lines_from_text("XY"));
         source.move_to(Coord { line: 0, column: 1 });
-        save_native_json_for_test(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
+        save_native_json(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
         target.set_lines_for_test(lines_from_text("aaaa\nbbbb"));
@@ -1998,7 +2003,7 @@ mod tests {
         });
         let source_menu = source.toolbar.durable_selections();
         let source_viewport = ViewportOffset { x: -12, y: 34 };
-        save_native_json_for_test(&path, &source, source_viewport).unwrap();
+        save_native_json(&path, &source, source_viewport).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
         target.set_lines_for_test(lines_from_text("unrelated outside content"));

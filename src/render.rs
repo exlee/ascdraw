@@ -950,7 +950,6 @@ fn render_toolbar(
             max_columns,
             crate::layout::minimap_width_in_cells(max_columns),
             state.cursor_coordinates(),
-            state.toolbar.custom_stamp().is_some(),
         ),
     ));
 
@@ -3121,7 +3120,11 @@ mod tests {
         );
 
         let width = (PADDING as f32 * 2.0 + max_columns as f32 * metrics.cell_width) as usize;
-        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height) as usize;
+        let height = crate::toolbar::toolbar_height_for_width(
+            &state.toolbar,
+            usize::MAX,
+            metrics.cell_height,
+        ) as usize;
         let mut pixels = vec![0xff; width * height * 4];
         let image_info = ImageInfo::new(
             (width as i32, height as i32),
@@ -3241,7 +3244,11 @@ mod tests {
             fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
         };
         let max_columns = 100;
-        let height = crate::toolbar::toolbar_height(&state.toolbar, metrics.cell_height);
+        let height = crate::toolbar::toolbar_height_for_width(
+            &state.toolbar,
+            usize::MAX,
+            metrics.cell_height,
+        );
         let physical_row = crate::toolbar::toolbar_content_row(logical_row);
         let spans = crate::toolbar::boxed_toolbar_spans(
             &state.toolbar.toolbar_spans(logical_row),

@@ -91,12 +91,7 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
     for row in 0..state.toolbar.content_rows_for_width(box_width) {
         span_rows.push(state.boxed_toolbar_spans_for_width(row, box_width));
     }
-    span_rows.push(toolbar_bottom_border_spans(
-        box_width,
-        0,
-        (0, 0),
-        state.toolbar.custom_stamp().is_some(),
-    ));
+    span_rows.push(toolbar_bottom_border_spans(box_width, 0, (0, 0)));
 
     let rows = span_rows
         .iter()

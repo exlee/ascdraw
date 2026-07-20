@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use anyhow::anyhow;
 use anyhow::{Context, Result};
 use winit::event::{MouseScrollDelta, TouchPhase};
 use winit::event_loop::ActiveEventLoop;
@@ -1599,13 +1597,6 @@ fn durable_menu_selections_changed(
     previous.durable_selections() != current.durable_selections()
 }
 
-#[cfg(test)]
-fn reconcile_view_cursor(previous: &Editor, current: &Editor) -> bool {
-    let was_viewing = previous.view_active();
-    let is_viewing = current.view_active();
-    was_viewing != is_viewing
-}
-
 fn pan_viewport(
     viewport: &mut ViewportOffset,
     direction: Direction,
@@ -2105,18 +2096,6 @@ fn adjust_font_size(
     }
 }
 
-#[cfg(test)]
-fn grid_top(
-    scale_factor: f64,
-    transparent_menubar: bool,
-    toolbar_cell_height: f32,
-    toolbar: &crate::toolbar::ToolbarState,
-) -> f32 {
-    (content_top_padding(scale_factor, transparent_menubar)
-        + crate::toolbar::toolbar_height(toolbar, toolbar_cell_height))
-    .round()
-}
-
 fn grid_top_for_width(
     scale_factor: f64,
     transparent_menubar: bool,
@@ -2164,8 +2143,24 @@ mod tests {
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
     use crate::model::{Direction, Face, StyledAtom};
     use crate::toolbar::{MainMode, ToolbarAction};
+    use anyhow::anyhow;
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    fn reconcile_view_cursor(previous: &Editor, current: &Editor) -> bool {
+        previous.view_active() != current.view_active()
+    }
+
+    fn grid_top(
+        scale_factor: f64,
+        transparent_menubar: bool,
+        toolbar_cell_height: f32,
+        toolbar: &crate::toolbar::ToolbarState,
+    ) -> f32 {
+        (content_top_padding(scale_factor, transparent_menubar)
+            + crate::toolbar::toolbar_height_for_width(toolbar, usize::MAX, toolbar_cell_height))
+        .round()
+    }
 
     #[test]
     fn line_double_click_requires_same_stationary_cell_within_interval() {

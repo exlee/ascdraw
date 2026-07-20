@@ -3,7 +3,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use crate::app::AppConfig;
 use crate::app::CursorMode;
 use crate::layout::{PADDING, ViewportOffset, content_top_padding};
-use crate::model::{Coord, Direction};
+use crate::model::Direction;
 use crate::render::Renderer;
 use crate::toolbar::{ToolbarState, UtilityKind};
 
@@ -302,52 +302,6 @@ fn tool_direction_command(direction: Direction, mode: CursorMode) -> EditCommand
     }
 }
 
-/// Returns history commands before every mode-specific or configurable shortcut.
-#[cfg(test)]
-pub fn history_command(
-    key: &Key,
-    modifiers: ModifiersState,
-    mode: CursorMode,
-) -> Option<HistoryCommand> {
-    if !modifiers.alt_key() && (modifiers.control_key() || modifiers.super_key()) {
-        return match key {
-            Key::Character(text) if text.eq_ignore_ascii_case("z") => Some(HistoryCommand::Undo),
-            Key::Character(text) if text.eq_ignore_ascii_case("r") => Some(HistoryCommand::Redo),
-            _ => None,
-        };
-    }
-    if mode.accepts_text()
-        || (modifiers != ModifiersState::empty() && modifiers != ModifiersState::SHIFT)
-    {
-        return None;
-    }
-    match key {
-        Key::Character(text) if text == "u" => Some(HistoryCommand::Undo),
-        Key::Character(text) if text == "U" => Some(HistoryCommand::Redo),
-        _ => None,
-    }
-}
-
-/// Returns global clipboard commands before mode-specific key handling.
-#[cfg(test)]
-pub fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
-    if modifiers.alt_key() || !(modifiers.control_key() || modifiers.super_key()) {
-        return None;
-    }
-    match key {
-        Key::Character(text)
-            if text.eq_ignore_ascii_case("c")
-                && modifiers.super_key()
-                && !modifiers.control_key() =>
-        {
-            Some(ClipboardCommand::Copy)
-        }
-        Key::Character(text) if text.eq_ignore_ascii_case("x") => Some(ClipboardCommand::Cut),
-        Key::Character(text) if text.eq_ignore_ascii_case("v") => Some(ClipboardCommand::Paste),
-        _ => None,
-    }
-}
-
 pub fn edit_command(
     key: &Key,
     repeat: bool,
@@ -599,28 +553,6 @@ pub fn pointer_position_to_canvas_coord(
     )
 }
 
-fn pointer_position_to_coord_with_metrics(
-    x: f64,
-    y: f64,
-    grid_top: f32,
-    cell_width: f32,
-    cell_height: f32,
-    viewport: ViewportOffset,
-) -> Option<Coord> {
-    let (line, column) = pointer_position_to_canvas_coord_with_metrics(
-        x,
-        y,
-        grid_top,
-        cell_width,
-        cell_height,
-        viewport,
-    )?;
-    Some(Coord {
-        line: i16::try_from(line).ok()?,
-        column: i16::try_from(column).ok()?,
-    })
-}
-
 fn pointer_position_to_canvas_coord_with_metrics(
     x: f64,
     y: f64,
@@ -692,17 +624,72 @@ fn toolbar_position(
 }
 
 #[cfg(test)]
-pub fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
-    if direction_for_key(key_without_modifiers).is_some() {
-        key_without_modifiers
-    } else {
-        key
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor_event::{EditorState, KeyInput, classify_key};
+    use crate::model::Coord;
+
+    fn history_command(
+        key: &Key,
+        modifiers: ModifiersState,
+        mode: CursorMode,
+    ) -> Option<HistoryCommand> {
+        classify_key(
+            EditorState::NavigationMode,
+            mode.accepts_text(),
+            KeyInput {
+                key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        )
+        .history_command()
+    }
+
+    fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
+        classify_key(
+            EditorState::NavigationMode,
+            false,
+            KeyInput {
+                key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        )
+        .clipboard_command()
+    }
+
+    fn pointer_position_to_coord_with_metrics(
+        x: f64,
+        y: f64,
+        grid_top: f32,
+        cell_width: f32,
+        cell_height: f32,
+        viewport: ViewportOffset,
+    ) -> Option<Coord> {
+        let (line, column) = pointer_position_to_canvas_coord_with_metrics(
+            x,
+            y,
+            grid_top,
+            cell_width,
+            cell_height,
+            viewport,
+        )?;
+        Some(Coord {
+            line: i16::try_from(line).ok()?,
+            column: i16::try_from(column).ok()?,
+        })
+    }
+
+    fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
+        if direction_for_key(key_without_modifiers).is_some() {
+            key_without_modifiers
+        } else {
+            key
+        }
+    }
 
     #[test]
     fn boxed_toolbar_hit_testing_skips_borders_and_translates_content_offsets() {

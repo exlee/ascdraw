@@ -1,7 +1,5 @@
 use crate::app::CursorMode;
 use crate::drawing::{LineEnding, is_line_glyph};
-#[cfg(test)]
-use crate::model::StyledAtom;
 use crate::model::{Coord, Direction};
 use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
@@ -163,13 +161,6 @@ impl Editor {
             self.active_stroke = None;
         }
         true
-    }
-
-    #[cfg(test)]
-    pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
-        self.line_preview
-            .as_ref()
-            .map(|preview| preview.rendered_canvas.active_dense_lines())
     }
 
     pub(crate) fn line_preview_render_canvas(&self) -> Option<&crate::canvas::LayerStack> {
@@ -417,7 +408,7 @@ mod tests {
             assert!(!state.start_or_advance_line_preview());
             assert!(state.move_line_preview_to(Coord { line: 3, column: 5 }));
             let preview = state
-                .lines_with_line_preview()
+                .lines_with_shape_preview()
                 .expect("active route is rendered");
             assert!(state.start_or_advance_line_preview());
             assert_eq!(state.lines_for_test(), preview);
@@ -438,7 +429,7 @@ mod tests {
         });
         state.move_line_preview_to(Coord { line: 5, column: 5 });
         let live = state
-            .lines_with_line_preview()
+            .lines_with_shape_preview()
             .expect("changed route has a preview");
         assert_ne!(live, first_segment);
         assert!(
@@ -543,7 +534,7 @@ mod tests {
         let target = Coord { line: 5, column: 2 };
         state.move_line_preview_to(target);
         let preview = state
-            .lines_with_line_preview()
+            .lines_with_shape_preview()
             .expect("mixed route is previewed");
         assert_eq!(
             preview
@@ -605,7 +596,7 @@ mod tests {
         let endpoint = Coord { line: 5, column: 8 };
         state.move_line_preview_to(endpoint);
         let preview = state
-            .lines_with_line_preview()
+            .lines_with_shape_preview()
             .expect("both routed segments are previewed");
         assert!(preview.iter().flatten().any(|atom| atom.contents == "╲"));
         assert_eq!(

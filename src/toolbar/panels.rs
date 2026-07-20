@@ -28,11 +28,6 @@ struct PanelPlacement {
 }
 
 impl ToolbarState {
-    #[cfg(test)]
-    pub(crate) fn auxiliary_panels_visible(&self) -> bool {
-        !self.export_menu_open() && (self.multi_layer_mode() || self.multi_color_mode())
-    }
-
     pub(super) fn append_auxiliary_header_spans(&self, spans: &mut Vec<ToolbarSpan>, row: usize) {
         let mut entries = Vec::with_capacity(3);
         let layers_visible = self.multi_layer_mode() && !self.export_menu_open();
@@ -288,6 +283,10 @@ mod tests {
     use crate::toolbar::{MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans};
     use unicode_width::UnicodeWidthChar;
 
+    fn auxiliary_panels_visible(toolbar: &ToolbarState) -> bool {
+        !toolbar.export_menu_open() && (toolbar.multi_layer_mode() || toolbar.multi_color_mode())
+    }
+
     fn sample_layers() -> [LayerSummary; 3] {
         [
             LayerSummary {
@@ -492,7 +491,7 @@ mod tests {
                     ))
             );
         }
-        assert!(!toolbar.auxiliary_panels_visible());
+        assert!(!auxiliary_panels_visible(&toolbar));
         assert!(toolbar.multi_layer_mode());
         assert!(toolbar.multi_color_mode());
     }

@@ -167,17 +167,6 @@ fn cell_shift(count: i64, size: f32) -> i64 {
     (count as f64 * size as f64).round() as i64
 }
 
-#[cfg(test)]
-pub fn legal_origin_range(min: usize, max: usize, viewport_cells: usize) -> (i64, i64) {
-    let min = i64::try_from(min).unwrap_or(i64::MAX);
-    let max = i64::try_from(max).unwrap_or(i64::MAX);
-    let (inner_start, inner_end) = inner_screen_offsets(viewport_cells);
-    (
-        min.saturating_sub(inner_end),
-        max.saturating_sub(inner_start),
-    )
-}
-
 fn inner_screen_offsets(viewport_cells: usize) -> (i64, i64) {
     let viewport_cells = i64::try_from(viewport_cells.max(1)).unwrap_or(i64::MAX);
     let outer_margin = SCROLL_MARGIN_CELLS
@@ -416,20 +405,30 @@ fn vertical_geometry(
 }
 
 #[cfg(test)]
-fn layout_rows(
-    height: usize,
-    cell_height: usize,
-    transparent_menubar: bool,
-    scale_factor: f64,
-) -> usize {
-    let top_padding = content_top_padding_for_scale_factor(scale_factor, transparent_menubar);
-    ((height as f32 - top_padding - PADDING as f32).max(0.0) / cell_height.max(1) as f32) as usize
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::toolbar::{MainMode, ToolbarAction};
+
+    fn legal_origin_range(min: usize, max: usize, viewport_cells: usize) -> (i64, i64) {
+        let min = i64::try_from(min).unwrap_or(i64::MAX);
+        let max = i64::try_from(max).unwrap_or(i64::MAX);
+        let (inner_start, inner_end) = inner_screen_offsets(viewport_cells);
+        (
+            min.saturating_sub(inner_end),
+            max.saturating_sub(inner_start),
+        )
+    }
+
+    fn layout_rows(
+        height: usize,
+        cell_height: usize,
+        transparent_menubar: bool,
+        scale_factor: f64,
+    ) -> usize {
+        let top_padding = content_top_padding_for_scale_factor(scale_factor, transparent_menubar);
+        ((height as f32 - top_padding - PADDING as f32).max(0.0) / cell_height.max(1) as f32)
+            as usize
+    }
 
     #[test]
     fn visible_canvas_cells_include_residual_pixels_and_signed_origins() {
@@ -566,7 +565,8 @@ mod tests {
         let top_padding = content_top_padding_for_scale_factor(1.0, false);
         let cell_height = 18.0;
         let toolbar = ToolbarState::default();
-        let grid_top = top_padding + crate::toolbar::toolbar_height(&toolbar, cell_height);
+        let grid_top = top_padding
+            + crate::toolbar::toolbar_height_for_width(&toolbar, usize::MAX, cell_height);
 
         assert_eq!(
             grid_top,
