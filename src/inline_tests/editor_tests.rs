@@ -54,36 +54,6 @@ impl Editor {
         self.canvas.active_line_markers()
     }
 
-    pub(crate) fn set_line_markers_for_test(&mut self, markers: Vec<PlacedLineMarker>) {
-        for marker in self.canvas.active_line_markers() {
-            self.canvas.remove_line_at(marker.coord);
-        }
-        for marker in markers {
-            assert!(self.canvas.set_line_at(
-                marker.coord,
-                crate::canvas::LineData {
-                    ending: marker.ending,
-                    base_glyph: marker.base_glyph,
-                },
-            ));
-        }
-    }
-
-    pub(crate) fn push_line_marker_for_test(&mut self, marker: PlacedLineMarker) {
-        let mut markers = self.line_markers_for_test();
-        markers.push(marker);
-        self.set_line_markers_for_test(markers);
-    }
-
-    pub(crate) fn extend_line_markers_for_test(
-        &mut self,
-        markers: impl IntoIterator<Item = PlacedLineMarker>,
-    ) {
-        let mut combined = self.line_markers_for_test();
-        combined.extend(markers);
-        self.set_line_markers_for_test(combined);
-    }
-
     pub(crate) fn layer_views(&self) -> Vec<LayerView> {
         self.canvas
             .layers()

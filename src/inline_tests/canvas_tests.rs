@@ -196,3 +196,46 @@ fn cell_and_row_edits_remap_embedded_line_metadata() {
     assert!(map.join_row_with_next(1).unwrap());
     assert_eq!(map.line_markers()[0].coord, Coord { line: 1, column: 1 });
 }
+
+#[test]
+fn structural_row_and_column_edits_remap_embedded_line_metadata() {
+    let styled = |contents: &str| StyledAtom {
+        face: Face::default(),
+        contents: contents.to_owned(),
+    };
+    let marker = |line, column, contents| LineMarker {
+        coord: Coord { line, column },
+        ending: LineEnding::Fixed('◆'),
+        base_glyph: contents.to_owned(),
+    };
+    let mut columns = LayerMap::from_dense_with_markers(
+        LayerId(0),
+        true,
+        &[vec![styled("A"), styled("B"), styled("C"), styled("D")]],
+        &[marker(0, 1, "B"), marker(0, 3, "D")],
+    )
+    .unwrap();
+
+    columns
+        .pull_column_left(1, &BTreeSet::from([0]))
+        .unwrap();
+    assert_eq!(columns.line_markers(), vec![marker(0, 2, "D")]);
+    columns.insert_column(2).unwrap();
+    assert_eq!(columns.line_markers(), vec![marker(0, 3, "D")]);
+
+    let mut rows = LayerMap::from_dense_with_markers(
+        LayerId(0),
+        true,
+        &[
+            vec![styled("A")],
+            vec![styled("B")],
+            vec![styled("C")],
+            vec![styled("D")],
+        ],
+        &[marker(2, 0, "C"), marker(3, 0, "D")],
+    )
+    .unwrap();
+
+    rows.remove_row(2).unwrap();
+    assert_eq!(rows.line_markers(), vec![marker(2, 0, "D")]);
+}
