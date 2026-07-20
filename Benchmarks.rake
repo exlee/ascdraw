@@ -372,13 +372,15 @@ module FpsBenchmark
   end
 
   def print_summary(reports, report_dir)
+    scenario_width = [18, *reports.map { |report| report.fetch("scenario").length }].max
+    row_format = "%-#{scenario_width}s %10.1f %10.2fms %10.2fms %10.2fms %10.2fms %9.1f%% %9.1f%%"
     puts
     puts "FPS benchmark"
-    puts format("%-18s %10s %12s %12s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "grid p95", "minimap p95", "event p95", ">8.33ms", ">16.67ms")
+    puts format("%-#{scenario_width}s %10s %12s %12s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "grid p95", "minimap p95", "event p95", ">8.33ms", ">16.67ms")
     reports.each do |report|
       metrics = report.fetch("metrics")
       puts format(
-        "%-18s %10.1f %10.2fms %10.2fms %10.2fms %10.2fms %9.1f%% %9.1f%%",
+        row_format,
         report.fetch("scenario"),
         metrics.fetch("frame_rate"),
         metrics.dig("frames", "p95_ms"),

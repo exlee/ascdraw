@@ -290,6 +290,7 @@ fn format_duration_distribution(samples: impl Iterator<Item = Duration>) -> Stri
 struct MouseDrag {
     checkpoint: StateChangeCheckpoint,
     last_pointer: Coord,
+    press_position: Option<(f64, f64)>,
     active: bool,
     document_changed: bool,
     input_override: Option<MouseDragOverride>,
@@ -304,6 +305,16 @@ enum MouseDragOverride {
 }
 
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+const MOUSE_DRAG_THRESHOLD: f64 = 6.0;
+
+fn crossed_mouse_drag_threshold(press: Option<(f64, f64)>, current: Option<(f64, f64)>) -> bool {
+    let Some(((press_x, press_y), (current_x, current_y))) = press.zip(current) else {
+        return true;
+    };
+    let x = current_x - press_x;
+    let y = current_y - press_y;
+    x * x + y * y >= MOUSE_DRAG_THRESHOLD * MOUSE_DRAG_THRESHOLD
+}
 
 fn is_line_double_click(
     previous: Option<(Instant, Coord)>,
@@ -514,6 +525,7 @@ impl EditorWindow {
         self.mouse_drag = Some(MouseDrag {
             checkpoint,
             last_pointer: target,
+            press_position: self.mouse_position,
             active: extending_selection,
             document_changed: confirmed_move,
             input_override,
@@ -533,6 +545,10 @@ impl EditorWindow {
             return;
         };
         if target == drag.last_pointer {
+            self.mouse_drag = Some(drag);
+            return;
+        }
+        if !drag.active && !crossed_mouse_drag_threshold(drag.press_position, self.mouse_position) {
             self.mouse_drag = Some(drag);
             return;
         }
@@ -2486,6 +2502,22 @@ mod tests {
 
         assert!(target.is_none());
         assert!(!resolved.get());
+    }
+
+    #[test]
+    fn mouse_drag_requires_six_physical_pixels_before_activation() {
+        let press = Some((100.0, 200.0));
+
+        assert!(!crossed_mouse_drag_threshold(press, Some((105.9, 200.0))));
+        assert!(crossed_mouse_drag_threshold(press, Some((106.0, 200.0))));
+        assert!(!crossed_mouse_drag_threshold(press, Some((104.0, 204.0))));
+        assert!(crossed_mouse_drag_threshold(press, Some((105.0, 204.0))));
+    }
+
+    #[test]
+    fn mouse_drag_without_physical_positions_keeps_legacy_activation() {
+        assert!(crossed_mouse_drag_threshold(None, Some((1.0, 1.0))));
+        assert!(crossed_mouse_drag_threshold(Some((1.0, 1.0)), None));
     }
 
     #[test]
