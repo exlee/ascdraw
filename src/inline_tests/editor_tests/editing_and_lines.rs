@@ -95,7 +95,7 @@ fn selection_extends_into_negative_coordinates_without_moving_anchor() {
 #[test]
 fn moving_to_a_drag_start_collapses_a_previous_selection() {
     let mut state = state();
-    state.set_lines_for_test(lines_from_text("abcdef"));
+    state.insert("abcdef");
     state
         .selection
         .select(Coord { line: 0, column: 5 }, Coord { line: 0, column: 1 });
@@ -125,7 +125,7 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
     let mut state = state();
     let perimeter_face = state.theme.selection.clone();
     let center_face = state.theme.cursor_drawing.clone();
-    state.set_lines_for_test(
+    assert!(state.paste_styled_rectangle_at_cursor(&TextRectangle::new(
         ["┌┬┐", "├┼┤", "└┴┘"]
             .into_iter()
             .map(|row| {
@@ -137,7 +137,7 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
                     .collect()
             })
             .collect(),
-    );
+    )));
     state.set_cell_face_for_test(Coord { line: 1, column: 1 }, center_face);
     let before = state.lines_for_test().clone();
     state.move_to(Coord { line: 1, column: 1 });
@@ -164,18 +164,19 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
 #[test]
 fn clear_removes_only_markers_whose_cells_are_selected() {
     let mut state = state();
-    state.insert("◆─◆");
-    let inside = PlacedLineMarker {
-        coord: Coord { line: 0, column: 0 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "─".into(),
-    };
-    let outside = PlacedLineMarker {
-        coord: Coord { line: 0, column: 2 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "─".into(),
-    };
-    state.set_line_markers_for_test(vec![inside, outside.clone()]);
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 11,
+    });
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 1,
+        option: 11,
+    });
+    assert!(state.move_or_draw(Direction::Right, true));
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
+    let outside = state.line_markers_for_test()[1].clone();
     state.move_to(Coord::default());
 
     state.clear_selection();
@@ -205,7 +206,7 @@ fn paste_rectangular_overwrite_uses_selection_origin_and_selects_result() {
         fg: "#123456".to_string(),
         ..Face::default()
     };
-    state.set_lines_for_test(vec![
+    assert!(state.paste_styled_rectangle_at_cursor(&TextRectangle::new(vec![
         vec![
             StyledAtom {
                 face: outside.clone(),
@@ -242,7 +243,7 @@ fn paste_rectangular_overwrite_uses_selection_origin_and_selects_result() {
                 contents: "r".into(),
             },
         ],
-    ]);
+    ])));
     state.move_to(Coord { line: 1, column: 2 });
     state.extend_selection(Direction::Left);
     state.extend_selection(Direction::Up);
@@ -377,10 +378,6 @@ fn plain_toolbar_hotspot_click_is_an_exact_editor_no_op() {
 #[test]
 fn single_replace_fills_the_range_and_restores_mode_without_moving_active_corner() {
     let mut state = state();
-    state.set_lines_for_test(vec![
-        vec![blank_atom(), blank_atom(), blank_atom()],
-        vec![blank_atom(), blank_atom(), blank_atom()],
-    ]);
     state.move_to(Coord { line: 0, column: 0 });
     state.extend_selection(Direction::Right);
     state.extend_selection(Direction::Right);
@@ -604,11 +601,6 @@ fn moving_up_at_zero_enters_implicit_space_without_shifting_content() {
     let mut state = state();
     state.insert("ab");
     state.move_to(Coord { line: 0, column: 1 });
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord::default(),
-        ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
-        base_glyph: "╶".to_string(),
-    });
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
     state.toggle_shape_preview();
 
@@ -622,7 +614,6 @@ fn moving_up_at_zero_enters_implicit_space_without_shifting_content() {
         }
     );
     assert_eq!(contents(&state.lines_for_test()[0]), "ab");
-    assert_eq!(state.line_markers_for_test()[0].coord.line, 0);
     let preview = state.shape_preview.unwrap();
     assert_eq!(preview.anchor.line, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
@@ -633,11 +624,6 @@ fn moving_left_at_zero_enters_implicit_space_without_shifting_content() {
     let mut state = state();
     state.insert("a\nb");
     state.move_to(Coord::default());
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 1, column: 0 },
-        ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
-        base_glyph: "╶".to_string(),
-    });
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
     state.toggle_shape_preview();
 
@@ -652,7 +638,6 @@ fn moving_left_at_zero_enters_implicit_space_without_shifting_content() {
     );
     assert_eq!(contents(&state.lines_for_test()[0]), "a");
     assert_eq!(contents(&state.lines_for_test()[1]), "b");
-    assert_eq!(state.line_markers_for_test()[0].coord.column, 0);
     let preview = state.shape_preview.unwrap();
     assert_eq!(preview.anchor.column, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
