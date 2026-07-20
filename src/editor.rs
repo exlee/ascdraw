@@ -6,7 +6,6 @@ use crate::drawing::is_line_glyph;
 use crate::jump::JumpMode;
 use crate::model::{
     Atom, Coord, Direction, Face, LayerId, LayerSummary, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH,
-    StyledAtom,
 };
 use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
 use crate::toolbar::{
@@ -692,13 +691,8 @@ impl Editor {
         true
     }
 
-    pub fn replace_canvas(&mut self, mut lines: Vec<Vec<StyledAtom>>) {
-        truncate_canvas_lines(&mut lines);
-        let map = crate::dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &[])
-            .expect("loaded canvas contains valid graphemes");
-        let replacement =
-            crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())
-                .expect("replacement canvas has a base layer");
+    pub fn replace_canvas(&mut self, mut replacement: crate::canvas::LayerStack) {
+        replacement.set_enabled(self.toolbar.multi_layer_mode());
         self.canvas.record_history_replacement(&replacement);
         self.canvas = replacement;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -835,33 +829,6 @@ impl Editor {
         }
         usize::try_from(i32::from(right) - i32::from(left) + 1).unwrap_or(usize::MAX)
     }
-}
-
-fn truncate_canvas_lines(lines: &mut Vec<Vec<StyledAtom>>) {
-    lines.truncate(MAX_CANVAS_HEIGHT);
-    for line in lines {
-        let mut width: usize = 0;
-        let keep = line
-            .iter()
-            .take_while(|atom| {
-                let next = width.saturating_add(atom_width(atom));
-                if next > MAX_CANVAS_WIDTH {
-                    return false;
-                }
-                width = next;
-                true
-            })
-            .count();
-        line.truncate(keep);
-    }
-}
-
-fn atom_width(atom: &StyledAtom) -> usize {
-    UnicodeWidthStr::width(atom.contents.as_str()).max(usize::from(!atom.contents.is_empty()))
-}
-
-fn display_width(atoms: &[StyledAtom]) -> usize {
-    atoms.iter().map(atom_width).sum()
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use super::*;
 use crate::canvas::{CoordData, LayerMap, LineMarker as PlacedLineMarker};
 use crate::drawing::LineEnding;
 use crate::editor_event::EditorState;
-use crate::model::ColorId;
+use crate::model::{ColorId, StyledAtom};
 use crate::toolbar::{ToggleKind, UtilityKind};
 
 #[derive(Debug, Clone)]

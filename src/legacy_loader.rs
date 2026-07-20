@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::document::{CanvasPosition, Document};
 use crate::canvas::LayerStack;
 use crate::dense_exchange;
+use crate::document::{CanvasPosition, Document};
 use crate::model::{LayerId, StyledAtom};
 use crate::toolbar::DurableMenuSelections;
 

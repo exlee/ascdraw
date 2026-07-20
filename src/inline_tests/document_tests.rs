@@ -1,7 +1,8 @@
 use super::*;
+use crate::legacy_loader::LegacyLayer;
 use crate::model::StyledAtom;
 
-fn canvas(layers: &[PersistedLayer]) -> LayerStack {
+fn canvas(layers: &[LegacyLayer]) -> LayerStack {
     let maps = layers
         .iter()
         .map(|layer| {
@@ -14,7 +15,7 @@ fn canvas(layers: &[PersistedLayer]) -> LayerStack {
 #[test]
 fn sparse_json_round_trip_and_canonical_deletion() {
     let selections = crate::toolbar::ToolbarState::default().durable_selections();
-    let layers = [PersistedLayer {
+    let layers = [LegacyLayer {
         id: LayerId(0),
         visible: true,
         lines: vec![vec![
@@ -47,7 +48,7 @@ fn sparse_json_round_trip_and_canonical_deletion() {
 
 #[test]
 fn sparse_write_rejects_wide_atoms() {
-    let layers = [PersistedLayer {
+    let layers = [LegacyLayer {
         id: LayerId(0),
         visible: true,
         lines: vec![vec![StyledAtom {

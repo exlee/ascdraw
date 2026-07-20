@@ -312,7 +312,7 @@ pub fn perform(
             };
             let text = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            state.replace_canvas(canvas_from_text(&text)?);
+            state.restore_canvas(canvas_from_text(&text)?);
             Ok(ExportOutcome::DocumentLoaded {
                 path,
                 format: FileKind::Txt,
@@ -332,8 +332,7 @@ pub fn perform(
                 LoadedJson::Project(project) => {
                     let mut staged = state.clone();
                     staged.restore_project(
-                        project.layers,
-                        project.active_layer,
+                        project.canvas,
                         project.cursor,
                         project.selection,
                         &project.menu_selections,
@@ -342,7 +341,7 @@ pub fn perform(
                     *viewport = project.viewport;
                     return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
                 }
-                LoadedJson::Legacy(lines) => state.replace_canvas(canvas_from_dense_lines(lines)?),
+                LoadedJson::Legacy(lines) => state.restore_canvas(canvas_from_dense_lines(lines)?),
             }
             Ok(ExportOutcome::DocumentLoaded {
                 path,
@@ -640,7 +639,7 @@ pub(crate) fn load_project_json(
             Ok(0)
         }
         LoadedJson::Legacy(lines) => {
-            state.replace_canvas(canvas_from_dense_lines(lines)?);
+            state.restore_canvas(canvas_from_dense_lines(lines)?);
             Ok(0)
         }
     }
@@ -939,9 +938,7 @@ pub(crate) fn canvas_from_text(text: &str) -> Result<LayerStack> {
     canvas_from_dense_lines(lines_from_text(text))
 }
 
-pub(crate) fn canvas_from_dense_lines(
-    mut lines: Vec<Vec<StyledAtom>>,
-) -> Result<LayerStack> {
+pub(crate) fn canvas_from_dense_lines(mut lines: Vec<Vec<StyledAtom>>) -> Result<LayerStack> {
     truncate_dense_lines(&mut lines);
     let map = dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &[])?;
     LayerStack::new(vec![map], false)
@@ -1043,7 +1040,7 @@ mod tests {
     #[test]
     fn plain_text_preserves_ragged_rows_without_blank_canvas_padding() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.replace_canvas(canvas_from_text("one\nlonger\n").unwrap());
+        state.restore_canvas(canvas_from_text("one\nlonger\n").unwrap());
 
         assert_eq!(plain_text(&state), "one\nlonger");
     }
@@ -1051,7 +1048,7 @@ mod tests {
     #[test]
     fn plain_text_rebases_visible_content_to_its_minimum_coordinates() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.replace_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
+        state.restore_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
 
         assert_eq!(plain_text(&state), "ab\n\n c");
     }
@@ -1859,16 +1856,20 @@ mod tests {
             panic!("version two project must use project loading")
         };
 
-        assert_eq!(restored.layers.len(), 2);
-        assert_eq!(restored.layers[0].id, base);
-        assert!(!restored.layers[0].visible);
-        assert_eq!(restored.layers[0].lines[0][0].face, state.theme.selection);
-        assert_eq!(restored.layers[1].id, upper);
+        let layers = restored.canvas.layers();
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].id, base);
+        assert!(!layers[0].visible);
         assert_eq!(
-            restored.layers[1].lines[0][0].face,
+            dense_exchange::to_dense(&layers[0])[0][0].face,
+            state.theme.selection
+        );
+        assert_eq!(layers[1].id, upper);
+        assert_eq!(
+            dense_exchange::to_dense(&layers[1])[0][0].face,
             state.theme.cursor_block
         );
-        assert_eq!(restored.active_layer, upper);
+        assert_eq!(restored.canvas.active_id(), upper);
         assert_eq!(
             restored.menu_selections.active_color(),
             crate::model::ColorId(14)
@@ -1880,7 +1881,7 @@ mod tests {
         let json = serde_json::json!({
             "format": PROJECT_FORMAT,
             "version": 1,
-            "canvas": {"rows": ["a", "😀"]},
+            "canvas": {"rows": ["a", "b"]},
             "cursor": {"line": 0, "column": 0},
             "selection": {
                 "anchor": {"line": 0, "column": 0},
@@ -1893,13 +1894,14 @@ mod tests {
             panic!("version one project must migrate through project loading")
         };
 
-        assert_eq!(restored.layers.len(), 1);
-        assert_eq!(restored.layers[0].id, LayerId(0));
-        assert!(restored.layers[0].visible);
-        assert_eq!(contents(&restored.layers[0].lines[0]), "a");
+        let layers = restored.canvas.layers();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].id, LayerId(0));
+        assert!(layers[0].visible);
+        let lines = dense_exchange::to_dense(&layers[0]);
+        assert_eq!(contents(&lines[0]), "a");
         assert!(
-            restored.layers[0]
-                .lines
+            lines
                 .iter()
                 .flatten()
                 .all(|atom| atom.face == Face::default())

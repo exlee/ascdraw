@@ -392,8 +392,5 @@ fn default_path_with_env(env_var: impl Fn(&str) -> Option<OsString>, temp_dir: P
 }
 
 #[cfg(test)]
-use crate::legacy_loader::LegacyLayer as PersistedLayer;
-
-#[cfg(test)]
 #[path = "inline_tests/document_tests.rs"]
 mod tests;
