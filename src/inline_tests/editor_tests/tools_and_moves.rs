@@ -553,7 +553,7 @@ fn pull_right_shifts_ragged_finite_prefixes_without_growing_empty_rows() {
 }
 
 #[test]
-fn pull_preserves_shifted_faces_and_removes_or_remaps_line_metadata() {
+fn pull_preserves_shifted_faces_and_removes_or_remaps_line_markers() {
     let mut state = utility_state(&["ABCD"], UtilityKind::Pull, Coord { line: 0, column: 0 });
     let mut lines = state.lines_for_test();
     for (index, atom) in lines[0].iter_mut().enumerate() {
@@ -563,13 +563,6 @@ fn pull_preserves_shifted_faces_and_removes_or_remaps_line_metadata() {
     state
         .selection
         .select(Coord { line: 0, column: 0 }, Coord { line: 0, column: 3 });
-    state.active_stroke = Some(ActiveStroke {
-        end: Coord { line: 0, column: 1 },
-        end_base_glyph: "─".into(),
-        moving_ending: LineEnding::None,
-        incoming_connection: Direction::Left,
-        end_was_existing_line: false,
-    });
     state.extend_line_markers_for_test([
         PlacedLineMarker {
             coord: Coord { line: 0, column: 1 },
@@ -582,21 +575,14 @@ fn pull_preserves_shifted_faces_and_removes_or_remaps_line_metadata() {
             base_glyph: "D".into(),
         },
     ]);
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord { line: 0, column: 0 },
-        end: Coord { line: 0, column: 3 },
-    });
-
     assert!(state.apply_utility(Direction::Left));
     assert_eq!(line_contents(&state), vec!["ACD"]);
     assert_eq!(state.lines_for_test()[0][0].face.fg, "#000000");
     assert_eq!(state.lines_for_test()[0][1].face.fg, "#222222");
     assert_eq!(state.lines_for_test()[0][2].face.fg, "#333333");
     assert_eq!(state.selection.active().column, 2);
-    assert!(state.active_stroke.is_none());
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(state.line_markers_for_test()[0].coord.column, 2);
-    assert!(state.shape_preview.is_none());
 }
 
 #[test]
@@ -629,13 +615,6 @@ fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
     state
         .selection
         .select(Coord { line: 1, column: 0 }, Coord { line: 3, column: 0 });
-    state.active_stroke = Some(ActiveStroke {
-        end: Coord { line: 3, column: 0 },
-        end_base_glyph: "D".into(),
-        moving_ending: LineEnding::None,
-        incoming_connection: Direction::Up,
-        end_was_existing_line: false,
-    });
     state.extend_line_markers_for_test([
         PlacedLineMarker {
             coord: Coord { line: 2, column: 0 },
@@ -652,7 +631,6 @@ fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
     assert!(state.apply_utility(Direction::Up));
     assert_eq!(line_contents(&state), vec!["A", "B", "D"]);
     assert_eq!(state.selection.active().line, 2);
-    assert_eq!(state.active_stroke.as_ref().unwrap().end.line, 2);
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(state.line_markers_for_test()[0].coord.line, 2);
 }
@@ -697,35 +675,20 @@ fn utility_push_at_origin_uses_signed_insertion_targets() {
 }
 
 #[test]
-fn push_remaps_selection_markers_stroke_and_preview_coordinates() {
+fn push_remaps_selection_and_marker_coordinates() {
     let mut state = utility_state(&["abc"], UtilityKind::Push, Coord { line: 0, column: 2 });
     state
         .selection
         .select(Coord { line: 0, column: 1 }, Coord { line: 0, column: 2 });
-    state.active_stroke = Some(ActiveStroke {
-        end: Coord { line: 0, column: 2 },
-        end_base_glyph: "─".into(),
-        moving_ending: LineEnding::None,
-        incoming_connection: Direction::Left,
-        end_was_existing_line: false,
-    });
     state.push_line_marker_for_test(PlacedLineMarker {
         coord: Coord { line: 0, column: 2 },
         ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
         base_glyph: "─".into(),
     });
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord { line: 0, column: 1 },
-        end: Coord { line: 0, column: 2 },
-    });
-
     assert!(state.apply_utility(Direction::Left));
     assert_eq!(state.selection.anchor().column, 2);
     assert_eq!(state.selection.active().column, 3);
-    assert_eq!(state.active_stroke.as_ref().unwrap().end.column, 3);
     assert_eq!(state.line_markers_for_test()[0].coord.column, 3);
-    let preview = state.shape_preview.unwrap();
-    assert_eq!((preview.anchor.column, preview.end.column), (2, 3));
 }
 
 #[test]
@@ -742,9 +705,10 @@ fn move_lift_previews_without_mutation_then_composes_edited_cells() {
     assert!(state.move_lift(Direction::Right));
     assert!(state.move_lift(Direction::Right));
     assert_eq!(state.edit_snapshot(), before);
-    let preview = state
-        .lines_with_shape_preview()
+    let preview_canvas = state
+        .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(contents(&preview[0]), "  ab");
     assert_eq!(contents(&preview[1]), "  cd");
     assert_eq!(preview[0][2].face, configured_face);
@@ -775,22 +739,19 @@ fn clone_move_lift_clones_once_per_shift_press_and_can_clone_after_moving() {
     assert!(initial.begin_selected_move_lift());
     assert!(initial.clone_move_lift(Direction::Right, 1));
     assert_eq!(initial.edit_snapshot(), before);
-    assert_eq!(
-        contents(&initial.lines_with_shape_preview().unwrap()[0]),
-        "AA"
-    );
+    let preview_canvas = initial.move_lift_render_canvas().unwrap();
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    assert_eq!(contents(&preview[0]), "AA");
 
     assert!(initial.clone_move_lift(Direction::Right, 1));
-    assert_eq!(
-        contents(&initial.lines_with_shape_preview().unwrap()[0]),
-        "A A"
-    );
+    let preview_canvas = initial.move_lift_render_canvas().unwrap();
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    assert_eq!(contents(&preview[0]), "A A");
 
     assert!(initial.clone_move_lift(Direction::Left, 2));
-    assert_eq!(
-        contents(&initial.lines_with_shape_preview().unwrap()[0]),
-        "AAA"
-    );
+    let preview_canvas = initial.move_lift_render_canvas().unwrap();
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    assert_eq!(contents(&preview[0]), "AAA");
     assert!(initial.confirm_move_lift());
     assert_eq!(line_contents(&initial), vec!["AAA"]);
 
@@ -884,9 +845,10 @@ fn move_lift_treats_unedited_cells_as_transparent() {
 
     assert!(state.begin_selected_move_lift());
     assert!(state.move_lift(Direction::Down));
-    let preview = state
-        .lines_with_shape_preview()
+    let preview_canvas = state
+        .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(contents(&preview[0]), "");
     assert_eq!(contents(&preview[1]), "A─C");
 
@@ -913,7 +875,7 @@ fn move_lift_cancel_restores_exact_cursor_selection_and_document() {
     assert!(state.cancel_move_lift());
 
     assert_eq!(state.edit_snapshot(), before);
-    assert!(state.lines_with_shape_preview().is_none());
+    assert!(state.move_lift_render_canvas().is_none());
 }
 
 #[test]
