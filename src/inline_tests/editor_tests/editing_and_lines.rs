@@ -126,19 +126,22 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
     let perimeter_face = state.theme.selection.clone();
     let center_face = state.theme.cursor_drawing.clone();
     assert!(
-        state.paste_styled_rectangle_at_cursor(&TextRectangle::new(
-            ["┌┬┐", "├┼┤", "└┴┘"]
-                .into_iter()
-                .map(|row| {
-                    row.chars()
-                        .map(|contents| StyledAtom {
-                            face: perimeter_face.clone(),
-                            contents: contents.to_string(),
-                        })
-                        .collect()
-                })
-                .collect(),
-        ))
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(
+                ["┌┬┐", "├┼┤", "└┴┘"]
+                    .into_iter()
+                    .map(|row| {
+                        row.chars()
+                            .map(|contents| StyledAtom {
+                                face: perimeter_face.clone(),
+                                contents: contents.to_string(),
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            )
+            .unwrap()
+        )
     );
     state.set_cell_face_for_test(Coord { line: 1, column: 1 }, center_face);
     let before = state.lines_for_test().clone();
@@ -209,44 +212,47 @@ fn paste_rectangular_overwrite_uses_selection_origin_and_selects_result() {
         ..Face::default()
     };
     assert!(
-        state.paste_styled_rectangle_at_cursor(&TextRectangle::new(vec![
-            vec![
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "L".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "a".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "b".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "R".into(),
-                },
-            ],
-            vec![
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "l".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "c".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "d".into(),
-                },
-                StyledAtom {
-                    face: outside.clone(),
-                    contents: "r".into(),
-                },
-            ],
-        ]))
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![
+                vec![
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "L".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "a".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "b".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "R".into(),
+                    },
+                ],
+                vec![
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "l".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "c".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "d".into(),
+                    },
+                    StyledAtom {
+                        face: outside.clone(),
+                        contents: "r".into(),
+                    },
+                ],
+            ])
+            .unwrap()
+        )
     );
     state.move_to(Coord { line: 1, column: 2 });
     state.extend_selection(Direction::Left);
