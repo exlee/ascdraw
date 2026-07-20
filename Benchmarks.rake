@@ -316,8 +316,8 @@ module FpsBenchmark
   def zoom_to_minimum(client)
     successful_steps = 0
     loop do
-      changed = client.request(command: "zoom", delta: -0.25)
-      return successful_steps unless changed
+      result = client.request(command: "zoom", delta: -0.25)
+      return successful_steps unless zoom_changed?(result)
 
       successful_steps += 1
       raise "minimum zoom was not reached within 1,000 steps" if successful_steps >= 1_000
@@ -326,9 +326,17 @@ module FpsBenchmark
 
   def zoom_by_steps(client, delta, count)
     count.times do
-      changed = client.request(command: "zoom", delta: delta)
-      raise "zoom stopped before returning to the initial scale" unless changed
+      result = client.request(command: "zoom", delta: delta)
+      unless zoom_changed?(result)
+        raise "zoom stopped before returning to the initial scale"
+      end
     end
+  end
+
+  def zoom_changed?(result)
+    return result if result == true || result == false
+
+    !result.is_a?(Hash) || result.fetch("changed", true)
   end
 
   def measure(client, name, warmup, operations, &operation)
