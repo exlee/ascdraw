@@ -161,6 +161,7 @@ fn try_main() -> Result<ExitCode> {
     let mut should_apply_app_icon = true;
 
     event_loop.run(move |event, elwt| {
+        let mut raster_prefill_pending = false;
         match event {
             Event::Resumed => {
                 #[cfg(target_os = "macos")]
@@ -248,6 +249,9 @@ fn try_main() -> Result<ExitCode> {
                     if editor.renderer.promote_rendered_atom_refresh_if_due(now) {
                         editor.request_redraw();
                     }
+                    raster_prefill_pending |= editor
+                        .renderer
+                        .prefill_sparse_rasters(&editor.state, editor.window.scale_factor());
                     if editor
                         .state
                         .jump_deadline()
@@ -832,7 +836,12 @@ fn try_main() -> Result<ExitCode> {
             })
             .min()
             .unwrap_or(periodic_deadline)
-            .min(periodic_deadline);
+            .min(periodic_deadline)
+            .min(if raster_prefill_pending {
+                now + Duration::from_millis(1)
+            } else {
+                periodic_deadline
+            });
         elwt.set_control_flow(ControlFlow::WaitUntil(next_deadline));
     })?;
 

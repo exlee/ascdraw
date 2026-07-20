@@ -2,9 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::rc::Rc;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
@@ -173,6 +174,7 @@ struct RenderedAtomCache {
     images: HashMap<RenderedAtomKey, skia_safe::Image>,
     insertion_order: VecDeque<RenderedAtomKey>,
     refresh: raster_cache::RasterRefreshThrottle,
+    prefill: raster_cache::RasterPrefillCursor,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -601,41 +603,8 @@ fn render_cached_sparse_grid_atoms(
                             .flatten()
                     });
                 let image = cached_image.or_else(|| {
-                    let atom = StyledAtom {
-                        face: data.face.as_ref().clone(),
-                        contents: data.atom.contents().to_owned(),
-                    };
-                    let resolved_face = if face_is_default(&atom.face) {
-                        root_face
-                    } else {
-                        resolve_derived_face(
-                            &state.grid.default_face,
-                            &atom.face,
-                            FALLBACK_FG,
-                            FALLBACK_BG,
-                        )
-                    };
-                    let paints_background = atom.face.bg != "default"
-                        || atom.face.attributes.iter().any(|attribute| {
-                            attribute
-                                .trim_start_matches("final:")
-                                .eq_ignore_ascii_case("reverse")
-                        });
-                    let key = rendered_atom_key(
-                        &atom,
-                        resolved_face,
-                        root_face,
-                        paints_background,
-                        &state.grid.default_face,
-                        &state.theme,
-                        metrics,
-                    );
-                    let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
-                    *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
-                        generation: raster_generation,
-                        image: image.clone(),
-                    }));
-                    Some((image, false))
+                    rasterize_sparse_cell(cache, data, state, metrics, root_face, raster_generation)
+                        .map(|image| (image, false))
                 });
                 if let Some((image, scaled)) = image {
                     let position = (
@@ -652,6 +621,51 @@ fn render_cached_sparse_grid_atoms(
         }
     }
     canvas.restore();
+}
+
+fn rasterize_sparse_cell(
+    cache: &RefCell<RenderedAtomCache>,
+    data: &crate::canvas::CoordData,
+    state: &Editor,
+    metrics: &CellMetrics,
+    root_face: ResolvedFace,
+    raster_generation: u64,
+) -> Option<skia_safe::Image> {
+    let atom = StyledAtom {
+        face: data.face.as_ref().clone(),
+        contents: data.atom.contents().to_owned(),
+    };
+    let resolved_face = if face_is_default(&atom.face) {
+        root_face
+    } else {
+        resolve_derived_face(
+            &state.grid.default_face,
+            &atom.face,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        )
+    };
+    let paints_background = atom.face.bg != "default"
+        || atom.face.attributes.iter().any(|attribute| {
+            attribute
+                .trim_start_matches("final:")
+                .eq_ignore_ascii_case("reverse")
+        });
+    let key = rendered_atom_key(
+        &atom,
+        resolved_face,
+        root_face,
+        paints_background,
+        &state.grid.default_face,
+        &state.theme,
+        metrics,
+    );
+    let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
+    *data.raster_cache.borrow_mut() = Some(Rc::new(crate::canvas::Rasterized {
+        generation: raster_generation,
+        image: image.clone(),
+    }));
+    Some(image)
 }
 
 fn draw_scaled_cell_image(
@@ -1805,6 +1819,32 @@ fn underline_start_y(top: f32, metrics: &CellMetrics, stroke_width: f32) -> f32 
     top + metrics.baseline_offset + stroke_width + metrics.underline_offset
 }
 
+fn next_sparse_coord(layer: &crate::canvas::LayerMap, last_coord: Option<Coord>) -> Option<Coord> {
+    if let Some(last) = last_coord {
+        if let Some((&column, _)) = layer
+            .rows()
+            .get(&last.line)
+            .and_then(|row| row.range((Excluded(last.column), Unbounded)).next())
+        {
+            return Some(Coord {
+                line: last.line,
+                column,
+            });
+        }
+        return layer
+            .rows()
+            .range((Excluded(last.line), Unbounded))
+            .find_map(|(&line, row)| {
+                row.first_key_value()
+                    .map(|(&column, _)| Coord { line, column })
+            });
+    }
+    layer.rows().iter().find_map(|(&line, row)| {
+        row.first_key_value()
+            .map(|(&column, _)| Coord { line, column })
+    })
+}
+
 pub fn load_renderer(config: &AppConfig) -> Renderer {
     Renderer {
         font_mgr: FontMgr::new(),
@@ -1840,6 +1880,66 @@ impl Renderer {
             .borrow_mut()
             .refresh
             .promote_if_due(now)
+    }
+
+    pub fn prefill_sparse_rasters(&self, state: &Editor, scale_factor: f64) -> bool {
+        const IDLE_BUDGET: Duration = Duration::from_millis(2);
+
+        let metrics = self.metrics(scale_factor);
+        let root_face = resolve_root_face(&state.grid.default_face, FALLBACK_FG, FALLBACK_BG);
+        let style_generation =
+            sparse_raster_style_generation(&state.grid.default_face, &state.theme);
+        let metrics_generation = sparse_raster_metrics_generation(&metrics);
+        let raster_generation = sparse_raster_generation(style_generation, metrics_generation);
+        {
+            let mut cache = self.rendered_atom_cache.borrow_mut();
+            if !cache.refresh.accepts(style_generation, metrics_generation) {
+                return false;
+            }
+            cache.prefill.prepare(raster_generation);
+        }
+
+        let started = Instant::now();
+        loop {
+            let Some((layer_index, last_coord)) =
+                self.rendered_atom_cache.borrow().prefill.position()
+            else {
+                return false;
+            };
+            let Some(layer) = state.canvas().layers().get(layer_index) else {
+                self.rendered_atom_cache.borrow_mut().prefill.finish();
+                return false;
+            };
+            let Some(coord) = next_sparse_coord(layer, last_coord) else {
+                self.rendered_atom_cache
+                    .borrow_mut()
+                    .prefill
+                    .advance_layer();
+                continue;
+            };
+            self.rendered_atom_cache.borrow_mut().prefill.advance(coord);
+            let data = layer
+                .get(coord.line, coord.column)
+                .expect("prefill coordinate came from the sparse layer");
+            let needs_raster = data
+                .raster_cache
+                .borrow()
+                .as_ref()
+                .is_none_or(|cached| cached.generation != raster_generation);
+            if needs_raster {
+                rasterize_sparse_cell(
+                    &self.rendered_atom_cache,
+                    data,
+                    state,
+                    &metrics,
+                    root_face,
+                    raster_generation,
+                );
+            }
+            if started.elapsed() >= IDLE_BUDGET {
+                return self.rendered_atom_cache.borrow().prefill.is_pending();
+            }
+        }
     }
 
     pub fn zoom(&self) -> i32 {
@@ -2023,6 +2123,10 @@ pub fn resize_surface(
         .resize(width, height)
         .map_err(|error| anyhow!(error.to_string()))
 }
+
+#[cfg(test)]
+#[path = "inline_tests/render_raster_prefill_tests.rs"]
+mod raster_prefill_tests;
 
 #[cfg(test)]
 mod tests {
