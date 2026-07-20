@@ -16,10 +16,7 @@ use crate::app::{AppCommand, AppConfig};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
-use crate::export::{
-    FileKind, lines_from_text, load_project_json, plain_text, project_json_contents,
-    save_project_json,
-};
+use crate::export::{FileKind, lines_from_text, load_project_json, plain_text};
 use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -1439,8 +1436,9 @@ impl EditorWindow {
             .to_path_buf();
         let format = match self.document_session {
             DocumentSession::TextFile(_) => Some(FileKind::Txt),
-            DocumentSession::JsonFile(_) => Some(FileKind::Json),
-            DocumentSession::Scratchpad(_) | DocumentSession::File(_) => None,
+            DocumentSession::Scratchpad(_)
+            | DocumentSession::File(_)
+            | DocumentSession::JsonFile(_) => None,
             DocumentSession::Stdin(_) => {
                 unreachable!("stdin sessions returned before path persistence")
             }
@@ -1451,7 +1449,7 @@ impl EditorWindow {
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let contents = match format {
             Some(FileKind::Txt) => plain_text(&self.state),
-            Some(FileKind::Json) => project_json_contents(&self.state, self.viewport)?,
+            Some(FileKind::Json) => unreachable!("JSON sessions use native document persistence"),
             Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
             None => document::contents(
                 self.state.canvas(),
@@ -1521,15 +1519,14 @@ impl EditorWindow {
             .to_path_buf();
         let format = match self.document_session {
             DocumentSession::TextFile(_) => Some(FileKind::Txt),
-            DocumentSession::JsonFile(_) => Some(FileKind::Json),
-            DocumentSession::Scratchpad(_) | DocumentSession::File(_) => None,
+            DocumentSession::Scratchpad(_)
+            | DocumentSession::File(_)
+            | DocumentSession::JsonFile(_) => None,
             DocumentSession::Stdin(_) => {
                 unreachable!("stdin sessions returned before path persistence")
             }
         };
         let text = (format == Some(FileKind::Txt)).then(|| plain_text(&self.state));
-        let state = (format == Some(FileKind::Json)).then(|| self.state.clone());
-        let viewport = self.viewport;
         let metrics = self.renderer.metrics(self.window.scale_factor());
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let saved = save_document_if_dirty(
@@ -1542,13 +1539,9 @@ impl EditorWindow {
             |path, _layers, _active_layer, menu_selections| match format {
                 Some(FileKind::Txt) => std::fs::write(path, text.as_deref().unwrap_or_default())
                     .with_context(|| format!("failed to write {}", path.display())),
-                Some(FileKind::Json) => save_project_json(
-                    path,
-                    state
-                        .as_ref()
-                        .expect("JSON session cloned its editor state"),
-                    viewport,
-                ),
+                Some(FileKind::Json) => {
+                    unreachable!("JSON sessions use native document persistence")
+                }
                 Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
                 None => document::save(path, &native_canvas, menu_selections, position, cell_size),
             },
@@ -1971,7 +1964,8 @@ pub fn create_editor_window(
         }
         DocumentSession::JsonFile(document_path) => {
             let mut loaded = state.clone();
-            load_project_json(document_path, &mut loaded, &mut viewport)?;
+            let zoom = load_project_json(document_path, &mut loaded, &mut viewport)?;
+            renderer.restore_zoom(zoom);
             state = loaded;
         }
         DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),

@@ -964,7 +964,8 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
             editor.finish_state_change(previous_state, previous_viewport, true);
             editor.activate_export_file(path, format);
         }
-        Ok(ExportOutcome::ProjectLoaded { path }) => {
+        Ok(ExportOutcome::ProjectLoaded { path, zoom }) => {
+            editor.renderer.restore_zoom(zoom);
             editor.finish_project_load(previous_state, previous_viewport);
             editor.activate_export_file(path, export::FileKind::Json);
         }
@@ -3490,7 +3491,10 @@ mod tests {
                 &mut load,
             )
             .unwrap(),
-            ExportOutcome::ProjectLoaded { path: path.clone() }
+            ExportOutcome::ProjectLoaded {
+                path: path.clone(),
+                zoom: 0,
+            }
         );
         assert_eq!(target.toolbar.durable_selections(), saved_menus);
         assert_eq!(target_viewport, saved_viewport);

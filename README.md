@@ -252,9 +252,9 @@ Press `0` to open the top-right Files/Togls menu:
 | `0 2 2` | Copy PNG |
 | `0 3 1` | Save TXT |
 | `0 3 2` | Save PNG |
-| `0 3 3` | Save JSON project |
+| `0 3 3` | Save native JSON document |
 | `0 4 1` | Load TXT |
-| `0 4 2` | Load JSON project |
+| `0 4 2` | Load native JSON document |
 | `0 5 1` | Toggle Dark Mode |
 | `0 5 2` | Toggle Multi Color Mode |
 | `0 5 3` | Toggle Multi Layer Mode |

@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::MacosColorSpace;
+use crate::document::{self, CanvasPosition, Document};
 use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
 use crate::model::{Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
@@ -41,7 +42,7 @@ pub enum ExportOutcome {
     Cancelled,
     Saved { path: PathBuf, format: FileKind },
     DocumentLoaded { path: PathBuf, format: FileKind },
-    ProjectLoaded { path: PathBuf },
+    ProjectLoaded { path: PathBuf, zoom: i32 },
     DocumentImported,
     CanvasCleared,
 }
@@ -51,6 +52,9 @@ pub trait ExportPlatform {
     fn clipboard_text(&mut self) -> Result<String>;
     fn choose_save_path(&mut self, kind: FileKind) -> Option<PathBuf>;
     fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf>;
+    fn document_metrics(&self) -> ((f32, f32), i32) {
+        ((1.0, 1.0), 0)
+    }
     fn render_canvas_image(
         &mut self,
         _lines: &[Vec<StyledAtom>],
@@ -141,6 +145,16 @@ impl ExportPlatform for NativeExportPlatform<'_> {
         rfd::FileDialog::new()
             .add_filter(name, &[extension])
             .pick_file()
+    }
+
+    fn document_metrics(&self) -> ((f32, f32), i32) {
+        self.png.as_ref().map_or(((1.0, 1.0), 0), |context| {
+            let metrics = context.renderer.metrics(context.scale_factor);
+            (
+                (metrics.cell_width, metrics.cell_height),
+                context.renderer.zoom(),
+            )
+        })
     }
 
     fn render_canvas_image(
@@ -256,7 +270,19 @@ pub fn perform(
             let Some(path) = platform.choose_save_path(FileKind::Json) else {
                 return Ok(ExportOutcome::Cancelled);
             };
-            save_project_json(&path, state, *viewport)?;
+            let (cell_size, zoom) = platform.document_metrics();
+            document::save(
+                &path,
+                state.canvas(),
+                &state.toolbar.durable_selections(),
+                CanvasPosition {
+                    cursor: state.grid.cursor_pos,
+                    canvas_origin: state.canvas_origin(),
+                    viewport: *viewport,
+                    zoom,
+                },
+                cell_size,
+            )?;
             Ok(if state.selection.is_collapsed() {
                 ExportOutcome::Saved {
                     path,
@@ -301,6 +327,10 @@ pub fn perform(
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             match project_from_json(&contents)? {
+                LoadedJson::Native(document) => {
+                    let zoom = restore_native_document(state, viewport, *document);
+                    return Ok(ExportOutcome::ProjectLoaded { path, zoom });
+                }
                 LoadedJson::Project(project) => {
                     let mut staged = state.clone();
                     staged.restore_project(
@@ -312,7 +342,7 @@ pub fn perform(
                     )?;
                     *state = staged;
                     *viewport = project.viewport;
-                    return Ok(ExportOutcome::ProjectLoaded { path });
+                    return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
                 }
                 LoadedJson::Legacy(lines) => state.replace_canvas(lines),
             }
@@ -588,10 +618,12 @@ struct RestoredProject {
 
 #[derive(Debug)]
 enum LoadedJson {
+    Native(Box<Document>),
     Project(Box<RestoredProject>),
     Legacy(Vec<Vec<StyledAtom>>),
 }
 
+#[cfg(test)]
 fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument {
     ProjectDocument {
         format: PROJECT_FORMAT.to_owned(),
@@ -608,28 +640,31 @@ fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument
     }
 }
 
-pub(crate) fn save_project_json(
-    path: &Path,
-    state: &Editor,
-    viewport: ViewportOffset,
-) -> Result<()> {
-    let contents = project_json_contents(state, viewport)?;
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
-}
-
-pub(crate) fn project_json_contents(state: &Editor, viewport: ViewportOffset) -> Result<String> {
-    serde_json::to_string_pretty(&project_document(state, viewport))
-        .context("failed to serialize ascdraw project")
+#[cfg(test)]
+fn save_native_json_for_test(path: &Path, state: &Editor, viewport: ViewportOffset) -> Result<()> {
+    document::save(
+        path,
+        state.canvas(),
+        &state.toolbar.durable_selections(),
+        CanvasPosition {
+            cursor: state.grid.cursor_pos,
+            canvas_origin: state.canvas_origin(),
+            viewport,
+            zoom: 0,
+        },
+        (1.0, 1.0),
+    )
 }
 
 pub(crate) fn load_project_json(
     path: &Path,
     state: &mut Editor,
     viewport: &mut ViewportOffset,
-) -> Result<bool> {
+) -> Result<i32> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     match project_from_json(&contents)? {
+        LoadedJson::Native(document) => Ok(restore_native_document(state, viewport, *document)),
         LoadedJson::Project(project) => {
             state.restore_project(
                 project.layers,
@@ -639,17 +674,26 @@ pub(crate) fn load_project_json(
                 &project.menu_selections,
             )?;
             *viewport = project.viewport;
-            Ok(true)
+            Ok(0)
         }
         LoadedJson::Legacy(lines) => {
             state.replace_canvas(lines);
-            Ok(false)
+            Ok(0)
         }
     }
 }
 
 fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
     let rows = match loaded {
+        LoadedJson::Native(document) => flatten_visible_layers(
+            &document
+                .canvas
+                .effective_layers()
+                .iter()
+                .filter(|layer| layer.visible)
+                .map(crate::canvas::LayerMap::to_dense)
+                .collect::<Vec<_>>(),
+        ),
         LoadedJson::Project(project) => flatten_visible_layers(
             &project
                 .layers
@@ -672,6 +716,11 @@ fn project_from_json(contents: &str) -> Result<LoadedJson> {
         return restore_project_document(document)
             .map(Box::new)
             .map(LoadedJson::Project);
+    }
+    if value.get("version").is_some() && value.get("width").is_none() {
+        return document::parse_contents(contents)
+            .map(Box::new)
+            .map(LoadedJson::Native);
     }
     if value.get("width").is_some() || value.get("height").is_some() {
         let document: LegacySelectionDocument =
@@ -696,6 +745,26 @@ fn project_from_json(contents: &str) -> Result<LoadedJson> {
     Ok(LoadedJson::Legacy(nonempty_lines(default_faced_lines(
         document.lines,
     ))))
+}
+
+fn restore_native_document(
+    state: &mut Editor,
+    viewport: &mut ViewportOffset,
+    document: Document,
+) -> i32 {
+    if let Some(selections) = document.menu_selections {
+        state.restore_menu_selections(&selections);
+    }
+    state.restore_canvas(document.canvas);
+    let position = document.position.unwrap_or(CanvasPosition {
+        cursor: crate::model::Coord::default(),
+        canvas_origin: crate::model::Coord::default(),
+        viewport: ViewportOffset::default(),
+        zoom: 0,
+    });
+    state.restore_canvas_position(position.cursor, position.canvas_origin);
+    *viewport = position.viewport;
+    position.zoom
 }
 
 fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject> {
@@ -960,6 +1029,8 @@ mod tests {
         fail_image_write: bool,
         save: Option<PathBuf>,
         open: Option<PathBuf>,
+        document_cell_size: Option<(f32, f32)>,
+        document_zoom: i32,
     }
 
     impl ExportPlatform for MockPlatform {
@@ -981,6 +1052,12 @@ mod tests {
         }
         fn choose_open_path(&mut self, _kind: FileKind) -> Option<PathBuf> {
             self.open.take()
+        }
+        fn document_metrics(&self) -> ((f32, f32), i32) {
+            (
+                self.document_cell_size.unwrap_or((1.0, 1.0)),
+                self.document_zoom,
+            )
         }
         fn render_canvas_image(
             &mut self,
@@ -1308,6 +1385,8 @@ mod tests {
         let mut viewport = ViewportOffset::default();
         let mut platform = MockPlatform {
             save: Some(path.clone()),
+            document_cell_size: Some((8.0, 16.0)),
+            document_zoom: 3,
             ..MockPlatform::default()
         };
         perform(
@@ -1324,10 +1403,26 @@ mod tests {
         .unwrap();
 
         let saved = fs::read_to_string(&path).unwrap();
-        let LoadedJson::Project(project) = project_from_json(&saved).unwrap() else {
-            panic!("expected project document");
+        let expected = document::contents(
+            state.canvas(),
+            &state.toolbar.durable_selections(),
+            CanvasPosition {
+                cursor: state.grid.cursor_pos,
+                canvas_origin: state.canvas_origin(),
+                viewport,
+                zoom: 3,
+            },
+            (8.0, 16.0),
+        )
+        .unwrap();
+        assert_eq!(saved, expected);
+        let LoadedJson::Native(document) = project_from_json(&saved).unwrap() else {
+            panic!("expected native sparse document");
         };
-        assert_eq!(contents(project.layers[0].lines.last().unwrap()), "outside");
+        assert_eq!(
+            contents(document.canvas.layers()[0].to_dense().last().unwrap()),
+            "outside"
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -1821,7 +1916,7 @@ mod tests {
         let mut source = Editor::new(&ThemeConfig::default(), "source");
         source.set_lines_for_test(lines_from_text("XY"));
         source.move_to(Coord { line: 0, column: 1 });
-        save_project_json(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
+        save_native_json_for_test(&path, &source, ViewportOffset { x: 20, y: 30 }).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
         target.set_lines_for_test(lines_from_text("aaaa\nbbbb"));
@@ -1872,7 +1967,7 @@ mod tests {
     }
 
     #[test]
-    fn json_project_round_trip_restores_full_canvas_state_with_default_faces() {
+    fn native_json_round_trip_matches_session_state_and_collapses_selection() {
         let path = temp_path("json");
         let mut source = state_with_selection();
         source.set_lines_for_test(vec![row_atoms("Qx  "), Vec::new(), row_atoms(" z")]);
@@ -1893,7 +1988,7 @@ mod tests {
         });
         let source_menu = source.toolbar.durable_selections();
         let source_viewport = ViewportOffset { x: -12, y: 34 };
-        save_project_json(&path, &source, source_viewport).unwrap();
+        save_native_json_for_test(&path, &source, source_viewport).unwrap();
 
         let mut target = Editor::new(&ThemeConfig::default(), "target");
         target.set_lines_for_test(lines_from_text("unrelated outside content"));
@@ -1916,10 +2011,13 @@ mod tests {
                 &mut platform,
             )
             .unwrap(),
-            ExportOutcome::ProjectLoaded { path: path.clone() }
+            ExportOutcome::ProjectLoaded {
+                path: path.clone(),
+                zoom: 0,
+            }
         );
         assert_eq!(target.grid.cursor_pos, Coord { line: 2, column: 1 });
-        assert_eq!(target.selection.anchor(), Coord { line: 0, column: 2 });
+        assert_eq!(target.selection.anchor(), Coord { line: 2, column: 1 });
         assert_eq!(target.selection.active(), Coord { line: 2, column: 1 });
         assert_eq!(target_viewport, source_viewport);
         assert_eq!(target.toolbar.durable_selections(), source_menu);

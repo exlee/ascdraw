@@ -156,25 +156,29 @@ pub fn load(path: &Path) -> Result<Option<Document>> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    let value = serde_json::from_str::<serde_json::Value>(&contents).ok();
+    parse_contents(&contents)
+        .with_context(|| format!("failed to load document {}", path.display()))
+        .map(Some)
+}
+
+pub(crate) fn parse_contents(contents: &str) -> Result<Document> {
+    let value = serde_json::from_str::<serde_json::Value>(contents).ok();
     let version = value
         .as_ref()
         .and_then(|value| value.get("version"))
         .and_then(serde_json::Value::as_u64);
     match version {
         Some(version) if version == u64::from(DOCUMENT_VERSION) => {
-            let sparse: SparseDocument = serde_json::from_str(&contents)
-                .with_context(|| format!("failed to parse {}", path.display()))?;
-            sparse_document(sparse).map(Some)
+            let sparse: SparseDocument =
+                serde_json::from_str(contents).context("failed to parse sparse document")?;
+            sparse_document(sparse)
         }
         Some(version) if version == u64::from(LEGACY_SPARSE_DOCUMENT_VERSION) => {
-            let sparse: LegacySparseDocument = serde_json::from_str(&contents)
-                .with_context(|| format!("failed to parse {}", path.display()))?;
-            legacy_sparse_document(sparse).map(Some)
+            let sparse: LegacySparseDocument =
+                serde_json::from_str(contents).context("failed to parse sparse v3 document")?;
+            legacy_sparse_document(sparse)
         }
-        _ => super::legacy_loader::load_document(&contents)
-            .with_context(|| format!("failed to load legacy document {}", path.display()))
-            .map(Some),
+        _ => super::legacy_loader::load_document(contents),
     }
 }
 
