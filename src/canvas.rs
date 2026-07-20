@@ -545,7 +545,7 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn remove_row_and_prepend_blank(&mut self, line: i16) -> Result<()> {
+    pub(crate) fn remove_row_and_shift_earlier_rows_down(&mut self, line: i16) -> Result<()> {
         record_layer_before(self);
         let y = line;
         self.rows.remove(&y);
@@ -919,9 +919,12 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn remove_row_and_prepend_blank_in_all_layers(&mut self, line: i16) -> Result<()> {
+    pub(crate) fn remove_row_and_shift_earlier_rows_down_in_all_layers(
+        &mut self,
+        line: i16,
+    ) -> Result<()> {
         for layer in &mut self.layers {
-            layer.remove_row_and_prepend_blank(line)?;
+            layer.remove_row_and_shift_earlier_rows_down(line)?;
         }
         Ok(())
     }

@@ -1986,6 +1986,23 @@ mod tests {
                 steps: 1,
             }
         );
+
+        state.move_home();
+        assert_eq!(
+            navigation_target(&state, EditCommand::Move(Direction::Left), 1),
+            Some(Coord {
+                line: 0,
+                column: -1,
+            })
+        );
+        apply_navigation_command(&mut state, EditCommand::Move(Direction::Left), 1);
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: 0,
+                column: -1,
+            }
+        );
     }
 
     #[test]

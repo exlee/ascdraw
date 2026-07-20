@@ -69,7 +69,6 @@ impl Editor {
     }
 
     pub fn restore_canvas_position(&mut self, cursor: Coord) {
-        let cursor = clamp_canvas_coord(cursor);
         self.grid.cursor_pos = cursor;
         self.selection.collapse(cursor);
     }

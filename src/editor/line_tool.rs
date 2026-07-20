@@ -5,7 +5,7 @@ use crate::drawing::{
 };
 use crate::model::{Atom, Coord, Direction};
 
-use super::{Editor, adjacent_coord};
+use super::Editor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ActiveStroke {
@@ -37,11 +37,10 @@ impl Editor {
         selected_start: LineEnding,
         selected_end: LineEnding,
     ) -> bool {
-        let Some(prepended) = self.prepare_adjacent(direction) else {
+        let from = self.grid.cursor_pos;
+        let Some(to) = self.prepared_adjacent_coord(direction) else {
             return false;
         };
-        let from = self.grid.cursor_pos;
-        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
         let line_style = self.toolbar.line_style();
         let corner_style = self.toolbar.line_corner();
 
@@ -49,7 +48,7 @@ impl Editor {
             self.end_stroke();
             self.move_to_without_ending_stroke(to);
             self.collapse_selection();
-            return prepended;
+            return false;
         }
 
         let continuing_stroke = self

@@ -499,7 +499,6 @@ impl Editor {
     }
 
     pub fn move_to(&mut self, coord: Coord) -> bool {
-        let coord = clamp_canvas_coord(coord);
         self.cancel_line_preview();
         self.cancel_move_lift();
         self.end_stroke();
@@ -511,7 +510,7 @@ impl Editor {
         false
     }
 
-    pub fn resolve_pointer_coord(&mut self, line: i64, column: i64) -> Coord {
+    pub fn resolve_pointer_coord(&self, line: i64, column: i64) -> Coord {
         Coord {
             line: i16::try_from(line).unwrap_or(if line < 0 { i16::MIN } else { i16::MAX }),
             column: i16::try_from(column).unwrap_or(if column < 0 { i16::MIN } else { i16::MAX }),
@@ -541,7 +540,6 @@ impl Editor {
     }
 
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
-        let coord = clamp_canvas_coord(coord);
         self.grid.cursor_pos = coord;
     }
 
@@ -556,57 +554,27 @@ impl Editor {
         changed
     }
 
-    /// Resolves the cursor coordinate produced by a non-prepending move
-    /// without mutating the grid. Runtime navigation uses this to validate the
-    /// viewport before applying a lightweight cursor/selection update.
-    pub fn navigation_target(
-        &self,
-        direction: Direction,
-        extend_selection: bool,
-        steps: usize,
-    ) -> Option<Coord> {
+    /// Resolves a cursor coordinate without mutating editor state. Runtime
+    /// navigation validates the viewport before applying the lightweight move.
+    pub fn navigation_target(&self, direction: Direction, steps: usize) -> Option<Coord> {
         let mut cursor = self.grid.cursor_pos;
         for _ in 0..steps {
-            cursor = self.navigation_target_from(cursor, direction, extend_selection)?;
+            cursor = adjacent_coord(cursor, direction)?;
         }
         Some(cursor)
-    }
-
-    pub fn cursor_target_for_coord(&self, target: Coord) -> Coord {
-        target
-    }
-
-    fn navigation_target_from(
-        &self,
-        cursor: Coord,
-        direction: Direction,
-        extend_selection: bool,
-    ) -> Option<Coord> {
-        if matches!(direction, Direction::Up) && cursor.line == 0
-            || matches!(direction, Direction::Left) && cursor.column == 0
-        {
-            return None;
-        }
-        let target = adjacent_coord(cursor, direction)?;
-        if extend_selection {
-            return Some(target);
-        }
-        Some(target)
     }
 
     pub fn extend_selection(&mut self, direction: Direction) -> bool {
         self.cancel_line_preview();
         self.cancel_move_lift();
-        let Some(prepended) = self.prepare_adjacent(direction) else {
+        let Some(to) = self.prepared_adjacent_coord(direction) else {
             return false;
         };
-        let to = adjacent_coord(self.grid.cursor_pos, direction)
-            .expect("canvas edge was structurally extended");
         self.end_stroke();
         self.shape_preview = None;
         self.move_selection_to_without_ending_stroke(to);
         self.selection.set_active(self.grid.cursor_pos);
-        prepended
+        false
     }
 
     /// Moves one cell while erasing the traversed edge. Connected line cells
@@ -616,13 +584,12 @@ impl Editor {
         self.commit_canvas();
         self.cancel_line_preview();
         self.cancel_move_lift();
-        if self.prepare_adjacent(direction).is_none() {
+        let Some(to) = self.prepared_adjacent_coord(direction) else {
             return false;
-        }
+        };
         self.end_stroke();
         self.shape_preview = None;
         let from = self.grid.cursor_pos;
-        let to = adjacent_coord(from, direction).expect("canvas edge was structurally extended");
         let erased_from = self.erase_connection_or_atom(from, direction);
         self.move_to_without_ending_stroke(to);
         let erased_to = self.erase_connection_or_atom(to, direction.opposite());
@@ -692,11 +659,9 @@ impl Editor {
     }
 
     pub fn draw_stamp(&mut self, direction: Direction) {
-        if self.prepare_adjacent(direction).is_none() {
+        let Some(to) = self.prepared_adjacent_coord(direction) else {
             return;
-        }
-        let to = adjacent_coord(self.grid.cursor_pos, direction)
-            .expect("canvas edge was structurally extended");
+        };
         self.shape_preview = None;
         self.place_stamp();
         self.move_to_without_ending_stroke(to);
@@ -848,12 +813,9 @@ impl Editor {
     ) -> anyhow::Result<()> {
         self.restore_layers(layers, active_layer)?;
         self.restore_menu_selections(menu_selections);
-        let cursor = clamp_canvas_coord(cursor);
         self.grid.cursor_pos = cursor;
-        self.selection.select(
-            clamp_canvas_coord(selection.anchor()),
-            clamp_canvas_coord(selection.active()),
-        );
+        self.selection
+            .select(selection.anchor(), selection.active());
         self.active_stroke = None;
         self.line_preview = None;
         self.shape_preview = None;
@@ -910,8 +872,6 @@ impl Editor {
         self.restore_active_cursor();
     }
 
-    /// Positive values compensate for prepended cells; negative values undo
-    /// that compensation when a transient edit restores its source snapshot.
     pub fn content_cells(&self) -> Vec<Coord> {
         self.sparse_content_cells(false)
     }
@@ -943,11 +903,9 @@ impl Editor {
         cells
     }
 
-    pub fn compact_blank_runs_preserving_cursor(&mut self) {}
-
-    fn prepare_adjacent(&mut self, direction: Direction) -> Option<bool> {
+    fn prepared_adjacent_coord(&mut self, direction: Direction) -> Option<Coord> {
         self.commit_canvas();
-        adjacent_coord(self.grid.cursor_pos, direction).map(|_| false)
+        adjacent_coord(self.grid.cursor_pos, direction)
     }
 
     fn canvas_height(&self) -> usize {
@@ -973,10 +931,6 @@ impl Editor {
         }
         usize::try_from(i32::from(right) - i32::from(left) + 1).unwrap_or(usize::MAX)
     }
-}
-
-fn clamp_canvas_coord(coord: Coord) -> Coord {
-    coord
 }
 
 fn truncate_canvas_lines(lines: &mut Vec<Vec<StyledAtom>>) {

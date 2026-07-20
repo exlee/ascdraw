@@ -342,7 +342,6 @@ struct LineMouseFinish {
 
 fn begin_line_mouse_state(
     state: &mut Editor,
-    coord: Coord,
     target: Coord,
     allow_cursor_move: bool,
 ) -> LineMousePress {
@@ -352,7 +351,7 @@ fn begin_line_mouse_state(
     if preview_was_active {
         state.move_line_preview_to(target);
     } else if cursor_moved {
-        state.move_to(coord);
+        state.move_to(target);
     } else if !wants_cursor_move {
         state.start_or_advance_line_preview();
     }
@@ -475,8 +474,7 @@ impl EditorWindow {
             None
         };
         let mut checkpoint = self.begin_state_change();
-        let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
-        let target = self.state.cursor_target_for_coord(coord);
+        let target = self.state.resolve_pointer_coord(pointer.0, pointer.1);
         let mut line_preview_was_active = false;
         let mut confirmed_move = false;
         let extending_selection = self.modifiers.shift_key();
@@ -491,12 +489,8 @@ impl EditorWindow {
             if origin.is_some() {
                 self.finish_history_transaction();
             }
-            let press = begin_line_mouse_state(
-                &mut self.state,
-                coord,
-                target,
-                !moves_cursor || origin.is_some(),
-            );
+            let press =
+                begin_line_mouse_state(&mut self.state, target, !moves_cursor || origin.is_some());
             line_preview_was_active = press.preview_was_active;
             debug_assert_eq!(press.cursor_moved, moves_cursor && origin.is_some());
             if let Some(origin) = origin {
@@ -516,7 +510,7 @@ impl EditorWindow {
                 self.request_redraw();
             } else if !preserve_selection && let Some(origin) = self.navigation_origin_for(target) {
                 self.finish_history_transaction();
-                self.state.move_to(coord);
+                self.state.move_to(target);
                 self.finish_navigation(origin);
                 self.request_redraw();
             }
@@ -536,10 +530,9 @@ impl EditorWindow {
     pub fn continue_mouse_drag(&mut self) {
         let Some((mut drag, target)) =
             resolve_mouse_drag_target(&mut self.mouse_drag, self.mouse_cell, |pointer| {
-                // Resolving a negative pointer coordinate may prepend sparse
-                // keys, so it must never run for passive cursor movement.
-                let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
-                self.state.cursor_target_for_coord(coord)
+                // Resolve canvas coordinates only for an active drag; passive
+                // pointer movement must never enter mutating editor input.
+                self.state.resolve_pointer_coord(pointer.0, pointer.1)
             })
         else {
             return;
@@ -1184,7 +1177,6 @@ impl EditorWindow {
     pub fn finish_project_load(&mut self, checkpoint: StateChangeCheckpoint) -> bool {
         self.menu_selections_dirty |=
             durable_menu_selections_changed(&checkpoint.toolbar, &self.state.toolbar);
-        self.state.compact_blank_runs_preserving_cursor();
         let canvas = self.state.finish_history_capture();
         self.ensure_cursor_in_viewport();
         let previous = checkpoint.history;
@@ -2322,7 +2314,7 @@ mod tests {
         let target = Coord { line: 0, column: 2 };
         state.begin_history_capture();
 
-        let press = begin_line_mouse_state(&mut state, target, target, true);
+        let press = begin_line_mouse_state(&mut state, target, true);
         assert_eq!(
             press,
             LineMousePress {
@@ -2351,7 +2343,7 @@ mod tests {
         let mut state = line_mouse_state();
         let cursor = state.grid.cursor_pos;
 
-        let press = begin_line_mouse_state(&mut state, cursor, cursor, true);
+        let press = begin_line_mouse_state(&mut state, cursor, true);
         assert_eq!(
             press,
             LineMousePress {
@@ -2381,7 +2373,7 @@ mod tests {
         let target = Coord { line: 0, column: 2 };
         let first_click = Instant::now();
 
-        let first_press = begin_line_mouse_state(&mut state, target, target, true);
+        let first_press = begin_line_mouse_state(&mut state, target, true);
         let first_finish = finish_line_mouse_state(
             &mut state,
             target,
@@ -2393,7 +2385,7 @@ mod tests {
         assert_eq!(first_finish.next_click, None);
         assert!(!state.has_line_preview());
 
-        let activation = begin_line_mouse_state(&mut state, target, target, true);
+        let activation = begin_line_mouse_state(&mut state, target, true);
         assert!(state.has_line_preview());
         let activation_finish = finish_line_mouse_state(
             &mut state,
@@ -2412,12 +2404,12 @@ mod tests {
     fn active_line_preview_click_adds_anchor_then_double_click_finishes() {
         let mut state = line_mouse_state();
         let origin = state.grid.cursor_pos;
-        begin_line_mouse_state(&mut state, origin, origin, true);
+        begin_line_mouse_state(&mut state, origin, true);
         let endpoint = Coord { line: 0, column: 3 };
         assert!(state.move_line_preview_to(endpoint));
         let anchor_click = Instant::now();
 
-        let anchor_press = begin_line_mouse_state(&mut state, endpoint, endpoint, true);
+        let anchor_press = begin_line_mouse_state(&mut state, endpoint, true);
         assert!(anchor_press.preview_was_active);
         let anchor_finish = finish_line_mouse_state(
             &mut state,
@@ -2432,7 +2424,7 @@ mod tests {
         assert_eq!(state.line_preview_anchor(), Some(endpoint));
         assert_eq!(anchor_finish.next_click, Some((anchor_click, endpoint)));
 
-        let finish_press = begin_line_mouse_state(&mut state, endpoint, endpoint, true);
+        let finish_press = begin_line_mouse_state(&mut state, endpoint, true);
         let finish = finish_line_mouse_state(
             &mut state,
             endpoint,
@@ -2452,7 +2444,7 @@ mod tests {
         let start = Coord { line: 0, column: 1 };
         let endpoint = Coord { line: 0, column: 4 };
 
-        let press = begin_line_mouse_state(&mut state, start, start, true);
+        let press = begin_line_mouse_state(&mut state, start, true);
         assert!(press.cursor_moved);
         assert!(!state.has_line_preview());
         continue_line_mouse_state(&mut state, endpoint);

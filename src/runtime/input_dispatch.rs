@@ -85,10 +85,9 @@ pub fn change_policy_for_key(
 }
 
 pub fn navigation_target(state: &Editor, command: EditCommand, steps: usize) -> Option<Coord> {
-    let (direction, extend_selection) = match command {
-        EditCommand::Move(direction) => (direction, false),
-        EditCommand::ExtendSelection(direction) => (direction, true),
+    let direction = match command {
+        EditCommand::Move(direction) | EditCommand::ExtendSelection(direction) => direction,
         _ => return None,
     };
-    state.navigation_target(direction, extend_selection, steps)
+    state.navigation_target(direction, steps)
 }

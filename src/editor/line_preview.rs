@@ -6,8 +6,8 @@ use crate::model::{Coord, Direction};
 use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
 
+use super::Editor;
 use super::routing::{RouteStep, route_steps};
-use super::{Editor, adjacent_coord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutedSegment {
@@ -110,17 +110,14 @@ impl Editor {
         if self.line_preview.is_none() {
             return false;
         }
-        let Some(prepended) = self.prepare_adjacent(direction) else {
+        let Some(to) = self.prepared_adjacent_coord(direction) else {
             return false;
         };
-        let to = adjacent_coord(self.grid.cursor_pos, direction)
-            .expect("canvas edge was structurally extended");
         self.set_line_preview_end(to);
-        prepended
+        false
     }
 
     pub fn move_line_preview_to(&mut self, target: Coord) -> bool {
-        let target = super::clamp_canvas_coord(target);
         if self.line_preview.is_none() || self.grid.cursor_pos == target {
             return false;
         }

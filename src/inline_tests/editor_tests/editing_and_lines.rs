@@ -319,7 +319,7 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
 
     assert!(editor.paste_styled_rectangle_at_cursor(&rectangle));
     assert_eq!(
-        editor.navigation_target(Direction::Right, false, 1),
+        editor.navigation_target(Direction::Right, 1),
         Some(Coord {
             line: origin.line,
             column: origin.column + 1,
@@ -346,6 +346,27 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
     }));
 
     assert_ne!(editor.edit_snapshot(), previous);
+}
+
+#[test]
+fn navigation_targets_cross_row_and_column_zero_without_canvas_mutation() {
+    let editor = state();
+
+    assert_eq!(
+        editor.navigation_target(Direction::Left, 1),
+        Some(Coord {
+            line: 0,
+            column: -1,
+        })
+    );
+    assert_eq!(
+        editor.navigation_target(Direction::Up, 2),
+        Some(Coord {
+            line: -2,
+            column: 0,
+        })
+    );
+    assert!(editor.content_cells().is_empty());
 }
 
 #[test]

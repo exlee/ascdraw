@@ -845,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn prepend_compensation_remains_legal_and_visible() {
+    fn signed_viewport_origin_remains_legal_and_visible() {
         let content = [Coord { line: 6, column: 6 }];
         let cursor = Coord { line: 0, column: 0 };
         let origin = navigation_origin((-1, -1), cursor, (10, 10), &content).unwrap();

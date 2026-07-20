@@ -177,7 +177,7 @@ impl Editor {
         }
         self.commit_canvas();
         self.canvas
-            .remove_row_and_prepend_blank_in_all_layers(target)
+            .remove_row_and_shift_earlier_rows_down_in_all_layers(target)
             .expect("pulled rows fit the sparse canvas");
         self.remap_after_pull(
             |coord| coord.line == target,
