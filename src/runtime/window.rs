@@ -466,6 +466,19 @@ fn finish_mouse_drag_state(state: &mut Editor, input_override: Option<MouseDragO
     changed
 }
 
+fn resolve_mouse_drag_target<T>(
+    drag: &mut Option<MouseDrag>,
+    pointer: Option<(i64, i64)>,
+    resolve: impl FnOnce((i64, i64)) -> T,
+) -> Option<(MouseDrag, T)> {
+    let active_drag = drag.take()?;
+    let Some(pointer) = pointer else {
+        *drag = Some(active_drag);
+        return None;
+    };
+    Some((active_drag, resolve(pointer)))
+}
+
 impl EditorWindow {
     pub fn window_id(&self) -> WindowId {
         self.window.id()
@@ -547,12 +560,14 @@ impl EditorWindow {
     }
 
     pub fn continue_mouse_drag(&mut self) {
-        let Some(pointer) = self.mouse_cell else {
-            return;
-        };
-        let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
-        let target = self.state.cursor_target_for_coord(coord);
-        let Some(mut drag) = self.mouse_drag.take() else {
+        let Some((mut drag, target)) =
+            resolve_mouse_drag_target(&mut self.mouse_drag, self.mouse_cell, |pointer| {
+                // Resolving a negative pointer coordinate may prepend sparse
+                // keys, so it must never run for passive cursor movement.
+                let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
+                self.state.cursor_target_for_coord(coord)
+            })
+        else {
             return;
         };
         if target == drag.last_pointer {
@@ -2545,6 +2560,20 @@ mod tests {
 
         state.move_to(Coord { line: 0, column: 3 });
         assert_eq!(state.lines_for_test(), committed);
+    }
+
+    #[test]
+    fn passive_mouse_movement_does_not_resolve_a_pointer_coordinate() {
+        let mut drag = None;
+        let resolved = std::cell::Cell::new(false);
+
+        let target = resolve_mouse_drag_target(&mut drag, Some((-8_000, 21)), |pointer| {
+            resolved.set(true);
+            pointer
+        });
+
+        assert!(target.is_none());
+        assert!(!resolved.get());
     }
 
     #[test]
