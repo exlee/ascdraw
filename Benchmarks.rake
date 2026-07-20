@@ -48,17 +48,17 @@ module FpsBenchmark
     operations = positive_integer("FPS_OPERATIONS", 300)
     warmup = nonnegative_integer("FPS_WARMUP", 20)
     report_dir = ENV.fetch("FPS_REPORT_DIR", "target/benchmarks/fps")
-    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
+    fixture = WorkspaceFixture.path(default: 1)
     FileUtils.mkdir_p(report_dir)
 
     Dir.mktmpdir("ascdraw-fps") do |temporary_dir|
       socket_path = File.join(temporary_dir, "control.sock")
-      document_path = File.join(temporary_dir, "workspace.json")
-      saved_document_path = File.join(temporary_dir, "saved-workspace.json")
-      [document_path, saved_document_path].each do |path|
-        FileUtils.cp(fixture, "#{path}.bz2")
-        system("bzip2", "-d", "#{path}.bz2", exception: true)
-      end
+      document_path = WorkspaceFixture.materialize(fixture, temporary_dir)
+      saved_document_path = WorkspaceFixture.materialize(
+        fixture,
+        temporary_dir,
+        basename: "saved-workspace",
+      )
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|
@@ -86,14 +86,12 @@ module FpsBenchmark
     operations = positive_integer("FPS_MINI_OPERATIONS", 30)
     warmup = nonnegative_integer("FPS_MINI_WARMUP", 0)
     report_dir = ENV.fetch("FPS_MINI_REPORT_DIR", "target/benchmarks/fps-mini")
-    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
+    fixture = WorkspaceFixture.path(default: 1)
     FileUtils.mkdir_p(report_dir)
 
     Dir.mktmpdir("ascdraw-fps-mini") do |temporary_dir|
       socket_path = File.join(temporary_dir, "control.sock")
-      document_path = File.join(temporary_dir, "workspace.json")
-      FileUtils.cp(fixture, "#{document_path}.bz2")
-      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
+      document_path = WorkspaceFixture.materialize(fixture, temporary_dir)
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|
@@ -110,14 +108,12 @@ module FpsBenchmark
     operations = positive_integer("ZOOM_OPERATIONS", 1_200)
     warmup = nonnegative_integer("ZOOM_WARMUP", 0)
     report_dir = ENV.fetch("ZOOM_REPORT_DIR", "target/benchmarks/zoom")
-    fixture = File.expand_path("fixtures/workspace.json.bz2", __dir__)
+    fixture = WorkspaceFixture.path(default: 1)
     FileUtils.mkdir_p(report_dir)
 
     Dir.mktmpdir("ascdraw-zoom") do |temporary_dir|
       socket_path = File.join(temporary_dir, "control.sock")
-      document_path = File.join(temporary_dir, "workspace.json")
-      FileUtils.cp(fixture, "#{document_path}.bz2")
-      system("bzip2", "-d", "#{document_path}.bz2", exception: true)
+      document_path = WorkspaceFixture.materialize(fixture, temporary_dir)
       log_path = File.join(report_dir, "ascdraw.log")
 
       File.open(log_path, "w") do |log|

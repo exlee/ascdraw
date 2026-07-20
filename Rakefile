@@ -5,6 +5,30 @@ require "tmpdir"
 ICON_SOURCE = "assets/ascdraw.png"
 ICON_OUTPUT = "target/generated/ascdraw.icns"
 
+module WorkspaceFixture
+  module_function
+
+  def path(default:)
+    workspace = ENV.fetch("WORKSPACE", default.to_s)
+    unless workspace.match?(/\A[1-9]\d*\z/)
+      raise "WORKSPACE must be a positive integer"
+    end
+
+    path = File.expand_path("fixtures/workspace_#{workspace}.json.bz2", __dir__)
+    raise "workspace fixture does not exist: #{path}" unless File.file?(path)
+
+    path
+  end
+
+  def materialize(fixture, directory, basename: "workspace")
+    json_path = File.join(directory, "#{basename}.json")
+    compressed_path = "#{json_path}.bz2"
+    FileUtils.cp(fixture, compressed_path)
+    system("bzip2", "-d", compressed_path, exception: true)
+    json_path
+  end
+end
+
 task :clean_app do
   sh "rm -fr /Applications/Ascdraw.app 2>/dev/null || true"
 end
@@ -86,3 +110,4 @@ file ICON_OUTPUT => [ICON_SOURCE] do
 end
 
 import "Benchmarks.rake"
+import "Scenarios.rake"
