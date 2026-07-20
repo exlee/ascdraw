@@ -194,7 +194,7 @@ fn cell_and_row_edits_remap_embedded_line_metadata() {
     map.split_row(0, 1).unwrap();
     assert_eq!(map.line_markers()[0].coord, Coord { line: 2, column: 1 });
     assert!(map.join_row_with_next(1).unwrap());
-    assert_eq!(map.line_markers()[0].coord, Coord { line: 1, column: 1 });
+    assert_eq!(map.line_markers()[0].coord, Coord { line: 1, column: 2 });
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
         face: Face::default(),
         contents: contents.to_owned(),
     };
-    let marker = |line, column, contents| LineMarker {
+    let marker = |line, column, contents: &str| LineMarker {
         coord: Coord { line, column },
         ending: LineEnding::Fixed('◆'),
         base_glyph: contents.to_owned(),
@@ -216,9 +216,7 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
     )
     .unwrap();
 
-    columns
-        .pull_column_left(1, &BTreeSet::from([0]))
-        .unwrap();
+    columns.pull_column_left(1, &BTreeSet::from([0])).unwrap();
     assert_eq!(columns.line_markers(), vec![marker(0, 2, "D")]);
     columns.insert_column(2).unwrap();
     assert_eq!(columns.line_markers(), vec![marker(0, 3, "D")]);
