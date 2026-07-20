@@ -609,10 +609,8 @@ fn moving_up_at_zero_enters_implicit_space_without_shifting_content() {
         ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
         base_glyph: "╶".to_string(),
     });
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord::default(),
-        end: state.grid.cursor_pos,
-    });
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+    state.toggle_shape_preview();
 
     assert!(!state.move_cursor(Direction::Up));
 
@@ -640,10 +638,8 @@ fn moving_left_at_zero_enters_implicit_space_without_shifting_content() {
         ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
         base_glyph: "╶".to_string(),
     });
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord::default(),
-        end: Coord { line: 1, column: 0 },
-    });
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+    state.toggle_shape_preview();
 
     assert!(!state.move_cursor(Direction::Left));
 

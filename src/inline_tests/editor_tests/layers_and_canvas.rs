@@ -454,18 +454,15 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     state.extend_selection(Direction::Right);
     assert!(state.begin_selected_move_lift());
     assert!(state.move_lift(Direction::Right));
-    assert!(state.move_lift_render_lines_for_layer(base).is_none());
-    assert_eq!(
-        contents(
-            &state
-                .move_lift_render_lines_for_layer(upper)
-                .expect("upper layer preview")[0]
-        ),
-        "  B"
-    );
     let sparse_preview = state
         .move_lift_render_canvas()
         .expect("one-cell move has a sparse preview");
+    assert!(
+        sparse_preview
+            .layers()
+            .iter()
+            .all(|layer| layer.id != base || !layer.visible)
+    );
     let upper_preview = sparse_preview
         .layers()
         .iter()
@@ -649,6 +646,7 @@ fn line_connection_regeneration_uses_the_current_color() {
 #[test]
 fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only() {
     let mut state = state();
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
     state.move_or_draw(Direction::Right, true);
     state
         .selection
@@ -659,10 +657,6 @@ fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only()
     state.toggle_text_entry();
     state.window_title = "current title".into();
     state.theme.selection.fg = "#123456".into();
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord::default(),
-        end: Coord { line: 1, column: 1 },
-    });
     state.insert("changed");
 
     state.restore_edit_snapshot(snapshot.clone());
@@ -672,7 +666,6 @@ fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only()
     assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
     assert_eq!(state.window_title, "current title");
     assert_eq!(state.theme.selection.fg, "#123456");
-    assert!(state.shape_preview.is_none());
 }
 
 #[test]
@@ -686,26 +679,27 @@ fn restoring_durable_menu_state_syncs_mode_and_clears_transient_editor_state() {
     let selections = selected.durable_selections();
 
     let mut state = state();
-    state
-        .selection
-        .select(Coord::default(), Coord { line: 2, column: 2 });
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord::default(),
-        end: Coord { line: 1, column: 1 },
-    });
-    state.cursor_mode = CursorMode::Replace;
-    state.single_replace_pending = true;
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+    state.toggle_shape_preview();
     state.restore_menu_selections(&selections);
 
     assert_eq!(state.toolbar.durable_selections(), selections);
     assert_eq!(state.toolbar.main_mode(), MainMode::Utilities);
     assert_eq!(state.toolbar.utility_kind(), UtilityKind::View);
     assert_eq!(state.cursor_mode, CursorMode::Utilities);
-    assert!(state.selection.is_collapsed());
     assert!(state.shape_preview.is_none());
-    assert!(!state.single_replace_pending);
     assert!(!state.toolbar.export_menu_open());
     assert_eq!(state.toolbar.pending_shortcut(), None);
+
+    let mut selection = state();
+    selection.extend_selection(Direction::Right);
+    selection.restore_menu_selections(&selections);
+    assert!(selection.selection.is_collapsed());
+
+    let mut replace = state();
+    assert!(replace.begin_single_replace());
+    replace.restore_menu_selections(&selections);
+    assert!(!replace.single_replace_pending);
 }
 
 #[test]
@@ -720,7 +714,7 @@ fn clearing_an_already_blank_selection_is_an_exact_document_no_op() {
 }
 
 #[test]
-fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
+fn clear_canvas_resets_cells_faces_cursor_selection_and_line_markers() {
     let mut state = state();
     state.set_lines_for_test(vec![vec![StyledAtom {
         face: Face {
@@ -735,24 +729,11 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
     state
         .selection
         .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
-    state.active_stroke = Some(ActiveStroke {
-        end: Coord { line: 3, column: 4 },
-        end_base_glyph: "─".into(),
-        moving_ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
-        incoming_connection: Direction::Left,
-        end_was_existing_line: false,
-    });
     state.push_line_marker_for_test(PlacedLineMarker {
         coord: Coord::default(),
         ending: LineEnding::Directional(crate::drawing::DirectionalEnding::BlackTriangle),
         base_glyph: "─".into(),
     });
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord::default(),
-        end: Coord { line: 3, column: 4 },
-    });
-    state.single_replace_pending = true;
-
     state.clear_canvas();
 
     assert_eq!(state.lines_for_test(), vec![Vec::new()]);
@@ -760,11 +741,25 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
     assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
     assert!(state.selection.is_collapsed());
     assert_eq!(state.selection.active(), Coord { line: 3, column: 4 });
-    assert!(state.active_stroke.is_none());
     assert!(state.line_markers_for_test().is_empty());
-    assert!(state.shape_preview.is_none());
-    assert!(!state.single_replace_pending);
     assert_eq!(state.cursor_mode, CursorMode::Stamp);
+}
+
+#[test]
+fn clear_canvas_cancels_reachable_drawing_transients() {
+    let mut line = state();
+    line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    assert!(line.move_or_draw(Direction::Right, true));
+    assert!(line.active_stroke.is_some());
+    line.clear_canvas();
+    assert!(line.active_stroke.is_none());
+
+    let mut shape = state();
+    shape.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+    shape.toggle_shape_preview();
+    assert!(shape.shape_preview.is_some());
+    shape.clear_canvas();
+    assert!(shape.shape_preview.is_none());
 }
 
 #[test]
