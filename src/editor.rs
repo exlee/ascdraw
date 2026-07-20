@@ -561,17 +561,6 @@ impl Editor {
         self.collapse_selection();
     }
 
-    pub fn restore_cursor_after_view(&mut self, line: i64, column: i64) {
-        self.end_stroke();
-        self.cancel_line_preview();
-        self.cancel_move_lift();
-        self.move_to_without_ending_stroke(clamp_canvas_coord(Coord {
-            line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
-            column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
-        }));
-        self.collapse_selection();
-    }
-
     fn move_to_without_ending_stroke(&mut self, coord: Coord) {
         let coord = clamp_canvas_coord(coord);
         self.grid.cursor_pos = coord;

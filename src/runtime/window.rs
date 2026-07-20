@@ -98,58 +98,11 @@ impl DocumentSession {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ViewCursorAnchor {
-    x: f64,
-    y: f64,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StateChangeViewportPolicy {
     CursorAndContent,
     CursorOnly,
     Stable,
-}
-
-impl ViewCursorAnchor {
-    fn capture(
-        cursor: Coord,
-        viewport: ViewportOffset,
-        cell_size: (f32, f32),
-        grid_top: f32,
-    ) -> Self {
-        Self {
-            x: PADDING as f64 + cursor.column as f64 * cell_size.0 as f64 + viewport.x as f64,
-            y: grid_top as f64 + cursor.line as f64 * cell_size.1 as f64 + viewport.y as f64,
-        }
-    }
-
-    fn cursor_for_viewport(
-        self,
-        viewport: ViewportOffset,
-        cell_size: (f32, f32),
-        grid_top: f32,
-    ) -> (i64, i64) {
-        (
-            ((self.y - grid_top as f64 - viewport.y as f64) / cell_size.1.max(1.0) as f64).floor()
-                as i64,
-            ((self.x - PADDING as f64 - viewport.x as f64) / cell_size.0.max(1.0) as f64).floor()
-                as i64,
-        )
-    }
-
-    fn restore_for_cursor(
-        self,
-        viewport: &mut ViewportOffset,
-        cursor: Coord,
-        cell_size: (f32, f32),
-        grid_top: f32,
-    ) {
-        viewport.x =
-            (self.x - PADDING as f64 - cursor.column as f64 * cell_size.0 as f64).round() as i64;
-        viewport.y =
-            (self.y - grid_top as f64 - cursor.line as f64 * cell_size.1 as f64).round() as i64;
-    }
 }
 
 pub struct EditorWindow {
@@ -171,7 +124,6 @@ pub struct EditorWindow {
     pub state: Editor,
     pub renderer: Renderer,
     pub viewport: ViewportOffset,
-    view_cursor_anchor: Option<ViewCursorAnchor>,
     history: EditHistory,
     content_index: ContentIndex,
     perf: PerfDiagnostics,
@@ -1158,14 +1110,7 @@ impl EditorWindow {
         }
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
-        let view_mode_changed = reconcile_view_cursor(
-            &mut self.view_cursor_anchor,
-            &mut self.viewport,
-            &previous_state,
-            &mut self.state,
-            cell_size,
-            layout.grid_top,
-        );
+        let view_mode_changed = reconcile_view_cursor(&previous_state, &self.state);
         let prepend = self.state.take_pending_prepend();
         if prepend != (0, 0) {
             self.content_index.invalidate();
@@ -1311,14 +1256,6 @@ impl EditorWindow {
         let viewport_cells = (layout.cols.max(1), layout.rows.max(1));
         self.refresh_content_index();
         let content = self.content_index.cells();
-        self.view_cursor_anchor.get_or_insert_with(|| {
-            ViewCursorAnchor::capture(
-                self.state.grid.cursor_pos,
-                self.viewport,
-                cell_size,
-                layout.grid_top,
-            )
-        });
         let changed = match command {
             ViewCommand::Pan(direction) => pan_viewport(&mut self.viewport, direction, cell_size),
             ViewCommand::Center => {
@@ -1353,16 +1290,6 @@ impl EditorWindow {
         if pixel_delta == (0, 0) {
             return false;
         }
-        let layout = self.current_layout();
-        self.view_cursor_anchor.get_or_insert_with(|| {
-            ViewCursorAnchor::capture(
-                self.state.grid.cursor_pos,
-                self.viewport,
-                cell_size,
-                layout.grid_top,
-            )
-        });
-
         let changed = pan_viewport_by_pixels(&mut self.viewport, pixel_delta);
         self.scroll_pan.consume(pixel_delta, pixel_delta);
         changed
@@ -1663,7 +1590,6 @@ impl EditorWindow {
         let title = session.window_title();
         let mut state = Editor::new(&self.state.theme, title.clone());
         let mut viewport = ViewportOffset::default();
-        let mut restored_position = false;
         let mut needs_migration = false;
         self.renderer.restore_zoom(0);
         if let Some(document) = document::load(&path)? {
@@ -1676,7 +1602,6 @@ impl EditorWindow {
                 state.restore_canvas_position(position.cursor, position.canvas_origin);
                 self.renderer.restore_zoom(position.zoom);
                 viewport = position.viewport;
-                restored_position = true;
             }
         }
         self.window.set_title(&title);
@@ -1686,9 +1611,7 @@ impl EditorWindow {
         self.menu_selections_dirty = false;
         self.history = EditHistory::default();
         self.viewport = viewport;
-        if !restored_position {
-            self.ensure_cursor_in_viewport();
-        }
+        self.ensure_cursor_in_viewport();
         self.saved_canvas_position = self.canvas_position();
         self.request_redraw();
         Ok(())
@@ -1711,37 +1634,9 @@ fn durable_menu_selections_changed(
     previous.durable_selections() != current.durable_selections()
 }
 
-fn reconcile_view_cursor(
-    anchor: &mut Option<ViewCursorAnchor>,
-    viewport: &mut ViewportOffset,
-    previous: &Editor,
-    current: &mut Editor,
-    cell_size: (f32, f32),
-    grid_top: f32,
-) -> bool {
+fn reconcile_view_cursor(previous: &Editor, current: &Editor) -> bool {
     let was_viewing = previous.view_active();
     let is_viewing = current.view_active();
-    match (was_viewing, is_viewing) {
-        (false, true) => {
-            *anchor = Some(ViewCursorAnchor::capture(
-                current.grid.cursor_pos,
-                *viewport,
-                cell_size,
-                grid_top,
-            ));
-        }
-        (true, false) => {
-            if let Some(saved) = anchor.take() {
-                let (line, column) = saved.cursor_for_viewport(*viewport, cell_size, grid_top);
-                current.restore_cursor_after_view(line, column);
-                saved.restore_for_cursor(viewport, current.grid.cursor_pos, cell_size, grid_top);
-            }
-        }
-        (false, false) => {
-            *anchor = None;
-        }
-        (true, true) => {}
-    }
     was_viewing != is_viewing
 }
 
@@ -2053,7 +1948,6 @@ pub fn create_editor_window(
     let mut state = Editor::new(&config.theme, title);
     let renderer = load_renderer(config);
     let mut viewport = ViewportOffset::default();
-    let mut restored_position = false;
     let mut needs_migration = false;
     match document_session {
         DocumentSession::Scratchpad(document_path) | DocumentSession::File(document_path) => {
@@ -2067,7 +1961,6 @@ pub fn create_editor_window(
                     state.restore_canvas_position(position.cursor, position.canvas_origin);
                     renderer.restore_zoom(position.zoom);
                     viewport = position.viewport;
-                    restored_position = true;
                 }
             }
         }
@@ -2080,7 +1973,6 @@ pub fn create_editor_window(
             let mut loaded = state.clone();
             load_project_json(document_path, &mut loaded, &mut viewport)?;
             state = loaded;
-            restored_position = true;
         }
         DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
     }
@@ -2104,7 +1996,6 @@ pub fn create_editor_window(
         state,
         renderer,
         viewport,
-        view_cursor_anchor: None,
         history: EditHistory::default(),
         content_index,
         perf: PerfDiagnostics::from_env(),
@@ -2122,9 +2013,7 @@ pub fn create_editor_window(
         export_success_deadline: None,
         autosave_in_flight: None,
     };
-    if !restored_position {
-        editor.ensure_cursor_in_viewport();
-    }
+    editor.ensure_cursor_in_viewport();
     editor.saved_canvas_position = editor.canvas_position();
     editor.request_redraw();
     Ok(editor)
@@ -2841,121 +2730,30 @@ mod tests {
         let previous = state.clone();
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
-        let mut viewport = ViewportOffset { x: 5, y: -7 };
-        let original_viewport = viewport;
-        let mut anchor = None;
-
-        assert!(!reconcile_view_cursor(
-            &mut anchor,
-            &mut viewport,
-            &previous,
-            &mut state,
-            (8.0, 12.0),
-            40.0,
-        ));
-        assert_eq!(viewport, original_viewport);
+        assert!(!reconcile_view_cursor(&previous, &state));
         assert_ne!(state.grid.cursor_pos, previous.grid.cursor_pos);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
 
     #[test]
-    fn view_restores_cursor_to_entry_screen_position_after_panning() {
-        let cell_size = (8.0, 12.0);
-        let grid_top = 40.0;
-        let initial_viewport = ViewportOffset { x: 5, y: -7 };
+    fn view_panning_never_relocates_the_cursor() {
         let mut state = state_with_rows(&["", "", "", "drawing"]);
         state.move_to(Coord { line: 1, column: 2 });
-        let initial_screen_position =
-            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, initial_viewport);
+        let cursor = state.grid.cursor_pos;
         let previous = state.clone();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
             submenu: 0,
             option: 2,
         }));
+        assert!(reconcile_view_cursor(&previous, &state));
+        assert_eq!(state.grid.cursor_pos, cursor);
 
-        let mut anchor = None;
-        let mut view_viewport = initial_viewport;
-        assert!(reconcile_view_cursor(
-            &mut anchor,
-            &mut view_viewport,
-            &previous,
-            &mut state,
-            cell_size,
-            grid_top,
-        ));
-        assert!(anchor.is_some());
-
-        let mut panned_viewport = ViewportOffset {
-            x: initial_viewport.x - 3 * cell_size.0 as i64,
-            y: initial_viewport.y - 2 * cell_size.1 as i64,
-        };
         let previous = state.clone();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
-        assert!(reconcile_view_cursor(
-            &mut anchor,
-            &mut panned_viewport,
-            &previous,
-            &mut state,
-            cell_size,
-            grid_top,
-        ));
-        assert!(anchor.is_none());
-        assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 5 });
-        assert_eq!(
-            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, panned_viewport,),
-            initial_screen_position
-        );
-    }
-
-    #[test]
-    fn view_restore_reanchors_when_screen_position_maps_before_canvas_origin() {
-        let cell_size = (8.0, 12.0);
-        let grid_top = 40.0;
-        let initial_viewport = ViewportOffset::default();
-        let mut state = state_with_rows(&["x"]);
-        let initial_screen_position =
-            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, initial_viewport);
-        let previous = state.clone();
-        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities,)));
-        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 2,
-        }));
-        let mut anchor = None;
-        let mut view_viewport = initial_viewport;
-        assert!(reconcile_view_cursor(
-            &mut anchor,
-            &mut view_viewport,
-            &previous,
-            &mut state,
-            cell_size,
-            grid_top,
-        ));
-
-        let mut panned_viewport = ViewportOffset {
-            x: cell_size.0 as i64,
-            y: cell_size.1 as i64,
-        };
-        let previous = state.clone();
-        assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
-        assert!(reconcile_view_cursor(
-            &mut anchor,
-            &mut panned_viewport,
-            &previous,
-            &mut state,
-            cell_size,
-            grid_top,
-        ));
-        let prepend = state.take_pending_prepend();
-        assert_eq!(prepend, (0, 0));
-
-        assert_eq!(state.grid.cursor_pos, Coord::default());
-        assert_eq!(state.content_cells(), vec![Coord::default()]);
-        assert_eq!(
-            canvas_screen_position(state.grid.cursor_pos, grid_top, cell_size, panned_viewport,),
-            initial_screen_position
-        );
+        assert!(reconcile_view_cursor(&previous, &state));
+        assert_eq!(state.grid.cursor_pos, cursor);
+        assert_eq!(state.take_pending_prepend(), (0, 0));
     }
 
     #[test]
@@ -2964,10 +2762,7 @@ mod tests {
             line: 12,
             column: 20,
         }];
-        let cursor = Coord {
-            line: 1_000,
-            column: 10_000,
-        };
+        let cursor = content[0];
 
         let (cursor, origin) =
             view_exit_cursor_and_origin((9_980, 980), cursor, (80, 40), &content);
@@ -2975,6 +2770,41 @@ mod tests {
         assert_eq!(cursor, content[0]);
         assert!(cursor_is_visible(origin, cursor, (80, 40)));
         assert!(content_intersects_inner_screen(origin, (80, 40), &content));
+    }
+
+    #[test]
+    fn invalid_restored_viewport_is_constrained_to_normalized_content() {
+        let cursor = Coord {
+            line: 59,
+            column: 0,
+        };
+        let content = [
+            cursor,
+            Coord {
+                line: 144,
+                column: 279,
+            },
+        ];
+        let persisted = ViewportOffset {
+            x: 128_853,
+            y: -870,
+        };
+        let viewport_cells = (80, 40);
+
+        let (restored_cursor, origin) = normalized_cursor_and_origin(
+            persisted.origin((25.5, 25.5)),
+            cursor,
+            viewport_cells,
+            &content,
+        );
+
+        assert_eq!(restored_cursor, cursor);
+        assert!(cursor_is_visible(origin, cursor, viewport_cells));
+        assert!(content_intersects_inner_screen(
+            origin,
+            viewport_cells,
+            &content
+        ));
     }
 
     #[test]

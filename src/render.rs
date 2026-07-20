@@ -1165,10 +1165,6 @@ fn render_grid_cursor(
     }
 
     let cursor = grid.cursor_pos;
-    if cursor.line >= rows || cursor.column >= cols {
-        return;
-    }
-
     let default_cell = || CursorCell {
         face: grid.default_face.clone(),
         text: Some(" ".to_string()),
