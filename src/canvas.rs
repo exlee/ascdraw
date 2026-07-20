@@ -15,6 +15,11 @@ use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
 
 mod composition;
 use composition::overlay_nonblank_atoms;
+mod history;
+pub use history::HistoryCanvasDelta;
+use history::{
+    record_cell_before, record_layer_before, record_replacement_before, record_row_before,
+};
 
 #[allow(dead_code)]
 pub type Raster = Rc<Atom>;
@@ -168,19 +173,17 @@ impl LayerMap {
     }
 
     pub(crate) fn line_at(&self, coord: Coord) -> Option<&LineData> {
-        let (line, column) = coord_i16(coord)?;
-        self.get(line, column)?.line.as_ref()
+        self.get(coord.line, coord.column)?.line.as_ref()
     }
 
     pub(crate) fn take_line_at(&mut self, coord: Coord) -> Option<LineData> {
-        let (line, column) = coord_i16(coord)?;
+        let (line, column) = (coord.line, coord.column);
+        record_cell_before(self.id, line, column, self.get(line, column));
         self.rows.get_mut(&line)?.get_mut(&column)?.line.take()
     }
 
     pub(crate) fn set_line_at(&mut self, coord: Coord, line_data: LineData) -> bool {
-        let Some((line, column)) = coord_i16(coord) else {
-            return false;
-        };
+        let (line, column) = (coord.line, coord.column);
         let Some(data) = self
             .rows
             .get_mut(&line)
@@ -188,6 +191,7 @@ impl LayerMap {
         else {
             return false;
         };
+        record_cell_before(self.id, line, column, Some(data));
         data.line = Some(line_data);
         true
     }
@@ -218,29 +222,53 @@ impl LayerMap {
     }
 
     pub fn set_at(&mut self, x: i16, y: i16, atom: Atom, face: &Face) -> Result<()> {
+        self.set_at_inner(x, y, atom, face, true)
+    }
+
+    pub(crate) fn set_at_untracked(
+        &mut self,
+        x: i16,
+        y: i16,
+        atom: Atom,
+        face: &Face,
+    ) -> Result<()> {
+        self.set_at_inner(x, y, atom, face, false)
+    }
+
+    fn set_at_inner(
+        &mut self,
+        x: i16,
+        y: i16,
+        atom: Atom,
+        face: &Face,
+        tracked: bool,
+    ) -> Result<()> {
         if face == &Face::default() && atom.contents().chars().all(char::is_whitespace) {
-            self.delete_at(x, y);
+            if tracked {
+                self.delete_at(x, y);
+            } else {
+                self.delete_at_untracked(x, y);
+            }
             return Ok(());
         }
         let line = self.get(y, x).and_then(|data| data.line.clone());
-        self.set_data(
-            y,
-            x,
-            CoordData {
-                face: Rc::new(face.clone()),
-                atom: Rc::new(atom),
-                raster_cache: RefCell::new(None),
-                line,
-            },
-        );
+        let data = CoordData {
+            face: Rc::new(face.clone()),
+            atom: Rc::new(atom),
+            raster_cache: RefCell::new(None),
+            line,
+        };
+        if tracked {
+            self.set_data(y, x, data);
+        } else {
+            self.set_data_untracked(y, x, data);
+        }
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn set_face_at(&mut self, coord: Coord, face: Face) -> bool {
-        let Some((line, column)) = coord_i16(coord) else {
-            return false;
-        };
+        let (line, column) = (coord.line, coord.column);
         let Some(data) = self
             .rows
             .get_mut(&line)
@@ -248,6 +276,7 @@ impl LayerMap {
         else {
             return false;
         };
+        record_cell_before(self.id, line, column, Some(data));
         data.face = Rc::new(face);
         *data.raster_cache.borrow_mut() = None;
         true
@@ -280,6 +309,11 @@ impl LayerMap {
     }
 
     pub fn delete_at(&mut self, x: i16, y: i16) -> bool {
+        record_cell_before(self.id, y, x, self.get(y, x));
+        self.delete_at_untracked(x, y)
+    }
+
+    fn delete_at_untracked(&mut self, x: i16, y: i16) -> bool {
         let mut removed = false;
         let remove_row = self.rows.get_mut(&y).is_some_and(|row| {
             removed = row.remove(&x).is_some();
@@ -300,6 +334,7 @@ impl LayerMap {
         if cells.is_empty() {
             return Ok(());
         }
+        record_row_before(self, line);
         let y = line;
         let x = column;
         let shift = i16::try_from(cells.len()).context("insert width exceeds signed range")?;
@@ -330,6 +365,7 @@ impl LayerMap {
         if count == 0 {
             return Ok(());
         }
+        record_row_before(self, line);
         let y = line;
         let start = column;
         let count_i16 = i16::try_from(count).context("remove width exceeds signed range")?;
@@ -352,6 +388,7 @@ impl LayerMap {
     }
 
     pub(crate) fn split_row(&mut self, line: i16, column: i16) -> Result<()> {
+        record_layer_before(self);
         let y = line;
         let x = column;
         let next_y = y
@@ -389,6 +426,7 @@ impl LayerMap {
     }
 
     pub(crate) fn insert_column(&mut self, column: i16, height: usize) -> Result<()> {
+        record_layer_before(self);
         let x = column;
         for row in self.rows.values_mut() {
             *row = std::mem::take(row)
@@ -410,6 +448,7 @@ impl LayerMap {
     }
 
     pub(crate) fn insert_row(&mut self, line: i16) -> Result<()> {
+        record_layer_before(self);
         let y = line;
         self.rows = std::mem::take(&mut self.rows)
             .into_iter()
@@ -434,6 +473,7 @@ impl LayerMap {
                 continue;
             }
             let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+            record_row_before(self, y);
             if let Some(row) = self.rows.remove(&y) {
                 let shifted = row
                     .into_iter()
@@ -463,6 +503,7 @@ impl LayerMap {
                 continue;
             }
             let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+            record_row_before(self, y);
             if let Some(row) = self.rows.remove(&y) {
                 let shifted = row
                     .into_iter()
@@ -488,6 +529,7 @@ impl LayerMap {
     }
 
     pub(crate) fn remove_row(&mut self, line: i16) -> Result<()> {
+        record_layer_before(self);
         let y = line;
         self.rows.remove(&y);
         self.rows = std::mem::take(&mut self.rows)
@@ -507,6 +549,7 @@ impl LayerMap {
     }
 
     pub(crate) fn remove_row_and_prepend_blank(&mut self, line: i16) -> Result<()> {
+        record_layer_before(self);
         let y = line;
         self.rows.remove(&y);
         self.rows = std::mem::take(&mut self.rows)
@@ -532,6 +575,7 @@ impl LayerMap {
         if !self.rows.contains_key(&next_y) {
             return Ok(false);
         }
+        record_layer_before(self);
         let y = line;
         let offset =
             i16::try_from(self.row_width(line)).context("row width exceeds signed canvas range")?;
@@ -627,7 +671,7 @@ impl LayerMap {
                     if atom.face != Face::default()
                         || !cell_atom.contents().chars().all(char::is_whitespace)
                     {
-                        map.set_data(
+                        map.set_data_untracked(
                             line,
                             column,
                             CoordData {
@@ -649,6 +693,7 @@ impl LayerMap {
     }
 
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
+        record_cell_before(self.id, y, x, self.get(y, x));
         let Some(data) = self.rows.get_mut(&y).and_then(|row| row.get_mut(&x)) else {
             return false;
         };
@@ -657,6 +702,11 @@ impl LayerMap {
     }
 
     fn set_data(&mut self, y: i16, x: i16, data: CoordData) {
+        record_cell_before(self.id, y, x, self.get(y, x));
+        self.set_data_untracked(y, x, data);
+    }
+
+    fn set_data_untracked(&mut self, y: i16, x: i16, data: CoordData) {
         self.rows.entry(y).or_default().insert(x, data);
     }
 
@@ -747,14 +797,13 @@ impl LayerStack {
     }
 
     pub(crate) fn set_at(&mut self, coord: Coord, atom: Atom, face: &Face) -> Result<()> {
-        let (line, column) = coord_i16(coord).context("canvas coordinate exceeds signed range")?;
+        let (line, column) = (coord.line, coord.column);
         self.layers[self.active].set_at(column, line, atom, face)?;
         Ok(())
     }
 
     pub(crate) fn active_cell(&self, coord: Coord) -> Option<&CoordData> {
-        let (line, column) = coord_i16(coord)?;
-        self.layers[self.active].get(line, column)
+        self.layers[self.active].get(coord.line, coord.column)
     }
 
     #[cfg(test)]
@@ -763,10 +812,7 @@ impl LayerStack {
     }
 
     pub(crate) fn delete_at(&mut self, coord: Coord) -> bool {
-        let Some((line, column)) = coord_i16(coord) else {
-            return false;
-        };
-        self.layers[self.active].delete_at(column, line)
+        self.layers[self.active].delete_at(coord.column, coord.line)
     }
 
     pub(crate) fn insert_cells(
@@ -929,8 +975,10 @@ impl LayerStack {
         markers: &[LineMarker],
     ) -> Result<()> {
         let layer = &self.layers[self.active];
-        self.layers[self.active] =
+        let replacement =
             LayerMap::from_dense_with_markers(layer.id, layer.visible, lines, markers)?;
+        record_replacement_before(layer, &replacement);
+        self.layers[self.active] = replacement;
         Ok(())
     }
 
@@ -998,6 +1046,8 @@ impl LayerStack {
         {
             return Ok(false);
         }
+        record_layer_before(&self.layers[index]);
+        record_layer_before(&self.layers[target]);
         let source = self.layers.remove(index);
         let target = target.saturating_sub(usize::from(target > index));
         let target_layer = &mut self.layers[target];
@@ -1012,8 +1062,9 @@ impl LayerStack {
         }
         let id = target_layer.id;
         let visible = target_layer.visible;
-        self.layers[target] =
-            LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
+        let replacement = LayerMap::from_dense_with_markers(id, visible, &target_lines, &markers)?;
+        record_replacement_before(target_layer, &replacement);
+        self.layers[target] = replacement;
         self.active = target;
         Ok(true)
     }
@@ -1022,6 +1073,7 @@ impl LayerStack {
         if index == 0 || index >= self.layers.len() {
             return false;
         }
+        record_layer_before(&self.layers[index]);
         self.layers.remove(index);
         if index == self.active {
             self.active = index - 1;
@@ -1039,6 +1091,7 @@ impl LayerStack {
 
     pub(crate) fn clear_contents(&mut self) {
         for layer in &mut self.layers {
+            record_layer_before(layer);
             *layer = LayerMap::new(layer.id, layer.visible);
         }
     }
@@ -1128,10 +1181,6 @@ fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
             max_x: left.max_x.max(right.max_x),
             max_y: left.max_y.max(right.max_y),
         })
-}
-
-fn coord_i16(coord: Coord) -> Option<(i16, i16)> {
-    Some((coord.line, coord.column))
 }
 
 fn default_blank() -> StyledAtom {

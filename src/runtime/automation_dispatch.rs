@@ -244,8 +244,7 @@ fn apply_key(
         },
     );
     if jump_mode_handles_key(&editor.state, key_type) || key_type.is_cancel() {
-        let previous_state = editor.state.clone();
-        let previous_viewport = editor.viewport;
+        let checkpoint = editor.begin_state_change();
         let visible = editor.visible_canvas_cells();
         dispatch_editor_event(
             &mut editor.state,
@@ -256,7 +255,7 @@ fn apply_key(
             started,
         );
         editor.apply_jump_viewport_pan();
-        editor.finish_state_change(previous_state, previous_viewport, false);
+        editor.finish_state_change(checkpoint, false);
     } else if let Some(command) = key_type.history_command() {
         match command {
             HistoryCommand::Undo => {
@@ -319,8 +318,7 @@ fn apply_editor_key(
         ChangePolicy::GroupedEdit(group) => Some(group),
         ChangePolicy::Navigation { .. } | ChangePolicy::Edit => None,
     };
-    let previous_state = editor.state.clone();
-    let previous_viewport = editor.viewport;
+    let checkpoint = editor.begin_state_change();
     let clears_selection = editor_selection_action(editor.state.state(), key_type)
         == Some(crate::editor_event::SelectionAction::Clear)
         || matches!(
@@ -341,21 +339,14 @@ fn apply_editor_key(
             editor.state.end_stroke();
         }
         let changed = match history_group {
-            Some(group) => editor.finish_grouped_state_change(
-                previous_state,
-                previous_viewport,
-                document_changed,
-                group,
-            ),
+            Some(group) => editor.finish_grouped_state_change(checkpoint, document_changed, group),
             None if document_changed && clears_selection => {
-                editor.finish_selection_clear(previous_state, previous_viewport)
+                editor.finish_selection_clear(checkpoint)
             }
-            None if viewport_stable => editor.finish_state_change_with_stable_viewport(
-                previous_state,
-                previous_viewport,
-                document_changed,
-            ),
-            None => editor.finish_state_change(previous_state, previous_viewport, document_changed),
+            None if viewport_stable => {
+                editor.finish_state_change_with_stable_viewport(checkpoint, document_changed)
+            }
+            None => editor.finish_state_change(checkpoint, document_changed),
         };
         if changed {
             editor.mark_document_dirty();
@@ -368,6 +359,8 @@ fn apply_editor_key(
         if history_group == Some(HistoryGroup::LineRoute) && !editor.state.has_line_preview() {
             editor.finish_history_transaction();
         }
+    } else {
+        editor.discard_state_change(checkpoint);
     }
     editor.record_state_history_time(state_history_started);
 }
@@ -378,15 +371,9 @@ fn apply_text(editor: &mut EditorWindow, text: &str) -> Result<()> {
     }
     let started = Instant::now();
     editor.note_keypress(started);
-    let previous_state = editor.state.clone();
-    let previous_viewport = editor.viewport;
+    let checkpoint = editor.begin_state_change();
     editor.state.write_text(text);
-    if editor.finish_grouped_state_change(
-        previous_state,
-        previous_viewport,
-        true,
-        HistoryGroup::TextSession,
-    ) {
+    if editor.finish_grouped_state_change(checkpoint, true, HistoryGroup::TextSession) {
         editor.mark_document_dirty();
     }
     editor.finish_keypress(Instant::now());

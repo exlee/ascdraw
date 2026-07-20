@@ -84,6 +84,13 @@ pub struct EditSnapshot {
     canvas: crate::canvas::LayerStack,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEditorState {
+    cursor_pos: Coord,
+    selection: CanvasSelection,
+    active_stroke: Option<ActiveStroke>,
+}
+
 impl PartialEq for EditSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.cursor_pos == other.cursor_pos
@@ -94,21 +101,6 @@ impl PartialEq for EditSnapshot {
 }
 
 impl Eq for EditSnapshot {}
-
-impl EditSnapshot {
-    pub fn same_document(&self, other: &Self) -> bool {
-        self.canvas == other.canvas
-    }
-
-    #[cfg(test)]
-    pub fn set_cursor_for_test(&mut self, line: usize, column: usize) {
-        self.cursor_pos = Coord {
-            line: i16::try_from(line).expect("test line fits signed canvas range"),
-            column: i16::try_from(column).expect("test column fits signed canvas range"),
-        };
-        self.selection.collapse(self.cursor_pos);
-    }
-}
 
 #[cfg(test)]
 impl Editor {
@@ -661,10 +653,10 @@ impl Editor {
         self.grid.cursor_pos = coord;
     }
 
-    pub fn clear_selection(&mut self) {
+    pub fn clear_selection(&mut self) -> bool {
         self.end_stroke();
         if !self.selection_contains_nonblank() {
-            return;
+            return false;
         }
         let bounds = self.selection.bounds();
         self.commit_canvas();
@@ -672,6 +664,7 @@ impl Editor {
             .clear_bounds_in_all_layers(bounds)
             .expect("selection bounds fit the sparse canvas");
         self.restore_active_cursor();
+        true
     }
 
     fn selection_contains_nonblank(&self) -> bool {
@@ -825,8 +818,11 @@ impl Editor {
         truncate_canvas_lines(&mut lines);
         let map = crate::canvas::LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[])
             .expect("loaded canvas contains valid graphemes");
-        self.canvas = crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())
-            .expect("replacement canvas has a base layer");
+        let replacement =
+            crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())
+                .expect("replacement canvas has a base layer");
+        self.canvas.record_history_replacement(&replacement);
+        self.canvas = replacement;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.grid.cursor_pos = Coord::default();
         self.active_stroke = None;

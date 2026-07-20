@@ -250,11 +250,12 @@ fn try_main() -> Result<ExitCode> {
                         .jump_deadline()
                         .is_some_and(|deadline| now >= deadline)
                     {
-                        let previous_state = editor.state.clone();
-                        let previous_viewport = editor.viewport;
+                        let checkpoint = editor.begin_state_change();
                         if editor.state.advance_jump(now) {
-                            editor.finish_state_change(previous_state, previous_viewport, false);
+                            editor.finish_state_change(checkpoint, false);
                             editor.request_redraw();
+                        } else {
+                            editor.discard_state_change(checkpoint);
                         }
                     }
                     if editor.state.move_lift_active() {
@@ -296,7 +297,10 @@ fn try_main() -> Result<ExitCode> {
                 let mut pending_command = None;
                 if let Some(editor) = windows.get_mut(&window_id) {
                     match event {
-                        WindowEvent::CloseRequested => should_close = true,
+                        WindowEvent::CloseRequested => {
+                            editor.finish_mouse_drag();
+                            should_close = true;
+                        }
                         WindowEvent::Resized(size) => {
                             if let Err(error) = editor.surface.resize(&editor.window, size) {
                                 log_error(format!("surface resize failed: {error:#}"));
@@ -376,6 +380,7 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::Focused(false) => {
+                            editor.finish_mouse_drag();
                             editor.state.end_stroke();
                             editor.finish_history_transaction();
                             editor.modifiers = ModifiersState::empty();
@@ -390,12 +395,10 @@ fn try_main() -> Result<ExitCode> {
                                 && !editor.modifiers.alt_key()
                                 && !editor.modifiers.super_key()
                             {
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
+                                let checkpoint = editor.begin_state_change();
                                 editor.state.write_text(&text);
                                 if editor.finish_grouped_state_change(
-                                    previous_state,
-                                    previous_viewport,
+                                    checkpoint,
                                     true,
                                     HistoryGroup::TextSession,
                                 ) {
@@ -440,8 +443,7 @@ fn try_main() -> Result<ExitCode> {
                                 ));
                             }
                             if jump_mode_handles_key(&editor.state, key_type) {
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
+                                let checkpoint = editor.begin_state_change();
                                 let visible_canvas = editor.visible_canvas_cells();
                                 dispatch_editor_event(
                                     &mut editor.state,
@@ -453,8 +455,7 @@ fn try_main() -> Result<ExitCode> {
                                 );
                                 editor.apply_jump_viewport_pan();
                                 editor.finish_state_change(
-                                    previous_state,
-                                    previous_viewport,
+                                    checkpoint,
                                     false,
                                 );
                                 editor.request_redraw();
@@ -470,8 +471,7 @@ fn try_main() -> Result<ExitCode> {
                             } else if let Some(clipboard_command) = key_type.clipboard_command() {
                                 editor.state.end_stroke();
                                 editor.finish_history_transaction();
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
+                                let checkpoint = editor.begin_state_change();
                                 let mut platform = NativeExportPlatform::text_only();
                                 let result = handle_clipboard_command(
                                     &mut editor.state,
@@ -483,13 +483,11 @@ fn try_main() -> Result<ExitCode> {
                                         let changed = if clipboard_command == ClipboardCommand::Cut
                                         {
                                             editor.finish_selection_clear(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                             )
                                         } else {
                                             editor.finish_state_change(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 true,
                                             )
                                         };
@@ -500,23 +498,22 @@ fn try_main() -> Result<ExitCode> {
                                     Ok(false) => {
                                         if clipboard_command == ClipboardCommand::Copy {
                                             editor.finish_state_change(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 false,
                                             );
                                             editor.request_redraw();
+                                        } else {
+                                            editor.discard_state_change(checkpoint);
                                         }
                                     }
                                     Err(error) => {
-                                        editor.state = previous_state;
-                                        editor.viewport = previous_viewport;
+                                        editor.cancel_state_change(checkpoint);
                                         log_error(format!("Clipboard operation failed: {error:#}"));
                                     }
                                 }
                                 editor.request_redraw();
                             } else if key_type.is_cancel() {
-                                let previous_state = editor.state.clone();
-                                let previous_viewport = editor.viewport;
+                                let checkpoint = editor.begin_state_change();
                                 let visible_canvas = editor.visible_canvas_cells();
                                 dispatch_editor_event(
                                     &mut editor.state,
@@ -527,8 +524,7 @@ fn try_main() -> Result<ExitCode> {
                                     keypress_at,
                                 );
                                 editor.finish_state_change(
-                                    previous_state,
-                                    previous_viewport,
+                                    checkpoint,
                                     false,
                                 );
                                 editor.request_redraw();
@@ -587,8 +583,7 @@ fn try_main() -> Result<ExitCode> {
                                             None
                                         }
                                     };
-                                    let previous_state = editor.state.clone();
-                                    let previous_viewport = editor.viewport;
+                                    let checkpoint = editor.begin_state_change();
                                     let clears_selection =
                                         selection_action(editor.state.state(), key_type)
                                             == Some(SelectionAction::Clear)
@@ -627,25 +622,21 @@ fn try_main() -> Result<ExitCode> {
                                         }
                                         let document_changed = match history_group {
                                             Some(group) => editor.finish_grouped_state_change(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 document_changed,
                                                 group,
                                             ),
                                             None if document_changed && clears_selection => editor
                                                 .finish_selection_clear(
-                                                    previous_state,
-                                                    previous_viewport,
+                                                    checkpoint,
                                                 ),
                                             None if viewport_stable => editor
                                                 .finish_state_change_with_stable_viewport(
-                                                    previous_state,
-                                                    previous_viewport,
+                                                    checkpoint,
                                                     document_changed,
                                                 ),
                                             None => editor.finish_state_change(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 document_changed,
                                             ),
                                         };
@@ -663,6 +654,8 @@ fn try_main() -> Result<ExitCode> {
                                             editor.finish_history_transaction();
                                         }
                                         editor.request_redraw();
+                                    } else {
+                                        editor.discard_state_change(checkpoint);
                                     }
                                     perform_pending_export(editor, &config);
                                     perform_pending_document_switch(
@@ -731,21 +724,18 @@ fn try_main() -> Result<ExitCode> {
                                         editor.state.toolbar_action_at(row, column, width)
                                     {
                                         editor.note_keypress(Instant::now());
-                                        let previous_state = editor.state.clone();
-                                        let previous_viewport = editor.viewport;
+                                        let checkpoint = editor.begin_state_change();
                                         editor.state.apply_toolbar_action(action);
                                         let document_changed =
                                             editor.state.take_toolbar_document_change();
                                         if editor.state.take_toolbar_viewport_stable() {
                                             editor.finish_state_change_with_stable_viewport(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 document_changed,
                                             );
                                         } else {
                                             editor.finish_state_change(
-                                                previous_state,
-                                                previous_viewport,
+                                                checkpoint,
                                                 document_changed,
                                             );
                                         }
@@ -903,10 +893,9 @@ fn paste_toolbar_under_cursor(editor: &mut EditorWindow, box_width: usize) -> bo
         return false;
     };
     editor.finish_history_transaction();
-    let previous_state = editor.state.clone();
-    let previous_viewport = editor.viewport;
+    let checkpoint = editor.begin_state_change();
     let document_changed = editor.state.paste_styled_rectangle_at_cursor(&snapshot);
-    let changed = editor.finish_state_change(previous_state, previous_viewport, document_changed);
+    let changed = editor.finish_state_change(checkpoint, document_changed);
     if changed {
         editor.mark_document_dirty();
     }
@@ -943,8 +932,7 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
     let Some(action) = editor.state.toolbar.take_export_action() else {
         return;
     };
-    let previous_state = editor.state.clone();
-    let previous_viewport = editor.viewport;
+    let checkpoint = editor.begin_state_change();
     let visible_canvas = editor.visible_canvas_cells();
     let mut platform = NativeExportPlatform::with_png(
         &editor.renderer,
@@ -961,30 +949,37 @@ fn perform_pending_export(editor: &mut EditorWindow, config: &app::AppConfig) {
     match outcome {
         Ok(ExportOutcome::DocumentLoaded { path, format }) => {
             editor.viewport = layout::ViewportOffset::default();
-            editor.finish_state_change(previous_state, previous_viewport, true);
+            editor.finish_state_change(checkpoint, true);
             editor.activate_export_file(path, format);
         }
         Ok(ExportOutcome::ProjectLoaded { path, zoom }) => {
             editor.renderer.restore_zoom(zoom);
-            editor.finish_project_load(previous_state, previous_viewport);
+            editor.finish_project_load(checkpoint);
             editor.activate_export_file(path, export::FileKind::Json);
         }
         Ok(ExportOutcome::Saved { path, format }) => {
+            editor.discard_state_change(checkpoint);
             editor.activate_export_file(path, format);
         }
         Ok(ExportOutcome::DocumentImported) => {
-            if editor.finish_state_change(previous_state, previous_viewport, true) {
+            if editor.finish_state_change(checkpoint, true) {
                 editor.mark_document_dirty();
             }
         }
         Ok(ExportOutcome::CanvasCleared) => {
-            if editor.finish_state_change(previous_state, previous_viewport, true) {
+            if editor.finish_state_change(checkpoint, true) {
                 editor.mark_document_dirty();
             }
         }
-        Ok(ExportOutcome::Unchanged) => {}
-        Ok(ExportOutcome::Cancelled) => return,
-        Err(error) => log_error(format!("Save/Load/Export failed: {error:#}")),
+        Ok(ExportOutcome::Unchanged) => editor.discard_state_change(checkpoint),
+        Ok(ExportOutcome::Cancelled) => {
+            editor.discard_state_change(checkpoint);
+            return;
+        }
+        Err(error) => {
+            editor.cancel_state_change(checkpoint);
+            log_error(format!("Save/Load/Export failed: {error:#}"));
+        }
     }
     editor.show_export_success(action, Instant::now());
 }
@@ -1515,10 +1510,7 @@ mod tests {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
-        let before = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: layout::ViewportOffset::default(),
-        };
+        let before = state.edit_snapshot();
 
         assert_eq!(
             handle_editor_key(
@@ -1592,7 +1584,7 @@ mod tests {
             );
         }
         assert!(!state.content_cells().is_empty());
-        assert_ne!(state.edit_snapshot(), before.edit);
+        assert_ne!(state.edit_snapshot(), before);
         assert_eq!(
             handle_editor_key(
                 &mut state,
@@ -1626,14 +1618,6 @@ mod tests {
                 Coord { line: 3, column: 2 },
             ]
         );
-
-        let after = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: layout::ViewportOffset::default(),
-        };
-        let mut history = history::EditHistory::default();
-        assert!(history.record_change(before.clone(), &after));
-        assert_eq!(history.undo(after), Some(before));
     }
 
     #[test]
@@ -1805,10 +1789,6 @@ mod tests {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
-        let before = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: layout::ViewportOffset::default(),
-        };
 
         assert!(!apply_edit_command(
             &mut state,
@@ -1834,13 +1814,6 @@ mod tests {
         ));
         assert!(state.lines_with_shape_preview().is_none());
         assert_eq!(line_contents(&state.lines_for_test()[2]), "└──┘");
-        let placed = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: layout::ViewportOffset::default(),
-        };
-        let mut shape_history = history::EditHistory::default();
-        assert!(shape_history.record_change(before.clone(), &placed));
-        assert_eq!(shape_history.undo(placed), Some(before));
     }
 
     #[test]
@@ -1908,7 +1881,7 @@ mod tests {
             option: 0,
         }));
         let before = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: layout::ViewportOffset::default(),
         };
         let mut history = history::EditHistory::default();
@@ -1917,9 +1890,10 @@ mod tests {
 
         for _ in 0..3 {
             let previous = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
+            state.begin_history_capture();
             assert_eq!(
                 history_group_for_key(
                     &state,
@@ -1940,21 +1914,25 @@ mod tests {
                 Some(true)
             );
             let current = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
-            assert!(
-                history.record_grouped_change(HistoryGroup::ControlStroke, previous, &current,)
-            );
+            let delta = state.finish_history_capture();
+            assert!(history.record_grouped_change(
+                HistoryGroup::ControlStroke,
+                previous,
+                current,
+                delta,
+            ));
         }
 
-        let complete = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: layout::ViewportOffset::default(),
-        };
         assert_eq!(line_contents(&state.lines_for_test()[0]), "░░░░");
-        assert!(history.finish_transaction(&complete));
-        assert_eq!(history.undo(complete), Some(before));
+        assert!(history.finish_transaction());
+        let undone = history.undo().unwrap();
+        assert_eq!(undone.edit, before.edit);
+        state.apply_history_delta(&undone.canvas, undone.forward);
+        state.restore_history_state(undone.edit);
+        assert!(state.content_cells().is_empty());
     }
 
     #[test]
@@ -2044,16 +2022,18 @@ mod tests {
             let mut state = Editor::new(&config.theme, "test");
             state.apply_toolbar_action(ToolbarAction::SelectMain(main_mode));
             let before = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
+            state.begin_history_capture();
             state.insert("x");
             let edited = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
+            let delta = state.finish_history_capture();
             let mut edit_history = history::EditHistory::default();
-            assert!(edit_history.record_change(before.clone(), &edited));
+            assert!(edit_history.record_change(before.clone(), edited, delta));
 
             assert_eq!(
                 history_command(
@@ -2065,8 +2045,9 @@ mod tests {
                 "mode {main_mode:?}"
             );
             state.prepare_history_command();
-            let undone = edit_history.undo(edited).expect("undo entry");
-            state.restore_edit_snapshot(undone.edit.clone());
+            let undone = edit_history.undo().expect("undo entry");
+            state.apply_history_delta(&undone.canvas, undone.forward);
+            state.restore_history_state(undone.edit);
             assert_eq!(line_contents(&state.lines_for_test()[0]), "");
 
             assert_eq!(
@@ -2079,8 +2060,9 @@ mod tests {
                 "mode {main_mode:?}"
             );
             state.prepare_history_command();
-            let redone = edit_history.redo(undone).expect("redo entry");
-            state.restore_edit_snapshot(redone.edit);
+            let redone = edit_history.redo().expect("redo entry");
+            state.apply_history_delta(&redone.canvas, redone.forward);
+            state.restore_history_state(redone.edit);
             assert_eq!(line_contents(&state.lines_for_test()[0]), "x");
         }
     }
@@ -2805,9 +2787,10 @@ mod tests {
                 option: 1,
             }));
             let before = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
+            state.begin_history_capture();
             let combined = ModifiersState::CONTROL | secondary;
 
             assert_eq!(
@@ -2822,12 +2805,16 @@ mod tests {
             assert_eq!(line_contents(&state.lines_for_test()[0]), expected);
 
             let after = history::HistorySnapshot {
-                edit: state.edit_snapshot(),
+                edit: state.history_state(),
                 viewport: layout::ViewportOffset::default(),
             };
+            let delta = state.finish_history_capture();
             let mut history = history::EditHistory::default();
-            assert!(history.record_change(before.clone(), &after));
-            assert_eq!(history.undo(after), Some(before));
+            assert!(history.record_change(before, after, delta));
+            let undone = history.undo().unwrap();
+            state.apply_history_delta(&undone.canvas, undone.forward);
+            state.restore_history_state(undone.edit);
+            assert_eq!(line_contents(&state.lines_for_test()[0]), source);
         }
     }
 
@@ -2835,9 +2822,10 @@ mod tests {
     fn one_ordered_drawing_keypress_is_one_history_record_across_negative_space() {
         let mut state = Editor::new(&app::ThemeConfig::default(), "test");
         let before = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: layout::ViewportOffset::default(),
         };
+        state.begin_history_capture();
         assert_eq!(
             dispatch_ordered(
                 &mut state,
@@ -2857,12 +2845,16 @@ mod tests {
             }
         );
         let after = history::HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: layout::ViewportOffset::default(),
         };
+        let delta = state.finish_history_capture();
         let mut history = history::EditHistory::default();
-        assert!(history.record_change(before.clone(), &after));
-        assert_eq!(history.undo(after), Some(before));
+        assert!(history.record_change(before, after, delta));
+        let undone = history.undo().unwrap();
+        state.apply_history_delta(&undone.canvas, undone.forward);
+        state.restore_history_state(undone.edit);
+        assert!(state.content_cells().is_empty());
     }
 
     #[test]

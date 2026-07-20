@@ -1,6 +1,44 @@
 use super::*;
 
 impl Editor {
+    pub fn history_state(&self) -> HistoryEditorState {
+        HistoryEditorState {
+            cursor_pos: self.grid.cursor_pos,
+            selection: self.selection,
+            active_stroke: self.active_stroke.clone(),
+        }
+    }
+
+    pub fn begin_history_capture(&self) {
+        self.canvas.begin_history_capture();
+    }
+
+    pub fn cancel_history_capture(&self) {
+        crate::canvas::LayerStack::cancel_history_capture();
+    }
+
+    pub fn finish_history_capture(&self) -> crate::canvas::HistoryCanvasDelta {
+        self.canvas.finish_history_capture()
+    }
+
+    pub fn restore_history_state(&mut self, state: HistoryEditorState) {
+        self.grid.cursor_pos = state.cursor_pos;
+        self.selection = state.selection;
+        self.active_stroke = state.active_stroke;
+        self.line_preview = None;
+        self.shape_preview = None;
+        self.move_lift = None;
+    }
+
+    pub fn apply_history_delta(
+        &mut self,
+        delta: &crate::canvas::HistoryCanvasDelta,
+        forward: bool,
+    ) {
+        self.canvas.apply_history_delta(delta, forward);
+        self.toolbar.sync_layer_count(self.canvas.layers().len());
+    }
+
     pub fn has_shape_preview(&self) -> bool {
         self.shape_preview.is_some()
     }

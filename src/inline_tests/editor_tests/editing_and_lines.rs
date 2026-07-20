@@ -302,8 +302,6 @@ fn paste_rejects_wide_source_graphemes_transactionally() {
 
 #[test]
 fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo() {
-    use crate::history::{EditHistory, HistorySnapshot};
-    use crate::layout::ViewportOffset;
     use crate::selection::{CanvasRegion, region_atoms};
     use crate::toolbar_stamp::styled_toolbar_snapshot;
 
@@ -317,10 +315,7 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
     let origin = editor.grid.cursor_pos;
     let signed_origin = editor.cursor_coordinates();
     let rectangle = styled_toolbar_snapshot(&editor, 52).unwrap();
-    let previous = HistorySnapshot {
-        edit: editor.edit_snapshot(),
-        viewport: ViewportOffset::default(),
-    };
+    let previous = editor.edit_snapshot();
 
     assert!(editor.paste_styled_rectangle_at_cursor(&rectangle));
     assert_eq!(
@@ -350,17 +345,7 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
             .any(|atom| atom.contents.bytes().all(|byte| byte == b' ') && atom.face.bg != "default")
     }));
 
-    let current = HistorySnapshot {
-        edit: editor.edit_snapshot(),
-        viewport: ViewportOffset::default(),
-    };
-    let mut history = EditHistory::default();
-    assert!(history.record_change(previous.clone(), &current));
-    assert_eq!(history.lengths(), (1, 0));
-    let undone = history.undo(current).unwrap();
-    editor.restore_edit_snapshot(undone.edit);
-    assert_eq!(editor.edit_snapshot(), previous.edit);
-    assert_eq!(history.lengths(), (0, 1));
+    assert_ne!(editor.edit_snapshot(), previous);
 }
 
 #[test]

@@ -17,7 +17,7 @@ use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
 use crate::export::{FileKind, lines_from_text, load_project_json, plain_text};
-use crate::history::{EditHistory, HistoryGroup, HistorySnapshot};
+use crate::history::{EditHistory, HistoryGroup, HistoryRestore, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
 use crate::jump::JumpViewportPan;
@@ -100,6 +100,15 @@ enum StateChangeViewportPolicy {
     CursorAndContent,
     CursorOnly,
     Stable,
+}
+
+#[derive(Debug)]
+pub(crate) struct StateChangeCheckpoint {
+    history: HistorySnapshot,
+    toolbar: crate::toolbar::ToolbarState,
+    cursor: Coord,
+    was_viewing: bool,
+    canvas: Option<crate::canvas::HistoryCanvasDelta>,
 }
 
 pub struct EditorWindow {
@@ -322,10 +331,9 @@ fn format_scroll_stats(report: ScrollStatsReport) -> String {
     )
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct MouseDrag {
-    previous_state: Editor,
-    previous_viewport: ViewportOffset,
+    checkpoint: StateChangeCheckpoint,
     last_pointer: Coord,
     active: bool,
     document_changed: bool,
@@ -500,8 +508,7 @@ impl EditorWindow {
         } else {
             None
         };
-        let previous_state = self.state.clone();
-        let previous_viewport = self.viewport;
+        let mut checkpoint = self.begin_state_change();
         let coord = self.state.resolve_pointer_coord(pointer.0, pointer.1);
         let target = self.state.cursor_target_for_coord(coord);
         let mut line_preview_was_active = false;
@@ -548,9 +555,9 @@ impl EditorWindow {
                 self.request_redraw();
             }
         }
+        self.pause_state_change(&mut checkpoint);
         self.mouse_drag = Some(MouseDrag {
-            previous_state,
-            previous_viewport,
+            checkpoint,
             last_pointer: target,
             active: extending_selection,
             document_changed: confirmed_move,
@@ -574,6 +581,7 @@ impl EditorWindow {
             self.mouse_drag = Some(drag);
             return;
         }
+        self.resume_state_change();
         if !drag.active {
             if drag.input_override == Some(MouseDragOverride::Space) {
                 let command = match self.state.cursor_mode {
@@ -590,6 +598,7 @@ impl EditorWindow {
         if drag.input_override == Some(MouseDragOverride::Line) {
             continue_line_mouse_state(&mut self.state, target);
             drag.last_pointer = target;
+            self.pause_state_change(&mut drag.checkpoint);
             self.mouse_drag = Some(drag);
             self.request_redraw();
             return;
@@ -643,6 +652,7 @@ impl EditorWindow {
         if drag.document_changed {
             self.content_index.invalidate();
         }
+        self.pause_state_change(&mut drag.checkpoint);
         self.mouse_drag = Some(drag);
         self.request_redraw();
     }
@@ -656,15 +666,13 @@ impl EditorWindow {
             return;
         }
         if !drag.active && !drag.document_changed {
+            self.discard_state_change(drag.checkpoint);
             return;
         }
+        self.resume_state_change();
         let finished_document = finish_mouse_drag_state(&mut self.state, drag.input_override);
         let document_changed = drag.document_changed || finished_document;
-        let recorded = self.finish_state_change(
-            drag.previous_state,
-            drag.previous_viewport,
-            document_changed,
-        );
+        let recorded = self.finish_state_change(drag.checkpoint, document_changed);
         if recorded {
             self.mark_document_dirty();
         }
@@ -672,6 +680,7 @@ impl EditorWindow {
     }
 
     fn finish_line_mouse_gesture(&mut self, drag: MouseDrag) {
+        self.resume_state_change();
         let now = Instant::now();
         let coord = drag.last_pointer;
         let finish = finish_line_mouse_state(
@@ -683,8 +692,7 @@ impl EditorWindow {
             now,
         );
         let recorded = self.finish_grouped_state_change(
-            drag.previous_state,
-            drag.previous_viewport,
+            drag.checkpoint,
             finish.document_changed,
             HistoryGroup::LineRoute,
         );
@@ -950,15 +958,54 @@ impl EditorWindow {
 
     pub fn history_snapshot(&self) -> HistorySnapshot {
         HistorySnapshot {
-            edit: self.state.edit_snapshot(),
+            edit: self.state.history_state(),
             viewport: self.viewport,
         }
     }
 
+    pub(crate) fn begin_state_change(&self) -> StateChangeCheckpoint {
+        self.state.begin_history_capture();
+        StateChangeCheckpoint {
+            history: self.history_snapshot(),
+            toolbar: self.state.toolbar.clone(),
+            cursor: self.state.grid.cursor_pos,
+            was_viewing: self.state.view_active(),
+            canvas: None,
+        }
+    }
+
+    fn pause_state_change(&self, checkpoint: &mut StateChangeCheckpoint) {
+        let canvas = self.state.finish_history_capture();
+        if let Some(current) = checkpoint.canvas.as_mut() {
+            current.merge(canvas);
+        } else {
+            checkpoint.canvas = Some(canvas);
+        }
+    }
+
+    fn resume_state_change(&self) {
+        self.state.begin_history_capture();
+    }
+
+    pub(crate) fn cancel_state_change(&mut self, checkpoint: StateChangeCheckpoint) {
+        let mut canvas = self.state.finish_history_capture();
+        if let Some(mut previous) = checkpoint.canvas {
+            previous.merge(canvas);
+            canvas = previous;
+        }
+        self.state.apply_history_delta(&canvas, false);
+        self.state.restore_history_state(checkpoint.history.edit);
+        self.state.toolbar = checkpoint.toolbar;
+        self.viewport = checkpoint.history.viewport;
+    }
+
+    pub(crate) fn discard_state_change(&self, _checkpoint: StateChangeCheckpoint) {
+        self.state.cancel_history_capture();
+    }
+
     pub fn undo(&mut self) -> bool {
         let transient_changed = self.state.prepare_history_command();
-        let current = self.history_snapshot();
-        let Some(snapshot) = self.history.undo(current) else {
+        let Some(snapshot) = self.history.undo() else {
             if transient_changed {
                 self.request_redraw();
             }
@@ -969,11 +1016,7 @@ impl EditorWindow {
     }
 
     pub fn finish_history_transaction(&mut self) -> bool {
-        if !self.history.has_pending_transaction() {
-            return false;
-        }
-        let current = self.history_snapshot();
-        self.history.finish_transaction(&current)
+        self.history.finish_transaction()
     }
 
     pub fn navigation_origin_for(&mut self, cursor: Coord) -> Option<(i64, i64)> {
@@ -1002,8 +1045,7 @@ impl EditorWindow {
 
     pub fn redo(&mut self) -> bool {
         let transient_changed = self.state.prepare_history_command();
-        let current = self.history_snapshot();
-        let Some(snapshot) = self.history.redo(current) else {
+        let Some(snapshot) = self.history.redo() else {
             if transient_changed {
                 self.request_redraw();
             }
@@ -1013,8 +1055,10 @@ impl EditorWindow {
         true
     }
 
-    fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
-        self.state.restore_edit_snapshot(snapshot.edit);
+    fn restore_history_snapshot(&mut self, snapshot: HistoryRestore) {
+        self.state
+            .apply_history_delta(&snapshot.canvas, snapshot.forward);
+        self.state.restore_history_state(snapshot.edit);
         self.content_index.invalidate();
         self.viewport = snapshot.viewport;
         self.ensure_cursor_in_viewport();
@@ -1024,27 +1068,20 @@ impl EditorWindow {
 
     pub fn finish_state_change(
         &mut self,
-        previous_state: Editor,
-        previous_viewport: ViewportOffset,
+        checkpoint: StateChangeCheckpoint,
         document_changed: bool,
     ) -> bool {
         self.finish_state_change_in_group(
-            previous_state,
-            previous_viewport,
+            checkpoint,
             document_changed,
             None,
             StateChangeViewportPolicy::CursorAndContent,
         )
     }
 
-    pub fn finish_selection_clear(
-        &mut self,
-        previous_state: Editor,
-        previous_viewport: ViewportOffset,
-    ) -> bool {
+    pub fn finish_selection_clear(&mut self, checkpoint: StateChangeCheckpoint) -> bool {
         self.finish_state_change_in_group(
-            previous_state,
-            previous_viewport,
+            checkpoint,
             true,
             None,
             StateChangeViewportPolicy::CursorOnly,
@@ -1053,13 +1090,11 @@ impl EditorWindow {
 
     pub fn finish_state_change_with_stable_viewport(
         &mut self,
-        previous_state: Editor,
-        previous_viewport: ViewportOffset,
+        checkpoint: StateChangeCheckpoint,
         document_changed: bool,
     ) -> bool {
         self.finish_state_change_in_group(
-            previous_state,
-            previous_viewport,
+            checkpoint,
             document_changed,
             None,
             StateChangeViewportPolicy::Stable,
@@ -1068,14 +1103,12 @@ impl EditorWindow {
 
     pub fn finish_grouped_state_change(
         &mut self,
-        previous_state: Editor,
-        previous_viewport: ViewportOffset,
+        checkpoint: StateChangeCheckpoint,
         document_changed: bool,
         group: HistoryGroup,
     ) -> bool {
         self.finish_state_change_in_group(
-            previous_state,
-            previous_viewport,
+            checkpoint,
             document_changed,
             Some(group),
             StateChangeViewportPolicy::CursorAndContent,
@@ -1084,27 +1117,25 @@ impl EditorWindow {
 
     fn finish_state_change_in_group(
         &mut self,
-        mut previous_state: Editor,
-        previous_viewport: ViewportOffset,
+        checkpoint: StateChangeCheckpoint,
         document_changed: bool,
         group: Option<HistoryGroup>,
         viewport_policy: StateChangeViewportPolicy,
     ) -> bool {
-        previous_state
-            .commit_canvas_mutations()
-            .expect("editor cells remain valid at history boundaries");
         self.state
             .commit_canvas_mutations()
             .expect("editor cells remain valid at history boundaries");
-        let previous = HistorySnapshot {
-            edit: previous_state.edit_snapshot(),
-            viewport: previous_viewport,
-        };
+        let mut canvas = self.state.finish_history_capture();
+        if let Some(mut previous) = checkpoint.canvas {
+            previous.merge(canvas);
+            canvas = previous;
+        }
+        let previous = checkpoint.history;
         if group.is_none() {
-            self.history.finish_transaction(&previous);
+            self.history.finish_transaction();
         }
         let menu_selections_changed =
-            durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
+            durable_menu_selections_changed(&checkpoint.toolbar, &self.state.toolbar);
         let scale_factor = self.window.scale_factor();
         let metrics = self.renderer.metrics(scale_factor);
         let toolbar_metrics = self.renderer.title_metrics(scale_factor);
@@ -1114,7 +1145,7 @@ impl EditorWindow {
             self.transparent_menubar,
             self.window.inner_size().width as usize,
             (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
-            &previous_state.toolbar,
+            &checkpoint.toolbar,
             &self.state.toolbar,
         );
         if document_changed {
@@ -1122,11 +1153,11 @@ impl EditorWindow {
         }
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
-        let view_mode_changed = reconcile_view_cursor(&previous_state, &self.state);
+        let view_mode_changed = checkpoint.was_viewing != self.state.view_active();
 
         // A toolbar-only transition can temporarily clip anchored cells.
         // Navigation and document edits still take the constrained path below.
-        if !document_changed && self.state.grid.cursor_pos == previous_state.grid.cursor_pos {
+        if !document_changed && self.state.grid.cursor_pos == checkpoint.cursor {
             self.menu_selections_dirty |= menu_selections_changed;
             return false;
         }
@@ -1185,33 +1216,29 @@ impl EditorWindow {
             return match group {
                 Some(group) => self
                     .history
-                    .record_grouped_change(group, previous, &current),
-                None => self.history.record_change(previous, &current),
+                    .record_grouped_change(group, previous, current, canvas),
+                None => self.history.record_change(previous, current, canvas),
             };
         }
 
-        self.state = previous_state;
+        self.state.apply_history_delta(&canvas, false);
+        self.state.restore_history_state(previous.edit);
+        self.state.toolbar = checkpoint.toolbar;
         self.content_index.invalidate();
-        self.viewport = previous_viewport;
+        self.viewport = previous.viewport;
         false
     }
 
-    pub fn finish_project_load(
-        &mut self,
-        previous_state: Editor,
-        previous_viewport: ViewportOffset,
-    ) -> bool {
+    pub fn finish_project_load(&mut self, checkpoint: StateChangeCheckpoint) -> bool {
         self.menu_selections_dirty |=
-            durable_menu_selections_changed(&previous_state.toolbar, &self.state.toolbar);
+            durable_menu_selections_changed(&checkpoint.toolbar, &self.state.toolbar);
         self.state.compact_blank_runs_preserving_cursor();
+        let canvas = self.state.finish_history_capture();
         self.content_index.invalidate();
         self.ensure_cursor_in_viewport();
-        let previous = HistorySnapshot {
-            edit: previous_state.edit_snapshot(),
-            viewport: previous_viewport,
-        };
+        let previous = checkpoint.history;
         let current = self.history_snapshot();
-        let changed = self.history.record_project_load(previous, &current);
+        let changed = self.history.record_project_load(previous, current, canvas);
         if changed {
             self.mark_document_dirty();
         }
@@ -1630,6 +1657,7 @@ fn durable_menu_selections_changed(
     previous.durable_selections() != current.durable_selections()
 }
 
+#[cfg(test)]
 fn reconcile_view_cursor(previous: &Editor, current: &Editor) -> bool {
     let was_viewing = previous.view_active();
     let is_viewing = current.view_active();
@@ -2368,10 +2396,7 @@ mod tests {
     fn first_line_click_on_a_new_cell_only_moves_cursor_without_history_or_document_change() {
         let mut state = line_mouse_state();
         let target = Coord { line: 0, column: 2 };
-        let previous = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
+        state.begin_history_capture();
 
         let press = begin_line_mouse_state(&mut state, target, target, true);
         assert_eq!(
@@ -2394,15 +2419,7 @@ mod tests {
         );
         assert!(!finish.document_changed);
         assert_eq!(finish.next_click, None);
-        let current = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(previous.edit.same_document(&current.edit));
-
-        let history = EditHistory::default();
-        assert!(!history.has_pending_transaction());
-        assert_eq!(history.lengths(), (0, 0));
+        assert!(state.finish_history_capture().is_empty());
     }
 
     #[test]
@@ -3796,9 +3813,10 @@ mod tests {
         );
         let closed_viewport = viewport;
         let previous = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport,
         };
+        state.begin_history_capture();
         viewport = clear_after_toolbar_action_preserves_cursor_screen_position(
             &mut state,
             viewport,
@@ -3807,14 +3825,19 @@ mod tests {
             cell_size,
         );
         let current = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport,
         };
+        let delta = state.finish_history_capture();
         let mut history = EditHistory::default();
 
-        assert!(history.record_change(previous.clone(), &current));
-        assert_eq!(history.undo(current.clone()), Some(previous.clone()));
-        assert_eq!(history.redo(previous), Some(current));
+        assert!(history.record_change(previous.clone(), current.clone(), delta));
+        let undone = history.undo().unwrap();
+        assert_eq!(undone.edit, previous.edit);
+        assert_eq!(undone.viewport, previous.viewport);
+        let redone = history.redo().unwrap();
+        assert_eq!(redone.edit, current.edit);
+        assert_eq!(redone.viewport, current.viewport);
         assert_eq!(closed_viewport, viewport);
     }
 

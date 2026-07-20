@@ -197,7 +197,7 @@ fn sparse_document(sparse: SparseDocument) -> Result<Document> {
                 .get(usize::try_from(cell.face_id).context("face ID exceeds platform range")?)
                 .with_context(|| format!("invalid face ID {}", cell.face_id))?;
             let atom = Atom::new(cell.atom)?;
-            map.set_at(cell.column, cell.line, atom, face)?;
+            map.set_at_untracked(cell.column, cell.line, atom, face)?;
             map.set_line_data(cell.column, cell.line, cell.line_data);
         }
         layers.push(map);
@@ -222,7 +222,7 @@ fn legacy_sparse_document(sparse: LegacySparseDocument) -> Result<Document> {
         let mut map = LayerMap::new(layer.id, layer.visible);
         for cell in layer.cells {
             let atom = Atom::new(cell.atom)?;
-            map.set_at(cell.column, cell.line, atom, &cell.face)?;
+            map.set_at_untracked(cell.column, cell.line, atom, &cell.face)?;
             map.set_line_data(cell.column, cell.line, cell.line_data);
         }
         layers.push(map);

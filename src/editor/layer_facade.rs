@@ -58,11 +58,13 @@ impl Editor {
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        self.canvas = crate::canvas::LayerStack::with_active(
+        let replacement = crate::canvas::LayerStack::with_active(
             maps,
             active_layer,
             self.toolbar.multi_layer_mode(),
         )?;
+        self.canvas.record_history_replacement(&replacement);
+        self.canvas = replacement;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         Ok(())
     }
@@ -70,6 +72,7 @@ impl Editor {
     pub fn restore_canvas(&mut self, mut canvas: crate::canvas::LayerStack) {
         canvas.set_enabled(self.toolbar.multi_layer_mode());
         self.toolbar.sync_layer_count(canvas.layers().len());
+        self.canvas.record_history_replacement(&canvas);
         self.canvas = canvas;
     }
 

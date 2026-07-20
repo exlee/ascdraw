@@ -208,9 +208,7 @@ pub fn copy_selection(state: &Editor, platform: &mut impl ExportPlatform) -> Res
 /// write first makes a failed external operation an editor-state no-op.
 pub fn cut_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<bool> {
     platform.set_clipboard_text(&selected_visible_text(state))?;
-    let before = state.edit_snapshot();
-    state.clear_selection();
-    Ok(!before.same_document(&state.edit_snapshot()))
+    Ok(state.clear_selection())
 }
 
 pub fn paste_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<bool> {
@@ -1685,36 +1683,45 @@ mod tests {
         state.move_to(Coord::default());
         state.extend_selection(crate::model::Direction::Right);
         let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: ViewportOffset { x: 3, y: -2 },
         };
+        state.begin_history_capture();
         let mut platform = MockPlatform::default();
         assert!(cut_selection(&mut state, &mut platform).unwrap());
         let cut = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: before.viewport,
         };
+        let delta = state.finish_history_capture();
         let mut history = EditHistory::default();
-        assert!(history.record_change(before.clone(), &cut));
-        assert_eq!(history.undo(cut.clone()), Some(before.clone()));
-        assert_eq!(history.redo(before.clone()), Some(cut.clone()));
+        assert!(history.record_change(before, cut, delta));
+        let restored = history.undo().expect("real cut undo entry");
+        state.apply_history_delta(&restored.canvas, restored.forward);
+        state.restore_history_state(restored.edit);
+        let redone = history.redo().expect("real cut redo entry");
+        state.apply_history_delta(&redone.canvas, redone.forward);
+        state.restore_history_state(redone.edit);
 
-        let restored = history.undo(cut.clone()).expect("real cut undo entry");
-        state.restore_edit_snapshot(restored.edit.clone());
+        let restored = history.undo().expect("real cut undo entry");
+        state.apply_history_delta(&restored.canvas, restored.forward);
+        state.restore_history_state(restored.edit);
         state.move_to(Coord { line: 1, column: 4 });
         let before_blank = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: restored.viewport,
         };
+        state.begin_history_capture();
         let mut blank_platform = MockPlatform::default();
         assert!(!cut_selection(&mut state, &mut blank_platform).unwrap());
         assert_eq!(blank_platform.clipboard.as_deref(), Some(" "));
         let after_blank = HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: state.history_state(),
             viewport: before_blank.viewport,
         };
-        assert!(!history.record_change(before_blank, &after_blank));
-        assert_eq!(history.redo(after_blank), Some(cut));
+        let delta = state.finish_history_capture();
+        assert!(!history.record_change(before_blank, after_blank, delta));
+        assert!(history.redo().is_some());
     }
 
     #[test]

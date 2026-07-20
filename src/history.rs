@@ -1,20 +1,36 @@
 use std::collections::VecDeque;
 
-use crate::editor::EditSnapshot;
+use crate::canvas::HistoryCanvasDelta;
+use crate::editor::HistoryEditorState;
 use crate::layout::ViewportOffset;
 
 pub const HISTORY_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistorySnapshot {
-    pub edit: EditSnapshot,
+    pub edit: HistoryEditorState,
     pub viewport: ViewportOffset,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryRestore {
+    pub edit: HistoryEditorState,
+    pub viewport: ViewportOffset,
+    pub canvas: HistoryCanvasDelta,
+    pub forward: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HistoryChange {
+    before: HistorySnapshot,
+    after: HistorySnapshot,
+    canvas: HistoryCanvasDelta,
 }
 
 #[derive(Debug, Default)]
 pub struct EditHistory {
-    undo: VecDeque<HistorySnapshot>,
-    redo: VecDeque<HistorySnapshot>,
+    undo: VecDeque<HistoryChange>,
+    redo: VecDeque<HistoryChange>,
     pending: Option<PendingChange>,
 }
 
@@ -28,20 +44,28 @@ pub enum HistoryGroup {
 #[derive(Debug)]
 struct PendingChange {
     group: HistoryGroup,
-    previous: HistorySnapshot,
+    change: HistoryChange,
 }
 
 impl EditHistory {
-    pub fn has_pending_transaction(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    pub fn record_change(&mut self, previous: HistorySnapshot, current: &HistorySnapshot) -> bool {
-        self.finish_transaction(&previous);
-        if previous.edit.same_document(&current.edit) {
+    pub fn record_change(
+        &mut self,
+        previous: HistorySnapshot,
+        current: HistorySnapshot,
+        canvas: HistoryCanvasDelta,
+    ) -> bool {
+        self.finish_transaction();
+        if canvas.is_empty() {
             return false;
         }
-        push_bounded(&mut self.undo, previous);
+        push_bounded(
+            &mut self.undo,
+            HistoryChange {
+                before: previous,
+                after: current,
+                canvas,
+            },
+        );
         self.redo.clear();
         true
     }
@@ -50,31 +74,43 @@ impl EditHistory {
         &mut self,
         group: HistoryGroup,
         previous: HistorySnapshot,
-        current: &HistorySnapshot,
+        current: HistorySnapshot,
+        canvas: HistoryCanvasDelta,
     ) -> bool {
         if self
             .pending
             .as_ref()
             .is_some_and(|pending| pending.group != group)
         {
-            self.finish_transaction(&previous);
+            self.finish_transaction();
         }
-        if previous.edit.same_document(&current.edit) {
+        if canvas.is_empty() {
             return false;
         }
-        self.pending
-            .get_or_insert(PendingChange { group, previous });
+        if let Some(pending) = self.pending.as_mut() {
+            pending.change.after = current;
+            pending.change.canvas.merge(canvas);
+        } else {
+            self.pending = Some(PendingChange {
+                group,
+                change: HistoryChange {
+                    before: previous,
+                    after: current,
+                    canvas,
+                },
+            });
+        }
         true
     }
 
-    pub fn finish_transaction(&mut self, current: &HistorySnapshot) -> bool {
+    pub fn finish_transaction(&mut self) -> bool {
         let Some(pending) = self.pending.take() else {
             return false;
         };
-        if pending.previous.edit.same_document(&current.edit) {
+        if pending.change.canvas.is_empty() {
             return false;
         }
-        push_bounded(&mut self.undo, pending.previous);
+        push_bounded(&mut self.undo, pending.change);
         self.redo.clear();
         true
     }
@@ -82,29 +118,49 @@ impl EditHistory {
     pub fn record_project_load(
         &mut self,
         previous: HistorySnapshot,
-        current: &HistorySnapshot,
+        current: HistorySnapshot,
+        canvas: HistoryCanvasDelta,
     ) -> bool {
-        self.finish_transaction(&previous);
-        if previous == *current {
+        self.finish_transaction();
+        if canvas.is_empty() && previous == current {
             return false;
         }
-        push_bounded(&mut self.undo, previous);
+        push_bounded(
+            &mut self.undo,
+            HistoryChange {
+                before: previous,
+                after: current,
+                canvas,
+            },
+        );
         self.redo.clear();
         true
     }
 
-    pub fn undo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
-        self.finish_transaction(&current);
-        let previous = self.undo.pop_back()?;
-        push_bounded(&mut self.redo, current);
-        Some(previous)
+    pub fn undo(&mut self) -> Option<HistoryRestore> {
+        self.finish_transaction();
+        let change = self.undo.pop_back()?;
+        let restore = HistoryRestore {
+            edit: change.before.edit.clone(),
+            viewport: change.before.viewport,
+            canvas: change.canvas.clone(),
+            forward: false,
+        };
+        push_bounded(&mut self.redo, change);
+        Some(restore)
     }
 
-    pub fn redo(&mut self, current: HistorySnapshot) -> Option<HistorySnapshot> {
-        self.finish_transaction(&current);
-        let next = self.redo.pop_back()?;
-        push_bounded(&mut self.undo, current);
-        Some(next)
+    pub fn redo(&mut self) -> Option<HistoryRestore> {
+        self.finish_transaction();
+        let change = self.redo.pop_back()?;
+        let restore = HistoryRestore {
+            edit: change.after.edit.clone(),
+            viewport: change.after.viewport,
+            canvas: change.canvas.clone(),
+            forward: true,
+        };
+        push_bounded(&mut self.undo, change);
+        Some(restore)
     }
 
     #[cfg(test)]
@@ -113,11 +169,11 @@ impl EditHistory {
     }
 }
 
-fn push_bounded(stack: &mut VecDeque<HistorySnapshot>, snapshot: HistorySnapshot) {
+fn push_bounded(stack: &mut VecDeque<HistoryChange>, change: HistoryChange) {
     if stack.len() == HISTORY_LIMIT {
         stack.pop_front();
     }
-    stack.push_back(snapshot);
+    stack.push_back(change);
 }
 
 #[cfg(test)]
@@ -125,430 +181,225 @@ mod tests {
     use super::*;
     use crate::app::AppConfig;
     use crate::editor::Editor;
-    use crate::model::Direction;
-    use crate::toolbar::{MainMode, ToolbarAction};
+    use crate::model::Coord;
 
-    fn snapshot(text: &str, viewport: ViewportOffset) -> HistorySnapshot {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert(text);
+    fn snapshot(editor: &Editor, viewport: ViewportOffset) -> HistorySnapshot {
         HistorySnapshot {
-            edit: state.edit_snapshot(),
+            edit: editor.history_state(),
             viewport,
         }
     }
 
-    #[test]
-    fn records_undo_redo_and_clears_redo_after_a_new_edit() {
-        let blank = snapshot("", ViewportOffset::default());
-        let one = snapshot("1", ViewportOffset { x: 1, y: 2 });
-        let two = snapshot("12", ViewportOffset { x: 3, y: 4 });
-        let three = snapshot("123", ViewportOffset { x: 5, y: 6 });
-        let mut history = EditHistory::default();
+    fn captured_edit(
+        editor: &mut Editor,
+        viewport: ViewportOffset,
+        edit: impl FnOnce(&mut Editor),
+    ) -> (HistorySnapshot, HistorySnapshot, HistoryCanvasDelta) {
+        let before = snapshot(editor, viewport);
+        editor.begin_history_capture();
+        edit(editor);
+        let canvas = editor.finish_history_capture();
+        let after = snapshot(editor, viewport);
+        (before, after, canvas)
+    }
 
-        assert!(history.record_change(blank.clone(), &one));
-        assert!(history.record_change(one.clone(), &two));
-        assert_eq!(history.undo(two.clone()), Some(one.clone()));
-        assert_eq!(history.undo(one.clone()), Some(blank.clone()));
-        assert_eq!(history.redo(blank), Some(one.clone()));
-        assert_eq!(history.redo(one.clone()), Some(two.clone()));
-
-        assert_eq!(history.undo(two), Some(one.clone()));
-        assert!(history.record_change(one, &three));
-        assert_eq!(history.lengths(), (2, 0));
-        assert!(history.redo(three).is_none());
+    fn restore(editor: &mut Editor, restore: HistoryRestore) {
+        editor.apply_history_delta(&restore.canvas, restore.forward);
+        editor.restore_history_state(restore.edit);
     }
 
     #[test]
-    fn multi_step_line_stroke_commits_once_and_reports_dirty_before_commit() {
-        let blank = snapshot("", ViewportOffset::default());
-        let one = snapshot("─", ViewportOffset { x: 1, y: 0 });
-        let complete = snapshot("──", ViewportOffset { x: 2, y: 0 });
+    fn undo_and_redo_apply_only_changed_cells() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                editor.insert("abc");
+            });
+        assert_eq!(delta.cells.len(), 3);
         let mut history = EditHistory::default();
+        assert!(history.record_change(before, after, delta));
 
-        assert!(history.record_grouped_change(HistoryGroup::ControlStroke, blank.clone(), &one));
-        assert!(history.has_pending_transaction());
-        assert_eq!(history.lengths(), (0, 0));
-        assert!(history.record_grouped_change(HistoryGroup::ControlStroke, one, &complete));
-        assert_eq!(history.lengths(), (0, 0));
-
-        assert!(history.finish_transaction(&complete));
-        assert_eq!(history.lengths(), (1, 0));
-        assert_eq!(history.undo(complete), Some(blank));
+        restore(&mut editor, history.undo().unwrap());
+        assert!(editor.content_cells().is_empty());
+        restore(&mut editor, history.redo().unwrap());
+        assert_eq!(editor.content_cells().len(), 3);
     }
 
     #[test]
-    fn text_insert_replace_and_single_replace_sessions_each_commit_once_on_exit() {
-        for mode in [
-            crate::app::CursorMode::Text,
-            crate::app::CursorMode::Insert,
-            crate::app::CursorMode::Replace,
-        ] {
-            let mut state = Editor::new(&AppConfig::default().theme, "test");
-            state.cursor_mode = mode;
-            let before = HistorySnapshot {
-                edit: state.edit_snapshot(),
-                viewport: ViewportOffset::default(),
-            };
-            state.write_text("a");
-            let one = HistorySnapshot {
-                edit: state.edit_snapshot(),
-                viewport: ViewportOffset::default(),
-            };
-            state.write_text("b");
-            let two = HistorySnapshot {
-                edit: state.edit_snapshot(),
-                viewport: ViewportOffset::default(),
-            };
-            let mut history = EditHistory::default();
-            assert!(history.record_grouped_change(HistoryGroup::TextSession, before.clone(), &one));
-            assert!(history.record_grouped_change(HistoryGroup::TextSession, one, &two));
-            state.cancel_text_entry();
-            let exited = HistorySnapshot {
-                edit: state.edit_snapshot(),
-                viewport: ViewportOffset::default(),
-            };
-            assert!(history.finish_transaction(&exited));
-            assert_eq!(history.lengths(), (1, 0), "mode {mode:?}");
-            assert_eq!(history.undo(exited), Some(before), "mode {mode:?}");
+    fn grouped_changes_merge_first_before_and_last_after_values() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        let mut history = EditHistory::default();
+        for text in ["a", "b", "c"] {
+            let (before, after, delta) =
+                captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                    editor.insert(text);
+                });
+            assert!(
+                history.record_grouped_change(HistoryGroup::TextSession, before, after, delta,)
+            );
         }
-
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.place_stamp();
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(state.begin_single_replace());
-        state.write_text("x");
-        assert_ne!(state.cursor_mode, crate::app::CursorMode::Replace);
-        let replaced = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        let mut history = EditHistory::default();
-        assert!(history.record_grouped_change(
-            HistoryGroup::TextSession,
-            before.clone(),
-            &replaced
-        ));
-        assert!(history.finish_transaction(&replaced));
-        assert_eq!(history.undo(replaced), Some(before));
+        assert!(history.finish_transaction());
+        assert_eq!(history.lengths(), (1, 0));
+        restore(&mut editor, history.undo().unwrap());
+        assert!(editor.content_cells().is_empty());
+        restore(&mut editor, history.redo().unwrap());
+        assert_eq!(editor.content_cells().len(), 3);
     }
 
     #[test]
-    fn no_op_grouped_sessions_and_interruptions_preserve_redo() {
-        let blank = snapshot("", ViewportOffset::default());
-        let edited = snapshot("x", ViewportOffset::default());
+    fn grouped_change_that_returns_to_its_start_is_not_recorded() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
         let mut history = EditHistory::default();
-        assert!(history.record_change(blank.clone(), &edited));
-        assert_eq!(history.undo(edited.clone()), Some(blank.clone()));
-
-        assert!(!history.record_grouped_change(HistoryGroup::TextSession, blank.clone(), &blank));
-        assert!(!history.finish_transaction(&blank));
-        assert_eq!(history.lengths(), (0, 1));
-        assert_eq!(history.redo(blank.clone()), Some(edited.clone()));
-
-        assert_eq!(history.undo(edited.clone()), Some(blank.clone()));
-        let transient = snapshot("z", ViewportOffset::default());
-        assert!(history.record_grouped_change(
-            HistoryGroup::TextSession,
-            blank.clone(),
-            &transient
-        ));
-        assert!(history.record_grouped_change(HistoryGroup::TextSession, transient, &blank));
-        assert!(!history.finish_transaction(&blank));
-        assert_eq!(history.lengths(), (0, 1));
-
-        let interim = snapshot("y", ViewportOffset { x: 4, y: 5 });
-        assert!(history.record_grouped_change(HistoryGroup::TextSession, blank.clone(), &interim));
-        assert_eq!(history.undo(interim), Some(blank));
-        assert_eq!(history.lengths(), (0, 1));
-    }
-
-    #[test]
-    fn suppresses_cursor_only_and_identical_document_changes() {
-        let previous = snapshot("same", ViewportOffset::default());
-        let mut current = previous.clone();
-        current.viewport = ViewportOffset { x: 9, y: 8 };
-        current.edit.set_cursor_for_test(0, 0);
-        let mut history = EditHistory::default();
-
-        assert!(!history.record_change(previous, &current));
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                editor.insert("x");
+            });
+        history.record_grouped_change(HistoryGroup::TextSession, before, after, delta);
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                editor.clear_canvas();
+            });
+        history.record_grouped_change(HistoryGroup::TextSession, before, after, delta);
+        assert!(!history.finish_transaction());
         assert_eq!(history.lengths(), (0, 0));
     }
 
     #[test]
-    fn project_load_records_cursor_selection_and_viewport_as_one_atomic_change() {
-        let before = snapshot("same", ViewportOffset::default());
-        let mut loaded = before.clone();
-        loaded.viewport = ViewportOffset { x: -9, y: 14 };
-        loaded.edit.set_cursor_for_test(0, 2);
+    fn history_limit_discards_oldest_sparse_change() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
         let mut history = EditHistory::default();
-
-        assert!(history.record_project_load(before.clone(), &loaded));
-        assert_eq!(history.undo(loaded.clone()), Some(before.clone()));
-        assert_eq!(history.redo(before), Some(loaded));
-    }
-
-    #[test]
-    fn both_stacks_are_bounded() {
-        let mut history = EditHistory::default();
-        let mut current = snapshot("0", ViewportOffset::default());
-        for index in 1..=HISTORY_LIMIT + 10 {
-            let next = snapshot(&index.to_string(), ViewportOffset::default());
-            assert!(history.record_change(current, &next));
-            current = next;
+        for _ in 0..=HISTORY_LIMIT {
+            let (before, after, delta) =
+                captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                    editor.insert("x");
+                });
+            history.record_change(before, after, delta);
         }
         assert_eq!(history.lengths(), (HISTORY_LIMIT, 0));
-
         for _ in 0..HISTORY_LIMIT {
-            current = history.undo(current).expect("bounded undo entry");
+            restore(&mut editor, history.undo().unwrap());
         }
-        assert_eq!(history.lengths(), (0, HISTORY_LIMIT));
+        assert!(history.undo().is_none());
     }
 
     #[test]
-    fn histories_are_isolated_per_owner() {
-        let blank = snapshot("", ViewportOffset::default());
-        let edited = snapshot("window one", ViewportOffset { x: 7, y: 8 });
-        let mut first = EditHistory::default();
-        let mut second = EditHistory::default();
-
-        assert!(first.record_change(blank.clone(), &edited));
-        assert_eq!(first.undo(edited), Some(blank.clone()));
-        assert!(second.undo(blank).is_none());
-    }
-
-    #[test]
-    fn utility_edits_round_trip_and_no_op_does_not_clear_redo() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert("ab");
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 0,
+    fn overwriting_one_cell_records_one_sparse_element() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        editor.insert(&"x".repeat(100));
+        editor.move_to(Coord {
+            line: 0,
+            column: 50,
         });
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(state.apply_utility(Direction::Left));
-        let after = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset { x: 3, y: 4 },
-        };
-        let mut history = EditHistory::default();
-        assert!(history.record_change(before.clone(), &after));
 
-        let restored = history.undo(after.clone()).unwrap();
-        assert_eq!(restored, before);
-        state.restore_edit_snapshot(restored.edit.clone());
-        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 1,
-        });
-        state.grid.cursor_pos.column = 99;
-        state.selection.collapse(state.grid.cursor_pos);
-        assert!(!state.apply_utility(Direction::Left));
-        let no_op = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: restored.viewport,
-        };
-        assert!(!history.record_change(restored.clone(), &no_op));
-        assert_eq!(history.redo(no_op), Some(after));
+        let (_, _, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), Editor::place_stamp);
+
+        assert_eq!(delta.cells.len(), 1);
+        assert_eq!((delta.cells[0].line, delta.cells[0].column), (0, 50));
     }
 
     #[test]
-    fn layer_add_visibility_reorder_and_delete_round_trip_through_history() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert("base");
-        let base = state.active_layer_id();
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(state.add_layer_above(base));
-        let upper = state.active_layer_id();
-        state.insert("upper");
-        assert!(state.add_layer_above(base));
-        let middle = state.active_layer_id();
-        assert!(state.toggle_layer_visibility(base));
-        assert!(state.move_layer_up(middle));
-        assert!(state.delete_layer(upper));
-        let after = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        let mut history = EditHistory::default();
+    fn deleting_a_layer_restores_its_topology_and_cells() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        let base = editor.active_layer_id();
+        assert!(editor.add_layer_above(base));
+        let upper = editor.active_layer_id();
+        editor.insert("top");
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                assert!(editor.delete_layer(upper));
+            });
+        assert_eq!(delta.before.layers.len(), 2);
+        assert_eq!(delta.after.layers.len(), 1);
+        assert_eq!(delta.cells.len(), 3);
 
-        assert!(history.record_change(before.clone(), &after));
-        assert_eq!(history.undo(after.clone()), Some(before.clone()));
-        assert_eq!(history.redo(before), Some(after));
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before, after, delta));
+        restore(&mut editor, history.undo().unwrap());
+        assert_eq!(editor.layer_summaries().len(), 2);
+        assert_eq!(editor.active_layer_id(), upper);
+        assert_eq!(
+            editor.content_cells(),
+            [
+                Coord { line: 0, column: 0 },
+                Coord { line: 0, column: 1 },
+                Coord { line: 0, column: 2 },
+            ]
+        );
+        restore(&mut editor, history.redo().unwrap());
+        assert_eq!(editor.layer_summaries().len(), 1);
     }
 
     #[test]
-    fn layer_merge_is_one_undoable_change() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert("base");
-        let base = state.active_layer_id();
-        assert!(state.add_layer_above(base));
-        let upper = state.active_layer_id();
-        state.insert(" upper");
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
+    fn replacing_a_document_captures_old_and_new_sparse_cells() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        editor.insert("old");
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                editor.replace_canvas(crate::export::lines_from_text("new"))
+            });
+        assert_eq!(delta.cells.len(), 3);
 
-        assert!(state.merge_layer_up(upper));
-        let after = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
         let mut history = EditHistory::default();
-        assert!(history.record_change(before.clone(), &after));
-        assert_eq!(history.undo(after.clone()), Some(before.clone()));
-        assert_eq!(history.redo(before), Some(after));
+        assert!(history.record_project_load(before, after, delta));
+        restore(&mut editor, history.undo().unwrap());
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "old"
+        );
+        restore(&mut editor, history.redo().unwrap());
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "new"
+        );
     }
 
     #[test]
-    fn confirmed_move_lift_is_one_entry_and_stationary_confirmation_preserves_redo() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert("abcd");
-        state.move_home();
-        state.extend_selection(Direction::Right);
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 0,
-        });
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(state.begin_selected_move_lift());
-        assert!(state.move_lift(Direction::Right));
-        assert!(state.move_lift(Direction::Right));
-        assert!(state.confirm_move_lift());
-        let after = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
+    fn merging_a_layer_restores_new_target_coordinates_on_undo() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        editor.insert("A");
+        let base = editor.active_layer_id();
+        assert!(editor.add_layer_above(base));
+        let upper = editor.active_layer_id();
+        editor.move_to(Coord { line: 0, column: 2 });
+        editor.insert("B");
+
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                assert!(editor.merge_layer_up(upper));
+            });
+        assert!(
+            delta
+                .cells
+                .iter()
+                .any(|change| change.layer == base && change.column == 2)
+        );
         let mut history = EditHistory::default();
-        assert!(history.record_change(before.clone(), &after));
-        assert_eq!(history.lengths(), (1, 0));
-        assert_eq!(history.undo(after.clone()), Some(before.clone()));
-        assert_eq!(history.lengths(), (0, 1));
+        assert!(history.record_change(before, after, delta));
 
-        state.restore_edit_snapshot(before.edit.clone());
-        assert!(state.begin_selected_move_lift());
-        assert!(!state.confirm_move_lift());
-        let stationary = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        assert!(!history.record_change(before.clone(), &stationary));
-        assert_eq!(history.lengths(), (0, 1));
-        assert_eq!(history.redo(before), Some(after));
-    }
-
-    #[test]
-    fn clear_is_undoable_and_redoable_while_blank_clear_preserves_redo() {
-        let mut blank_state = Editor::new(&AppConfig::default().theme, "test");
-        let blank = HistorySnapshot {
-            edit: blank_state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        let mut edited_state = blank_state.clone();
-        edited_state.insert("drawing");
-        let edited = HistorySnapshot {
-            edit: edited_state.edit_snapshot(),
-            viewport: ViewportOffset { x: 8, y: 9 },
-        };
-        let mut history = EditHistory::default();
-        assert!(history.record_change(blank.clone(), &edited));
-
-        let restored_blank = history.undo(edited.clone()).unwrap();
-        blank_state.restore_edit_snapshot(restored_blank.edit.clone());
-        blank_state.clear_canvas();
-        let blank_no_op = HistorySnapshot {
-            edit: blank_state.edit_snapshot(),
-            viewport: restored_blank.viewport,
-        };
-        assert!(!history.record_change(restored_blank, &blank_no_op));
-        assert_eq!(history.redo(blank_no_op.clone()), Some(edited.clone()));
-
-        edited_state.clear_canvas();
-        let cleared = HistorySnapshot {
-            edit: edited_state.edit_snapshot(),
-            viewport: edited.viewport,
-        };
-        let mut clear_history = EditHistory::default();
-        assert!(clear_history.record_change(edited.clone(), &cleared));
-        assert_eq!(clear_history.undo(cleared.clone()), Some(edited.clone()));
-        assert_eq!(clear_history.redo(edited), Some(cleared.clone()));
-    }
-
-    #[test]
-    fn undo_and_redo_snapshots_do_not_change_durable_menu_selections() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities));
-        state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
-            submenu: 0,
-            option: 2,
-        });
-        let menu_selections = state.toolbar.durable_selections();
-        let before = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        state.insert("x");
-        let after = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        let mut history = EditHistory::default();
-        assert!(history.record_change(before, &after));
-
-        let undone = history.undo(after).unwrap();
-        state.restore_edit_snapshot(undone.edit.clone());
-        assert_eq!(state.toolbar.durable_selections(), menu_selections);
-        let redone = history.redo(undone).unwrap();
-        state.restore_edit_snapshot(redone.edit);
-        assert_eq!(state.toolbar.durable_selections(), menu_selections);
-    }
-
-    #[test]
-    fn literal_selection_clear_is_one_transaction_and_blank_clear_retains_redo() {
-        let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.insert("x ");
-        state.move_to(crate::model::Coord::default());
-        let edited = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-
-        state.clear_selection();
-        let cleared = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: ViewportOffset::default(),
-        };
-        let mut history = EditHistory::default();
-        assert!(history.record_change(edited.clone(), &cleared));
-
-        let restored = history.undo(cleared.clone()).expect("clear is undoable");
-        assert_eq!(restored, edited);
-        state.restore_edit_snapshot(restored.edit.clone());
-        state.move_to(crate::model::Coord { line: 0, column: 1 });
-        let before_blank_clear = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: restored.viewport,
-        };
-        state.clear_selection();
-        let after_blank_clear = HistorySnapshot {
-            edit: state.edit_snapshot(),
-            viewport: restored.viewport,
-        };
-        assert!(!history.record_change(before_blank_clear, &after_blank_clear));
-        assert_eq!(history.redo(after_blank_clear), Some(cleared));
+        restore(&mut editor, history.undo().unwrap());
+        assert_eq!(editor.layer_summaries().len(), 2);
+        assert!(editor.select_layer(base));
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "A"
+        );
+        assert!(editor.select_layer(upper));
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "  B"
+        );
     }
 }
