@@ -37,6 +37,7 @@ pub struct Rasterized {
     pub cell_width: f32,
     pub cell_height: f32,
     pub overflow: f32,
+    pub atlas_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

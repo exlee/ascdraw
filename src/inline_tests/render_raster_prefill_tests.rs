@@ -28,7 +28,45 @@ fn snapped_stale_raster_cells_share_physical_boundaries() {
 }
 
 #[test]
-fn mixed_stale_and_fresh_full_cells_have_no_pixel_seam() {
+fn direct_diagonals_connect_at_the_same_snapped_corner() {
+    let config = AppConfig::default();
+    let renderer = load_renderer(&config);
+    let mut metrics = renderer.metrics(1.0);
+    metrics.cell_width = 8.25;
+    metrics.cell_height = 16.375;
+    let root = resolve_root_face(&Face::default(), FALLBACK_FG, FALLBACK_BG);
+    let background = [root.bg.b, root.bg.g, root.bg.r, root.bg.a];
+    let mut pixels = background.repeat(64 * 64);
+    let image_info = ImageInfo::new((64, 64), ColorType::BGRA8888, AlphaType::Premul, None);
+    let mut surface = surfaces::wrap_pixels(&image_info, &mut pixels, 64 * 4, None).unwrap();
+    let mut paint = Paint::default();
+    paint.set_color(root.fg.to_color());
+    let upper_right = snapped_cell_rect(1, 0, 0.0, &metrics);
+    let lower_left = snapped_cell_rect(0, 1, 0.0, &metrics);
+    assert!(cell_graphics::draw_in_cell(
+        surface.canvas(),
+        upper_right,
+        "╱",
+        &metrics,
+        &paint,
+    ));
+    assert!(cell_graphics::draw_in_cell(
+        surface.canvas(),
+        lower_left,
+        "╱",
+        &metrics,
+        &paint,
+    ));
+    drop(surface);
+
+    let corner_x = upper_right.left as usize;
+    let corner_y = lower_left.top as usize;
+    let corner_offset = (corner_y * 64 + corner_x) * 4;
+    assert_ne!(pixels[corner_offset..corner_offset + 4], background);
+}
+
+#[test]
+fn direct_full_cells_have_no_pixel_seam_during_zoom() {
     let config = AppConfig::default();
     let renderer = load_renderer(&config);
     let mut old_metrics = renderer.metrics(1.0);
@@ -64,12 +102,6 @@ fn mixed_stale_and_fresh_full_cells_have_no_pixel_seam() {
         3,
         &renderer.rendered_atom_cache,
     );
-    *state.canvas().layers()[0]
-        .get(0, 1)
-        .unwrap()
-        .raster_cache
-        .borrow_mut() = None;
-
     let mut new_metrics = old_metrics.clone();
     new_metrics.cell_width = 10.3;
     new_metrics.cell_height = 18.2;
@@ -226,7 +258,7 @@ fn idle_prefill_rasterizes_atoms_outside_the_rendered_viewport() {
 }
 
 #[test]
-fn diagonal_coordinate_rasters_preserve_their_intentional_overflow() {
+fn decorated_diagonal_raster_fallback_preserves_intentional_overflow() {
     let config = AppConfig::default();
     let renderer = load_renderer(&config);
     let metrics = renderer.metrics(1.0);
@@ -245,6 +277,9 @@ fn diagonal_coordinate_rasters_preserve_their_intentional_overflow() {
     let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
     let mut state = Editor::new(&config.theme, "test");
     state.insert("╱");
+    let mut decorated = state.theme.tooltip.clone();
+    decorated.attributes.push("underline".to_owned());
+    state.set_cell_face_for_test(Coord::default(), decorated);
     state.commit_canvas_mutations().unwrap();
 
     render_cached_sparse_grid_atoms(

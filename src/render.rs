@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use skia_safe::{
-    AlphaType, Canvas, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo, Paint,
-    PathEffect, PixelGeometry, Rect, SurfaceProps, SurfacePropsFlags, font::Edging, surfaces,
+    AlphaType, BlendMode, Canvas, ColorType, Font, FontHinting, FontMgr, FontStyle, ImageInfo,
+    Paint, PathEffect, PixelGeometry, RSXform, Rect, SamplingOptions, SurfaceProps,
+    SurfacePropsFlags, font::Edging, surfaces,
 };
 use softbuffer::Surface;
 use unicode_segmentation::UnicodeSegmentation;
@@ -578,8 +579,21 @@ fn render_cached_sparse_grid_atoms(
         .iter()
         .filter(|layer| layer.visible)
     {
+        let mut atlas_batches = HashMap::<u32, AtlasBatch>::new();
         for (&row, cells) in layer.rows().range(row_start..row_end) {
             for (&column, data) in cells.range(column_start..column_end) {
+                if render_sparse_cell_graphic(
+                    canvas,
+                    data,
+                    state,
+                    metrics,
+                    root_face,
+                    column,
+                    row,
+                    layout.grid_top,
+                ) {
+                    continue;
+                }
                 let cached_raster = data.raster_cache.borrow().clone();
                 let raster = cached_raster
                     .as_ref()
@@ -601,20 +615,73 @@ fn render_cached_sparse_grid_atoms(
                         )
                     });
                 if let Some(raster) = raster {
-                    draw_cell_raster(
-                        canvas,
-                        &raster,
-                        column,
-                        row,
-                        layout.grid_top,
-                        metrics,
-                        use_current_metrics && raster.generation == raster_generation,
-                    );
+                    if use_current_metrics
+                        && raster.generation == raster_generation
+                        && raster.atlas_safe
+                    {
+                        queue_atlas_raster(
+                            &mut atlas_batches,
+                            raster,
+                            column,
+                            row,
+                            layout.grid_top,
+                            metrics,
+                        );
+                    } else {
+                        draw_cell_raster(canvas, &raster, column, row, layout.grid_top, metrics);
+                    }
                 }
             }
         }
+        draw_atlas_batches(canvas, atlas_batches);
     }
     canvas.restore();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_sparse_cell_graphic(
+    canvas: &Canvas,
+    data: &crate::canvas::CoordData,
+    state: &Editor,
+    metrics: &CellMetrics,
+    root_face: ResolvedFace,
+    column: i16,
+    row: i16,
+    grid_top: f32,
+) -> bool {
+    if !cell_graphics::handles(data.atom.contents()) {
+        return false;
+    }
+    let resolved = if face_is_default(&data.face) {
+        root_face
+    } else {
+        resolve_derived_face(
+            &state.grid.default_face,
+            &data.face,
+            FALLBACK_FG,
+            FALLBACK_BG,
+        )
+    };
+    if resolved.underline_style.is_some() || resolved.strikethrough {
+        return false;
+    }
+    let cell = snapped_cell_rect(column, row, grid_top, metrics);
+    let paints_background = data.face.bg != "default"
+        || data.face.attributes.iter().any(|attribute| {
+            attribute
+                .trim_start_matches("final:")
+                .eq_ignore_ascii_case("reverse")
+        });
+    if paints_background {
+        let mut background = Paint::default();
+        background
+            .set_anti_alias(false)
+            .set_color(resolved.bg.to_color());
+        canvas.draw_rect(cell, &background);
+    }
+    let mut foreground = Paint::default();
+    foreground.set_color(resolved.fg.to_color());
+    cell_graphics::draw_in_cell(canvas, cell, data.atom.contents(), metrics, &foreground)
 }
 
 fn rasterize_sparse_cell(
@@ -662,9 +729,62 @@ fn rasterize_sparse_cell(
         cell_width: metrics.cell_width,
         cell_height: metrics.cell_height,
         overflow,
+        atlas_safe: !paints_background
+            && resolved_face.underline_style.is_none()
+            && !resolved_face.strikethrough
+            && overflow == 0.0,
     });
     *data.raster_cache.borrow_mut() = Some(Rc::clone(&raster));
     Some(raster)
+}
+
+struct AtlasBatch {
+    image: skia_safe::Image,
+    transforms: Vec<RSXform>,
+    textures: Vec<Rect>,
+}
+
+fn queue_atlas_raster(
+    batches: &mut HashMap<u32, AtlasBatch>,
+    raster: Rc<crate::canvas::Rasterized>,
+    column: i16,
+    row: i16,
+    grid_top: f32,
+    metrics: &CellMetrics,
+) {
+    let batch = batches
+        .entry(raster.image.unique_id())
+        .or_insert_with(|| AtlasBatch {
+            image: raster.image.clone(),
+            transforms: Vec::new(),
+            textures: Vec::new(),
+        });
+    batch.transforms.push(RSXform::new(
+        1.0,
+        0.0,
+        (
+            PADDING as f32 + f32::from(column) * metrics.cell_width,
+            grid_top + f32::from(row) * metrics.cell_height,
+        ),
+    ));
+    batch
+        .textures
+        .push(Rect::from_wh(raster.cell_width, raster.cell_height));
+}
+
+fn draw_atlas_batches(canvas: &Canvas, batches: HashMap<u32, AtlasBatch>) {
+    for batch in batches.into_values() {
+        canvas.draw_atlas(
+            &batch.image,
+            &batch.transforms,
+            &batch.textures,
+            None,
+            BlendMode::SrcOver,
+            SamplingOptions::default(),
+            None,
+            None,
+        );
+    }
 }
 
 fn draw_cell_raster(
@@ -674,19 +794,7 @@ fn draw_cell_raster(
     row: i16,
     grid_top: f32,
     metrics: &CellMetrics,
-    native_size: bool,
 ) {
-    if native_size {
-        canvas.draw_image(
-            &raster.image,
-            (
-                PADDING as f32 + f32::from(column) * metrics.cell_width - raster.overflow,
-                grid_top + f32::from(row) * metrics.cell_height - raster.overflow,
-            ),
-            None,
-        );
-        return;
-    }
     let source = Rect::from_xywh(
         0.0,
         0.0,
@@ -1960,11 +2068,12 @@ impl Renderer {
             let data = layer
                 .get(coord.line, coord.column)
                 .expect("prefill coordinate came from the sparse layer");
-            let needs_raster = data
-                .raster_cache
-                .borrow()
-                .as_ref()
-                .is_none_or(|cached| cached.generation != raster_generation);
+            let needs_raster = !cell_graphics::handles(data.atom.contents())
+                && data
+                    .raster_cache
+                    .borrow()
+                    .as_ref()
+                    .is_none_or(|cached| cached.generation != raster_generation);
             if needs_raster {
                 rasterize_sparse_cell(
                     &self.rendered_atom_cache,

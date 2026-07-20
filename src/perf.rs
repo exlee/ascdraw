@@ -44,6 +44,10 @@ pub struct PerfSnapshot {
     pub buffer_acquisition: DurationSummary,
     pub rasterization: DurationSummary,
     pub presentation: DurationSummary,
+    pub toolbar: DurationSummary,
+    pub grid: DurationSummary,
+    pub minimap: DurationSummary,
+    pub other_raster: DurationSummary,
     #[serde(rename = "event_to_submit")]
     pub event_to_present: DurationSummary,
 }
@@ -64,6 +68,10 @@ pub struct PerfDiagnostics {
     buffer_acquisition: VecDeque<Duration>,
     rasterization: VecDeque<Duration>,
     presentation: VecDeque<Duration>,
+    toolbar: VecDeque<Duration>,
+    grid: VecDeque<Duration>,
+    minimap: VecDeque<Duration>,
+    other_raster: VecDeque<Duration>,
     event_to_present: VecDeque<Duration>,
     frames: VecDeque<Duration>,
     frame_times: VecDeque<Instant>,
@@ -84,6 +92,10 @@ impl PerfDiagnostics {
             buffer_acquisition: VecDeque::new(),
             rasterization: VecDeque::new(),
             presentation: VecDeque::new(),
+            toolbar: VecDeque::new(),
+            grid: VecDeque::new(),
+            minimap: VecDeque::new(),
+            other_raster: VecDeque::new(),
             event_to_present: VecDeque::new(),
             frames: VecDeque::new(),
             frame_times: VecDeque::new(),
@@ -123,6 +135,18 @@ impl PerfDiagnostics {
         }
         push_sample(&mut self.frames, timing.total());
         push_sample(&mut self.frame_times, now);
+        push_sample(&mut self.buffer_acquisition, timing.buffer_acquisition);
+        push_sample(&mut self.rasterization, timing.rasterization);
+        push_sample(&mut self.presentation, timing.presentation);
+        push_sample(&mut self.toolbar, timing.toolbar);
+        push_sample(&mut self.grid, timing.grid);
+        push_sample(&mut self.minimap, timing.minimap);
+        push_sample(
+            &mut self.other_raster,
+            timing
+                .rasterization
+                .saturating_sub(timing.toolbar + timing.grid + timing.minimap),
+        );
         let Some(pending) = self.pending.take() else {
             return;
         };
@@ -132,9 +156,6 @@ impl PerfDiagnostics {
             handled.saturating_duration_since(pending.started),
         );
         push_sample(&mut self.state_history, pending.state_history);
-        push_sample(&mut self.buffer_acquisition, timing.buffer_acquisition);
-        push_sample(&mut self.rasterization, timing.rasterization);
-        push_sample(&mut self.presentation, timing.presentation);
         push_sample(
             &mut self.event_to_present,
             now.saturating_duration_since(pending.started),
@@ -143,13 +164,17 @@ impl PerfDiagnostics {
         if self.samples_since_report >= REPORT_INTERVAL {
             self.samples_since_report = 0;
             log_info(format!(
-                "ASCDRAW_PERF samples={} key={} state_history={} buffer={} raster={} present={} event_to_present={}",
+                "ASCDRAW_PERF samples={} key={} state_history={} buffer={} raster={} present={} toolbar={} grid={} minimap={} other={} event_to_present={}",
                 self.event_to_present.len(),
                 percentiles(&self.key_handling),
                 percentiles(&self.state_history),
                 percentiles(&self.buffer_acquisition),
                 percentiles(&self.rasterization),
                 percentiles(&self.presentation),
+                percentiles(&self.toolbar),
+                percentiles(&self.grid),
+                percentiles(&self.minimap),
+                percentiles(&self.other_raster),
                 percentiles(&self.event_to_present),
             ));
         }
@@ -173,6 +198,10 @@ impl PerfDiagnostics {
             buffer_acquisition: duration_summary(&self.buffer_acquisition),
             rasterization: duration_summary(&self.rasterization),
             presentation: duration_summary(&self.presentation),
+            toolbar: duration_summary(&self.toolbar),
+            grid: duration_summary(&self.grid),
+            minimap: duration_summary(&self.minimap),
+            other_raster: duration_summary(&self.other_raster),
             event_to_present: duration_summary(&self.event_to_present),
         }
     }
@@ -183,6 +212,10 @@ impl PerfDiagnostics {
         self.buffer_acquisition.clear();
         self.rasterization.clear();
         self.presentation.clear();
+        self.toolbar.clear();
+        self.grid.clear();
+        self.minimap.clear();
+        self.other_raster.clear();
         self.event_to_present.clear();
         self.frames.clear();
         self.frame_times.clear();
@@ -258,6 +291,7 @@ mod tests {
         perf.record_present(
             FrameTiming {
                 rasterization: Duration::from_millis(5),
+                grid: Duration::from_millis(4),
                 ..FrameTiming::default()
             },
             started,
@@ -265,6 +299,7 @@ mod tests {
         perf.record_present(
             FrameTiming {
                 rasterization: Duration::from_millis(20),
+                grid: Duration::from_millis(15),
                 ..FrameTiming::default()
             },
             started + Duration::from_millis(10),
@@ -276,5 +311,6 @@ mod tests {
         assert_eq!(snapshot.over_8_33_ms_percent, 50.0);
         assert_eq!(snapshot.over_16_67_ms_percent, 50.0);
         assert_eq!(snapshot.frames.p95_ms, 20.0);
+        assert_eq!(snapshot.grid.p95_ms, 15.0);
     }
 }

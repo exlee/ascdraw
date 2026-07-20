@@ -66,6 +66,17 @@ pub(super) fn raster_overflow(text: &str, metrics: &CellMetrics) -> f32 {
     diagonal_stroke_width(metrics) * 2.0
 }
 
+pub(super) fn handles(text: &str) -> bool {
+    let mut characters = text.chars();
+    let Some(character) = characters.next() else {
+        return false;
+    };
+    characters.next().is_none()
+        && (block_element_rects(character).is_some()
+            || shade_level(character).is_some()
+            || matches!(character, '╱' | '╲' | '╳'))
+}
+
 fn diagonal_stroke_width(metrics: &CellMetrics) -> f32 {
     (metrics.cell_width.min(metrics.cell_height) / 14.0).max(1.0)
 }
@@ -134,6 +145,22 @@ pub(super) fn draw(
     metrics: &CellMetrics,
     paint: &Paint,
 ) -> bool {
+    let cell = Rect::from_xywh(
+        PADDING as f32 + column as f32 * metrics.cell_width,
+        top,
+        metrics.cell_width,
+        metrics.cell_height,
+    );
+    draw_in_cell(canvas, cell, text, metrics, paint)
+}
+
+pub(super) fn draw_in_cell(
+    canvas: &Canvas,
+    cell: Rect,
+    text: &str,
+    metrics: &CellMetrics,
+    paint: &Paint,
+) -> bool {
     let mut characters = text.chars();
     let Some(character) = characters.next() else {
         return false;
@@ -142,12 +169,6 @@ pub(super) fn draw(
         return false;
     }
 
-    let cell = Rect::from_xywh(
-        PADDING as f32 + column as f32 * metrics.cell_width,
-        top,
-        metrics.cell_width,
-        metrics.cell_height,
-    );
     let left = cell.left.round();
     let right = cell.right.round();
     let bottom = cell.bottom.round();

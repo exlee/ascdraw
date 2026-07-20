@@ -284,14 +284,16 @@ module FpsBenchmark
   def print_summary(reports, report_dir)
     puts
     puts "FPS benchmark"
-    puts format("%-18s %10s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "event p95", ">8.33ms", ">16.67ms")
+    puts format("%-18s %10s %12s %12s %12s %12s %10s %10s", "scenario", "FPS", "frame p95", "grid p95", "minimap p95", "event p95", ">8.33ms", ">16.67ms")
     reports.each do |report|
       metrics = report.fetch("metrics")
       puts format(
-        "%-18s %10.1f %10.2fms %10.2fms %9.1f%% %9.1f%%",
+        "%-18s %10.1f %10.2fms %10.2fms %10.2fms %10.2fms %9.1f%% %9.1f%%",
         report.fetch("scenario"),
         metrics.fetch("frame_rate"),
         metrics.dig("frames", "p95_ms"),
+        metrics.dig("grid", "p95_ms"),
+        metrics.dig("minimap", "p95_ms"),
         metrics.dig("event_to_submit", "p95_ms"),
         metrics.fetch("over_8_33_ms_percent"),
         metrics.fetch("over_16_67_ms_percent"),
