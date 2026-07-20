@@ -111,6 +111,7 @@ fn cloning_coordinate_data_drops_raster_cache() {
         image,
         cell_width: 1.0,
         cell_height: 1.0,
+        overflow: 0.0,
     }));
 
     let cloned = source.clone();

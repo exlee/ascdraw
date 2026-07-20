@@ -36,6 +36,7 @@ pub struct Rasterized {
     pub image: skia_safe::Image,
     pub cell_width: f32,
     pub cell_height: f32,
+    pub overflow: f32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

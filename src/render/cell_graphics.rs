@@ -58,6 +58,18 @@ fn shade_level(character: char) -> Option<u8> {
     }
 }
 
+pub(super) fn raster_overflow(text: &str, metrics: &CellMetrics) -> f32 {
+    let mut characters = text.chars();
+    if !matches!(characters.next(), Some('╱' | '╲' | '╳')) || characters.next().is_some() {
+        return 0.0;
+    }
+    diagonal_stroke_width(metrics) * 2.0
+}
+
+fn diagonal_stroke_width(metrics: &CellMetrics) -> f32 {
+    (metrics.cell_width.min(metrics.cell_height) / 14.0).max(1.0)
+}
+
 pub(super) fn foreground_coverage(text: &str) -> f32 {
     const BLOCK_COVERAGE_EIGHTHS: [u8; 32] = [
         4, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1, 4, 2, 4, 6, 1, 1, 2, 2, 2, 6, 4, 6, 6, 2,
@@ -161,7 +173,7 @@ pub(super) fn draw(
         return true;
     }
 
-    let stroke_width = (cell.width().min(cell.height()) / 14.0).max(1.0);
+    let stroke_width = diagonal_stroke_width(metrics);
     let Some(segments) = diagonal_segments(character, cell, stroke_width) else {
         return false;
     };
@@ -272,6 +284,16 @@ mod tests {
 
         let cell = Rect::new(10.0, 20.0, 18.0, 36.0);
         let segments = diagonal_segments('╳', cell, 2.0).unwrap();
+        let metrics = CellMetrics {
+            font: Font::default(),
+            cell_width: cell.width(),
+            cell_height: cell.height(),
+            baseline_offset: 10.0,
+            underline_offset: 0.0,
+            font_mgr: FontMgr::new(),
+            fallback_fonts: Rc::new(RefCell::new(HashMap::new())),
+        };
+        assert_eq!(raster_overflow("╳", &metrics), 2.0);
         for (start, end) in segments.into_iter().flatten() {
             assert!(start.0 < cell.left);
             assert!(end.0 > cell.right);

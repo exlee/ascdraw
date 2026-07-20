@@ -601,7 +601,15 @@ fn render_cached_sparse_grid_atoms(
                         )
                     });
                 if let Some(raster) = raster {
-                    draw_cell_raster(canvas, &raster, column, row, layout.grid_top, metrics);
+                    draw_cell_raster(
+                        canvas,
+                        &raster,
+                        column,
+                        row,
+                        layout.grid_top,
+                        metrics,
+                        use_current_metrics && raster.generation == raster_generation,
+                    );
                 }
             }
         }
@@ -646,12 +654,14 @@ fn rasterize_sparse_cell(
         &state.theme,
         metrics,
     );
-    let image = cached_atom_image_for_key(cache, &atom, &key, metrics)?;
+    let overflow = cell_graphics::raster_overflow(&atom.contents, metrics);
+    let image = cached_atom_image_for_key(cache, &atom, &key, metrics, overflow)?;
     let raster = Rc::new(crate::canvas::Rasterized {
         generation: raster_generation,
         image,
         cell_width: metrics.cell_width,
         cell_height: metrics.cell_height,
+        overflow,
     });
     *data.raster_cache.borrow_mut() = Some(Rc::clone(&raster));
     Some(raster)
@@ -664,9 +674,34 @@ fn draw_cell_raster(
     row: i16,
     grid_top: f32,
     metrics: &CellMetrics,
+    native_size: bool,
 ) {
-    let source = Rect::from_xywh(0.0, 0.0, raster.cell_width, raster.cell_height);
-    let destination = snapped_cell_rect(column, row, grid_top, metrics);
+    if native_size {
+        canvas.draw_image(
+            &raster.image,
+            (
+                PADDING as f32 + f32::from(column) * metrics.cell_width - raster.overflow,
+                grid_top + f32::from(row) * metrics.cell_height - raster.overflow,
+            ),
+            None,
+        );
+        return;
+    }
+    let source = Rect::from_xywh(
+        0.0,
+        0.0,
+        raster.cell_width + raster.overflow * 2.0,
+        raster.cell_height + raster.overflow * 2.0,
+    );
+    let cell = snapped_cell_rect(column, row, grid_top, metrics);
+    let overflow_x = raster.overflow * cell.width() / raster.cell_width;
+    let overflow_y = raster.overflow * cell.height() / raster.cell_height;
+    let destination = Rect::new(
+        cell.left - overflow_x,
+        cell.top - overflow_y,
+        cell.right + overflow_x,
+        cell.bottom + overflow_y,
+    );
     canvas.draw_image_rect(
         &raster.image,
         Some((&source, skia_safe::canvas::SrcRectConstraint::Strict)),
@@ -734,6 +769,7 @@ fn cached_atom_image_for_key(
     atom: &StyledAtom,
     key: &RenderedAtomKey,
     metrics: &CellMetrics,
+    overflow: f32,
 ) -> Option<skia_safe::Image> {
     let width = atom_display_width(&atom.contents);
     if width == 0 || width > 128 {
@@ -743,13 +779,15 @@ fn cached_atom_image_for_key(
         return Some(image.clone());
     }
 
-    let image_width = (metrics.cell_width * width as f32).ceil().max(1.0) as i32;
-    let image_height = metrics.cell_height.ceil().max(1.0) as i32;
+    let image_width = (metrics.cell_width * width as f32 + overflow * 2.0)
+        .ceil()
+        .max(1.0) as i32;
+    let image_height = (metrics.cell_height + overflow * 2.0).ceil().max(1.0) as i32;
     let mut surface = surfaces::raster_n32_premul((image_width, image_height))?;
     let image_canvas = surface.canvas();
     image_canvas.clear(skia_safe::Color::TRANSPARENT);
     image_canvas.save();
-    image_canvas.translate((-(PADDING as f32), 0.0));
+    image_canvas.translate((overflow - PADDING as f32, 0.0));
     render_line_at(
         image_canvas,
         LineRenderPosition {
@@ -760,7 +798,9 @@ fn cached_atom_image_for_key(
         std::slice::from_ref(atom),
         &key.default_face,
         metrics,
-        DrawOrigin::Grid { top_padding: 0.0 },
+        DrawOrigin::Grid {
+            top_padding: overflow,
+        },
         true,
     );
     image_canvas.restore();

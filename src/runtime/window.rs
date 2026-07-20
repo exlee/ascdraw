@@ -156,28 +156,18 @@ struct ScrollStats {
     input_events: u64,
     redraws: u64,
     input_time: Duration,
-    buffer_time: Duration,
-    raster_time: Duration,
-    presentation_time: Duration,
-    toolbar_time: Duration,
-    grid_time: Duration,
-    minimap_time: Duration,
+    frames: Vec<FrameTiming>,
     started: Instant,
 }
 
 #[cfg(debug_assertions)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ScrollStatsReport {
     scroll_events: u64,
     input_events: u64,
     redraws: u64,
     input_time: Duration,
-    buffer_time: Duration,
-    raster_time: Duration,
-    presentation_time: Duration,
-    toolbar_time: Duration,
-    grid_time: Duration,
-    minimap_time: Duration,
+    frames: Vec<FrameTiming>,
 }
 
 #[cfg(debug_assertions)]
@@ -189,12 +179,7 @@ impl ScrollStats {
             input_events: 0,
             redraws: 0,
             input_time: Duration::ZERO,
-            buffer_time: Duration::ZERO,
-            raster_time: Duration::ZERO,
-            presentation_time: Duration::ZERO,
-            toolbar_time: Duration::ZERO,
-            grid_time: Duration::ZERO,
-            minimap_time: Duration::ZERO,
+            frames: Vec::new(),
             started: now,
         }
     }
@@ -224,12 +209,7 @@ impl ScrollStats {
 
     fn note_frame(&mut self, timing: FrameTiming, now: Instant) -> Option<ScrollStatsReport> {
         if self.enabled {
-            self.buffer_time += timing.buffer_acquisition;
-            self.raster_time += timing.rasterization;
-            self.presentation_time += timing.presentation;
-            self.toolbar_time += timing.toolbar;
-            self.grid_time += timing.grid;
-            self.minimap_time += timing.minimap;
+            self.frames.push(timing);
         }
         self.advance(now)
     }
@@ -243,12 +223,7 @@ impl ScrollStats {
             input_events: std::mem::take(&mut self.input_events),
             redraws: std::mem::take(&mut self.redraws),
             input_time: std::mem::take(&mut self.input_time),
-            buffer_time: std::mem::take(&mut self.buffer_time),
-            raster_time: std::mem::take(&mut self.raster_time),
-            presentation_time: std::mem::take(&mut self.presentation_time),
-            toolbar_time: std::mem::take(&mut self.toolbar_time),
-            grid_time: std::mem::take(&mut self.grid_time),
-            minimap_time: std::mem::take(&mut self.minimap_time),
+            frames: std::mem::take(&mut self.frames),
         };
         self.started = now;
         (report.redraws > 1).then_some(report)
@@ -257,26 +232,57 @@ impl ScrollStats {
 
 #[cfg(debug_assertions)]
 fn format_scroll_stats(report: ScrollStatsReport) -> String {
-    let frames = report.redraws as f64;
-    let milliseconds = |duration: Duration| duration.as_secs_f64() * 1_000.0 / frames;
     let input_milliseconds =
         report.input_time.as_secs_f64() * 1_000.0 / report.input_events.max(1) as f64;
-    let measured = report.toolbar_time + report.grid_time + report.minimap_time;
-    let other = report.raster_time.saturating_sub(measured);
+    let timings = &report.frames;
+    let distribution = |select: fn(&FrameTiming) -> Duration| {
+        format_duration_distribution(timings.iter().map(select))
+    };
     format!(
-        "debug: scroll={}/s input={}/s input_handler={:.2}ms redraw={}/s frame={:.2}ms [buffer={:.2} raster={:.2} present={:.2}] raster=[toolbar={:.2} grid={:.2} minimap={:.2} other={:.2}]",
+        "debug: scroll={}/s input={}/s input_handler={:.2}ms redraw={}/s samples={} render_ms[min/avg/max/p50/p95] frame={} buffer={} raster={} present={} toolbar={} grid={} minimap={} other={}",
         report.scroll_events,
         report.input_events,
         input_milliseconds,
         report.redraws,
-        milliseconds(report.buffer_time + report.raster_time + report.presentation_time),
-        milliseconds(report.buffer_time),
-        milliseconds(report.raster_time),
-        milliseconds(report.presentation_time),
-        milliseconds(report.toolbar_time),
-        milliseconds(report.grid_time),
-        milliseconds(report.minimap_time),
-        milliseconds(other),
+        timings.len(),
+        distribution(|timing| timing.total()),
+        distribution(|timing| timing.buffer_acquisition),
+        distribution(|timing| timing.rasterization),
+        distribution(|timing| timing.presentation),
+        distribution(|timing| timing.toolbar),
+        distribution(|timing| timing.grid),
+        distribution(|timing| timing.minimap),
+        distribution(|timing| {
+            timing
+                .rasterization
+                .saturating_sub(timing.toolbar + timing.grid + timing.minimap)
+        }),
+    )
+}
+
+#[cfg(debug_assertions)]
+fn format_duration_distribution(samples: impl Iterator<Item = Duration>) -> String {
+    let mut micros = samples.map(|sample| sample.as_micros()).collect::<Vec<_>>();
+    if micros.is_empty() {
+        return "0.00/0.00/0.00/0.00/0.00".to_owned();
+    }
+    micros.sort_unstable();
+    let percentile = |percent: usize| {
+        let index = micros
+            .len()
+            .saturating_mul(percent)
+            .div_ceil(100)
+            .saturating_sub(1)
+            .min(micros.len() - 1);
+        micros[index] as f64 / 1_000.0
+    };
+    let average = micros.iter().sum::<u128>() as f64 / micros.len() as f64 / 1_000.0;
+    format!(
+        "{:.2}/{average:.2}/{:.2}/{:.2}/{:.2}",
+        micros[0] as f64 / 1_000.0,
+        micros[micros.len() - 1] as f64 / 1_000.0,
+        percentile(50),
+        percentile(95),
     )
 }
 
@@ -2276,6 +2282,16 @@ mod tests {
         assert!(disabled.note_scroll_event(started).is_none());
         assert!(disabled.note_redraw(started).is_none());
         assert!(disabled.advance(started + Duration::from_secs(2)).is_none());
+    }
+
+    #[test]
+    fn render_duration_distribution_reports_min_average_max_and_percentiles() {
+        let samples = [1, 2, 3, 4, 100].into_iter().map(Duration::from_millis);
+
+        assert_eq!(
+            format_duration_distribution(samples),
+            "1.00/22.00/100.00/3.00/100.00"
+        );
     }
 
     fn line_mouse_state() -> Editor {

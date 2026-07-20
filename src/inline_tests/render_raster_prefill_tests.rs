@@ -224,3 +224,52 @@ fn idle_prefill_rasterizes_atoms_outside_the_rendered_viewport() {
     assert_eq!(cached.cell_width, metrics.cell_width);
     assert_eq!(cached.cell_height, metrics.cell_height);
 }
+
+#[test]
+fn diagonal_coordinate_rasters_preserve_their_intentional_overflow() {
+    let config = AppConfig::default();
+    let renderer = load_renderer(&config);
+    let metrics = renderer.metrics(1.0);
+    let toolbar_metrics = renderer.title_metrics(1.0);
+    let width = 320;
+    let height = 240;
+    let layout = layout_metrics(
+        width,
+        height,
+        &metrics,
+        (toolbar_metrics.cell_width, toolbar_metrics.cell_height),
+        &ToolbarState::default(),
+        config.transparent_menubar,
+        1.0,
+    );
+    let mut surface = surfaces::raster_n32_premul((width as i32, height as i32)).unwrap();
+    let mut state = Editor::new(&config.theme, "test");
+    state.insert("╱");
+    state.commit_canvas_mutations().unwrap();
+
+    render_cached_sparse_grid_atoms(
+        surface.canvas(),
+        state.canvas(),
+        &state,
+        &metrics,
+        layout,
+        ViewportOffset::default(),
+        width,
+        0,
+        2,
+        0,
+        2,
+        &renderer.rendered_atom_cache,
+    );
+
+    let cached = state.canvas().layers()[0]
+        .get(0, 0)
+        .unwrap()
+        .raster_cache
+        .borrow()
+        .clone()
+        .unwrap();
+    assert!(cached.overflow > 0.0);
+    assert!(cached.image.width() as f32 >= metrics.cell_width + cached.overflow * 2.0);
+    assert!(cached.image.height() as f32 >= metrics.cell_height + cached.overflow * 2.0);
+}
