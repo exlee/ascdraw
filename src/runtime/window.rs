@@ -2140,8 +2140,9 @@ fn reanchor_toolbar_transition(
 mod tests {
     use super::*;
     use crate::app::{AppConfig, DEFAULT_WINDOW_TITLE};
+    use crate::canvas::{LayerMap, LayerStack};
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
-    use crate::model::{Direction, Face, StyledAtom};
+    use crate::model::{Atom, Direction, Face, LayerId};
     use crate::toolbar::{MainMode, ToolbarAction};
     use anyhow::anyhow;
     use winit::dpi::PhysicalPosition;
@@ -2219,18 +2220,7 @@ mod tests {
 
     fn state_with_rows(rows: &[&str]) -> Editor {
         let mut state = Editor::new(&AppConfig::default().theme, DEFAULT_WINDOW_TITLE);
-        state.set_lines_for_test(
-            rows.iter()
-                .map(|row| {
-                    unicode_segmentation::UnicodeSegmentation::graphemes(*row, true)
-                        .map(|contents| StyledAtom {
-                            face: Face::default(),
-                            contents: contents.to_string(),
-                        })
-                        .collect()
-                })
-                .collect(),
-        );
+        state.replace_canvas(canvas_from_text(&rows.join("\n")).unwrap());
         state
     }
 
@@ -3409,10 +3399,7 @@ mod tests {
     #[test]
     fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.set_lines_for_test(vec![vec![crate::model::StyledAtom {
-            face: crate::model::Face::default(),
-            contents: "x".to_string(),
-        }]]);
+        state.insert("x");
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -3438,16 +3425,8 @@ mod tests {
     #[test]
     fn rejected_utility_transform_can_restore_document_and_coordinates_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
-        let mut lines = vec![Vec::new(); 6];
-        lines[5].resize_with(5, || StyledAtom {
-            face: Face::default(),
-            contents: " ".into(),
-        });
-        lines[5].push(StyledAtom {
-            face: Face::default(),
-            contents: "x".into(),
-        });
-        state.set_lines_for_test(lines);
+        state.move_to(Coord { line: 5, column: 5 });
+        state.insert("x");
         state.move_to(Coord {
             line: 11,
             column: 11,
@@ -3817,10 +3796,11 @@ mod tests {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = Editor::new(&config.theme, "test");
-        state.set_lines_for_test(vec![vec![StyledAtom {
-            face: config.theme.selection.clone(),
-            contents: " ".into(),
-        }]]);
+        let mut layer = LayerMap::new(LayerId(0), true);
+        layer
+            .set_at(0, 0, Atom::new(" ").unwrap(), &config.theme.selection)
+            .unwrap();
+        state.replace_canvas(LayerStack::new(vec![layer], false).unwrap());
         let cursor = Coord { line: 3, column: 6 };
         state.move_to(cursor);
         let initial = ViewportOffset {
