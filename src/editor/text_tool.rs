@@ -24,7 +24,7 @@ impl Editor {
             let available = MAX_CANVAS_WIDTH.saturating_sub(
                 self.canvas
                     .active_row_width(self.grid.cursor_pos.line)
-                    .max(self.grid.cursor_pos.column),
+                    .max(usize::try_from(self.grid.cursor_pos.column).unwrap_or(0)),
             );
             let atoms = atoms.into_iter().take(available).collect::<Vec<_>>();
             let inserted_width = atoms.len();
@@ -34,12 +34,9 @@ impl Editor {
             self.canvas
                 .insert_cells(line, column, cells)
                 .expect("validated text fits the sparse canvas");
-            self.grid.cursor_pos.column = self
-                .grid
-                .cursor_pos
-                .column
-                .saturating_add(inserted_width)
-                .min(MAX_CANVAS_WIDTH - 1);
+            self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(
+                i16::try_from(inserted_width).expect("inserted text fits signed canvas range"),
+            );
             if part.ends_with('\n')
                 && self.canvas.layers()[self.canvas.active_index()]
                     .to_dense()
@@ -111,7 +108,7 @@ impl Editor {
                 let atom = Atom::new(grapheme).expect("text was validated as one-cell graphemes");
                 let line = self.grid.cursor_pos.line;
                 let column = self.grid.cursor_pos.column;
-                if column >= MAX_CANVAS_WIDTH {
+                if usize::try_from(column).is_ok_and(|column| column >= MAX_CANVAS_WIDTH) {
                     break;
                 }
                 self.canvas.remove_line_at(Coord { line, column });
@@ -173,7 +170,8 @@ impl Editor {
                 .join_row_with_next(previous)
                 .expect("joined text rows fit the sparse canvas");
             self.grid.cursor_pos.line = previous;
-            self.grid.cursor_pos.column = join_column;
+            self.grid.cursor_pos.column =
+                i16::try_from(join_column).expect("joined row fits signed canvas range");
         }
         self.collapse_selection();
     }
@@ -184,7 +182,7 @@ impl Editor {
         let line = self.grid.cursor_pos.line;
         let column = self.grid.cursor_pos.column;
         let width = self.canvas.active_row_width(line);
-        if column < width {
+        if usize::try_from(column).is_ok_and(|column| column < width) {
             self.canvas
                 .remove_cells(line, column, 1)
                 .expect("delete remains inside the sparse canvas");

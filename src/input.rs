@@ -616,8 +616,8 @@ fn pointer_position_to_coord_with_metrics(
         viewport,
     )?;
     Some(Coord {
-        line: usize::try_from(line).ok()?,
-        column: usize::try_from(column).ok()?,
+        line: i16::try_from(line).ok()?,
+        column: i16::try_from(column).ok()?,
     })
 }
 

@@ -16,15 +16,25 @@ pub(super) fn overlay_nonblank_atoms(
                 column = column.saturating_add(width);
                 continue;
             }
+            let line = i16::try_from(line).expect("dense layer line fits signed canvas range");
+            let column_i16 =
+                i16::try_from(column).expect("dense layer column fits signed canvas range");
+            let right = column_i16.saturating_add(
+                i16::try_from(width.saturating_sub(1))
+                    .expect("dense atom width fits signed canvas range"),
+            );
             let bounds = SelectionBounds {
-                left: column,
-                right: column.saturating_add(width.saturating_sub(1)),
+                left: column_i16,
+                right,
                 top: line,
                 bottom: line,
             };
             overwrite_rectangle(
                 target,
-                Coord { line, column },
+                Coord {
+                    line,
+                    column: column_i16,
+                },
                 &TextRectangle {
                     rows: vec![vec![atom.clone()]],
                     width,

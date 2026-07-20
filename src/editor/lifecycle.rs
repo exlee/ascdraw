@@ -8,7 +8,7 @@ impl Editor {
         if let Some(lift) = &self.move_lift {
             return lift.source_snapshot.clone();
         }
-        let (canvas, cursor_pos, selection, canvas_origin) = if let Some(preview) = self
+        let (canvas, cursor_pos, selection) = if let Some(preview) = self
             .line_preview
             .as_ref()
             .filter(|preview| !preview.has_committed_segments())
@@ -17,22 +17,15 @@ impl Editor {
                 preview.source_canvas.clone(),
                 preview.source_cursor,
                 preview.source_selection,
-                preview.source_canvas_origin,
             )
         } else {
             let canvas = self.canvas.clone();
-            (
-                canvas,
-                self.grid.cursor_pos,
-                self.selection,
-                self.canvas_origin,
-            )
+            (canvas, self.grid.cursor_pos, self.selection)
         };
         EditSnapshot {
             cursor_pos,
             selection,
             active_stroke: self.active_stroke.clone(),
-            canvas_origin,
             canvas,
         }
     }
@@ -41,13 +34,11 @@ impl Editor {
         self.grid.cursor_pos = snapshot.cursor_pos;
         self.selection = snapshot.selection;
         self.active_stroke = snapshot.active_stroke;
-        self.canvas_origin = snapshot.canvas_origin;
         self.canvas = snapshot.canvas;
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
-        self.pending_prepend = (0, 0);
     }
 
     pub fn new(theme: &ThemeConfig, window_title: impl Into<String>) -> Self {
@@ -76,8 +67,6 @@ impl Editor {
             move_lift: None,
             jump_mode: None,
             single_replace_pending: false,
-            pending_prepend: (0, 0),
-            canvas_origin: Coord::default(),
             toolbar_document_changed: false,
             toolbar_viewport_stable: false,
             transient_tip: None,

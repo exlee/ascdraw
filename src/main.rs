@@ -1660,7 +1660,7 @@ mod tests {
     }
 
     #[test]
-    fn line_preview_origin_prepend_remains_transient_until_commit() {
+    fn line_preview_negative_movement_remains_transient_until_commit() {
         let config = AppConfig::default();
         let mut state = Editor::new(&config.theme, "test");
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
@@ -1684,10 +1684,9 @@ mod tests {
                 false,
                 ModifiersState::empty(),
             ),
-            Some(true)
+            Some(false)
         );
         assert_eq!(state.edit_snapshot(), before);
-        assert_eq!(state.take_pending_prepend(), (1, 0));
 
         assert_eq!(
             handle_editor_key(
@@ -1708,7 +1707,6 @@ mod tests {
                 handle_editor_key(&mut state, &key, None, false, ModifiersState::empty()).is_some()
             );
         }
-        assert_eq!(state.take_pending_prepend(), (1, 0));
 
         assert_eq!(
             handle_editor_key(
@@ -1733,7 +1731,13 @@ mod tests {
         assert!(!state.has_line_preview());
         assert_eq!(
             state.content_cells(),
-            [Coord { line: 0, column: 0 }, Coord { line: 0, column: 1 }]
+            [
+                Coord {
+                    line: 0,
+                    column: -1
+                },
+                Coord { line: 0, column: 0 }
+            ]
         );
     }
 
@@ -2428,13 +2432,19 @@ mod tests {
     }
 
     #[test]
-    fn structural_edge_movement_reports_a_document_change() {
+    fn movement_into_negative_implicit_space_is_not_a_document_change() {
         let mut state = Editor::new(&app::ThemeConfig::default(), "ascdraw");
-        assert!(apply_edit_command(
+        assert!(!apply_edit_command(
             &mut state,
             EditCommand::Move(model::Direction::Up)
         ));
-        assert_eq!(state.take_pending_prepend(), (0, 1));
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: -1,
+                column: 0
+            }
+        );
     }
 
     #[test]
@@ -2681,7 +2691,10 @@ mod tests {
                 Some(true)
             );
             assert_eq!(state.grid.cursor_pos.column, steps);
-            assert_eq!(state.lines_for_test()[0].len(), steps + 1);
+            assert_eq!(
+                state.lines_for_test()[0].len(),
+                usize::try_from(steps).unwrap() + 1
+            );
             assert!(
                 state.lines_for_test()[0]
                     .iter()
@@ -2819,7 +2832,7 @@ mod tests {
     }
 
     #[test]
-    fn one_ordered_keypress_is_one_history_record_and_origin_prepends_aggregate() {
+    fn one_ordered_drawing_keypress_is_one_history_record_across_negative_space() {
         let mut state = Editor::new(&app::ThemeConfig::default(), "test");
         let before = history::HistorySnapshot {
             edit: state.edit_snapshot(),
@@ -2836,7 +2849,13 @@ mod tests {
             ),
             Some(true)
         );
-        assert_eq!(state.take_pending_prepend(), (5, 0));
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: 0,
+                column: -5
+            }
+        );
         let after = history::HistorySnapshot {
             edit: state.edit_snapshot(),
             viewport: layout::ViewportOffset::default(),

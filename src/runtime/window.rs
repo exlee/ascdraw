@@ -702,9 +702,9 @@ impl EditorWindow {
         if self.mouse_drag.is_none()
             && self.modifiers == ModifiersState::empty()
             && let Some((line, column)) = self.mouse_cell
-            && let Some(coord) = usize::try_from(line)
+            && let Some(coord) = i16::try_from(line)
                 .ok()
-                .zip(usize::try_from(column).ok())
+                .zip(i16::try_from(column).ok())
                 .map(|(line, column)| Coord { line, column })
             && self.state.move_line_preview_to(coord)
         {
@@ -1123,21 +1123,10 @@ impl EditorWindow {
         let layout = self.current_layout();
         let cell_size = (metrics.cell_width, metrics.cell_height);
         let view_mode_changed = reconcile_view_cursor(&previous_state, &self.state);
-        let prepend = self.state.take_pending_prepend();
-        if prepend != (0, 0) {
-            self.content_index.invalidate();
-        }
-        self.viewport
-            .compensate_for_prepend(prepend.0, prepend.1, cell_size);
 
-        // A toolbar-only transition can temporarily clip anchored cells. Do
-        // not let viewport normalization turn the exact pixel compensation
-        // above into an unrelated canvas pan. Navigation and document edits
-        // still take the normal constrained path below.
-        if !document_changed
-            && prepend == (0, 0)
-            && self.state.grid.cursor_pos == previous_state.grid.cursor_pos
-        {
+        // A toolbar-only transition can temporarily clip anchored cells.
+        // Navigation and document edits still take the constrained path below.
+        if !document_changed && self.state.grid.cursor_pos == previous_state.grid.cursor_pos {
             self.menu_selections_dirty |= menu_selections_changed;
             return false;
         }
@@ -1607,7 +1596,7 @@ impl EditorWindow {
             }
             state.restore_canvas(document.canvas);
             if let Some(position) = document.position {
-                state.restore_canvas_position(position.cursor, position.canvas_origin);
+                state.restore_canvas_position(position.cursor);
                 self.renderer.restore_zoom(position.zoom);
                 viewport = position.viewport;
             }
@@ -1628,7 +1617,6 @@ impl EditorWindow {
     fn canvas_position(&self) -> document::CanvasPosition {
         document::CanvasPosition {
             cursor: self.state.grid.cursor_pos,
-            canvas_origin: self.state.canvas_origin(),
             viewport: self.viewport,
             zoom: self.renderer.zoom(),
         }
@@ -1966,7 +1954,7 @@ pub fn create_editor_window(
                 }
                 state.restore_canvas(document.canvas);
                 if let Some(position) = document.position {
-                    state.restore_canvas_position(position.cursor, position.canvas_origin);
+                    state.restore_canvas_position(position.cursor);
                     renderer.restore_zoom(position.zoom);
                     viewport = position.viewport;
                 }
@@ -2014,7 +2002,6 @@ pub fn create_editor_window(
         menu_selections_dirty: false,
         saved_canvas_position: document::CanvasPosition {
             cursor: Coord::default(),
-            canvas_origin: Coord::default(),
             viewport: ViewportOffset::default(),
             zoom: 0,
         },
@@ -2776,7 +2763,6 @@ mod tests {
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
         assert!(reconcile_view_cursor(&previous, &state));
         assert_eq!(state.grid.cursor_pos, cursor);
-        assert_eq!(state.take_pending_prepend(), (0, 0));
     }
 
     #[test]

@@ -14,8 +14,6 @@ impl Editor {
 
     fn push_blank(&mut self, direction: Direction) -> bool {
         match direction {
-            Direction::Left if self.grid.cursor_pos.column == 0 => self.prepend_column(),
-            Direction::Up if self.grid.cursor_pos.line == 0 => self.prepend_line(),
             Direction::Left | Direction::Right => {
                 let column = if direction == Direction::Left {
                     self.grid.cursor_pos.column - 1
@@ -44,7 +42,7 @@ impl Editor {
         }
     }
 
-    fn insert_blank_column(&mut self, column: usize) -> bool {
+    fn insert_blank_column(&mut self, column: i16) -> bool {
         if self.canvas_width() >= MAX_CANVAS_WIDTH {
             return false;
         }
@@ -54,11 +52,13 @@ impl Editor {
             .map(|layer| layer.lines.len())
             .max()
             .unwrap_or(1);
-        if self.layer_views().into_iter().any(|layer| {
-            layer
-                .lines
-                .iter()
-                .any(|line| boundary_index(line, column).is_none())
+        if usize::try_from(column).is_ok_and(|column| {
+            self.layer_views().into_iter().any(|layer| {
+                layer
+                    .lines
+                    .iter()
+                    .any(|line| boundary_index(line, column).is_none())
+            })
         }) {
             return false;
         }
@@ -75,7 +75,7 @@ impl Editor {
         true
     }
 
-    fn insert_blank_line(&mut self, line: usize) -> bool {
+    fn insert_blank_line(&mut self, line: i16) -> bool {
         if self.canvas_height() >= MAX_CANVAS_HEIGHT {
             return false;
         }
@@ -94,6 +94,9 @@ impl Editor {
 
     fn pull_column_left(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
+        let Ok(dense_column) = usize::try_from(column) else {
+            return false;
+        };
         let height = self
             .layer_views()
             .into_iter()
@@ -105,17 +108,16 @@ impl Editor {
             layer
                 .lines
                 .iter()
-                .any(|line| cell_slot(line, column) == CellSlot::Interior)
+                .any(|line| cell_slot(line, dense_column) == CellSlot::Interior)
         }) {
             return false;
         }
         let removed = (0..height)
             .map(|row| {
                 views.iter().any(|layer| {
-                    layer
-                        .lines
-                        .get(row)
-                        .is_some_and(|line| matches!(cell_slot(line, column), CellSlot::Exact(_)))
+                    layer.lines.get(row).is_some_and(|line| {
+                        matches!(cell_slot(line, dense_column), CellSlot::Exact(_))
+                    })
                 })
             })
             .collect::<Vec<_>>();
@@ -128,9 +130,22 @@ impl Editor {
             .pull_column_left_in_all_layers(column, &removed)
             .expect("pulled columns fit the sparse canvas");
         self.remap_after_pull(
-            |coord| removed.get(coord.line).copied().unwrap_or(false) && coord.column == column,
+            |coord| {
+                usize::try_from(coord.line)
+                    .ok()
+                    .and_then(|line| removed.get(line))
+                    .copied()
+                    .unwrap_or(false)
+                    && coord.column == column
+            },
             |mut coord| {
-                if removed.get(coord.line).copied().unwrap_or(false) && coord.column > column {
+                if usize::try_from(coord.line)
+                    .ok()
+                    .and_then(|line| removed.get(line))
+                    .copied()
+                    .unwrap_or(false)
+                    && coord.column > column
+                {
                     coord.column -= 1;
                 }
                 coord
@@ -141,12 +156,15 @@ impl Editor {
 
     fn pull_column_right(&mut self) -> bool {
         let column = self.grid.cursor_pos.column.saturating_add(1);
+        let Ok(dense_column) = usize::try_from(column) else {
+            return false;
+        };
         let views = self.layer_views();
         if views.iter().any(|layer| {
             layer
                 .lines
                 .iter()
-                .any(|line| cell_slot(line, column) == CellSlot::Interior)
+                .any(|line| cell_slot(line, dense_column) == CellSlot::Interior)
         }) {
             return false;
         }
@@ -171,9 +189,22 @@ impl Editor {
             .pull_column_right_in_all_layers(column, &affected)
             .expect("pulled columns fit the sparse canvas");
         self.remap_after_pull(
-            |coord| affected.get(coord.line).copied().unwrap_or(false) && coord.column == column,
+            |coord| {
+                usize::try_from(coord.line)
+                    .ok()
+                    .and_then(|line| affected.get(line))
+                    .copied()
+                    .unwrap_or(false)
+                    && coord.column == column
+            },
             |mut coord| {
-                if affected.get(coord.line).copied().unwrap_or(false) && coord.column < column {
+                if usize::try_from(coord.line)
+                    .ok()
+                    .and_then(|line| affected.get(line))
+                    .copied()
+                    .unwrap_or(false)
+                    && coord.column < column
+                {
                     coord.column = coord.column.saturating_add(1);
                 }
                 coord
@@ -187,7 +218,7 @@ impl Editor {
         if self
             .layer_views()
             .into_iter()
-            .all(|layer| target >= layer.lines.len())
+            .all(|layer| usize::try_from(target).map_or(true, |target| target >= layer.lines.len()))
         {
             return false;
         }
@@ -209,31 +240,12 @@ impl Editor {
 
     fn pull_row_down(&mut self) -> bool {
         let cursor_line = self.grid.cursor_pos.line;
-        if cursor_line == 0 {
-            let has_content = self
-                .layer_views()
-                .into_iter()
-                .any(|layer| layer.lines.iter().any(|line| !line.is_empty()));
-            let has_markers = self
-                .layer_contents()
-                .into_iter()
-                .any(|(_, _, markers)| !markers.is_empty());
-            if !has_content && !has_markers && self.active_stroke.is_none() {
-                return false;
-            }
-            if !self.prepend_line() {
-                return false;
-            }
-            self.shape_preview = None;
-            return true;
-        }
-
         let target = cursor_line - 1;
         let has_content = self.layer_views().into_iter().any(|layer| {
             layer
                 .lines
                 .iter()
-                .take(target.saturating_add(1))
+                .take(usize::try_from(target.saturating_add(1)).unwrap_or(0))
                 .any(|line| !line.is_empty())
         });
         let has_markers = self

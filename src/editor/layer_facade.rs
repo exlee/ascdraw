@@ -73,15 +73,9 @@ impl Editor {
         self.canvas = canvas;
     }
 
-    pub fn canvas_origin(&self) -> Coord {
-        self.canvas_origin
-    }
-
-    pub fn restore_canvas_position(&mut self, cursor: Coord, canvas_origin: Coord) {
+    pub fn restore_canvas_position(&mut self, cursor: Coord) {
         let cursor = clamp_canvas_coord(cursor);
-        self.canvas_origin = clamp_canvas_coord(canvas_origin);
         self.grid.cursor_pos = cursor;
-        self.sync_cursor_to_active_layer();
         self.selection.collapse(cursor);
     }
 
@@ -200,10 +194,8 @@ impl Editor {
     }
 
     fn sync_cursor_to_active_layer(&mut self) {
-        self.grid.cursor_pos.column = self
-            .grid
-            .cursor_pos
-            .column
-            .min(self.canvas.active_row_width(self.grid.cursor_pos.line));
+        let row_width = i16::try_from(self.canvas.active_row_width(self.grid.cursor_pos.line))
+            .unwrap_or(i16::MAX);
+        self.grid.cursor_pos.column = self.grid.cursor_pos.column.min(row_width);
     }
 }

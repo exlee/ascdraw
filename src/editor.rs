@@ -33,7 +33,7 @@ mod state;
 mod text_tool;
 mod utility;
 use crate::canvas::LineMarker as PlacedLineMarker;
-pub(super) use grid::{adjacent_coord, edited_content_origin};
+pub(super) use grid::adjacent_coord;
 pub use layers::{LayerView, PersistedLayer};
 use line_preview::LinePreview;
 use line_tool::ActiveStroke;
@@ -61,8 +61,6 @@ pub struct Editor {
     move_lift: Option<MoveLift>,
     jump_mode: Option<JumpMode>,
     single_replace_pending: bool,
-    pending_prepend: (i64, i64),
-    canvas_origin: Coord,
     toolbar_document_changed: bool,
     toolbar_viewport_stable: bool,
     transient_tip: Option<(String, std::time::Instant)>,
@@ -83,7 +81,6 @@ pub struct EditSnapshot {
     cursor_pos: Coord,
     selection: CanvasSelection,
     active_stroke: Option<ActiveStroke>,
-    canvas_origin: Coord,
     canvas: crate::canvas::LayerStack,
 }
 
@@ -92,7 +89,6 @@ impl PartialEq for EditSnapshot {
         self.cursor_pos == other.cursor_pos
             && self.selection == other.selection
             && self.active_stroke == other.active_stroke
-            && self.canvas_origin == other.canvas_origin
             && self.canvas == other.canvas
     }
 }
@@ -101,12 +97,15 @@ impl Eq for EditSnapshot {}
 
 impl EditSnapshot {
     pub fn same_document(&self, other: &Self) -> bool {
-        self.canvas_origin == other.canvas_origin && self.canvas == other.canvas
+        self.canvas == other.canvas
     }
 
     #[cfg(test)]
     pub fn set_cursor_for_test(&mut self, line: usize, column: usize) {
-        self.cursor_pos = Coord { line, column };
+        self.cursor_pos = Coord {
+            line: i16::try_from(line).expect("test line fits signed canvas range"),
+            column: i16::try_from(column).expect("test column fits signed canvas range"),
+        };
         self.selection.collapse(self.cursor_pos);
     }
 }
@@ -258,8 +257,8 @@ impl Editor {
 
     pub fn cursor_coordinates(&self) -> (i128, i128) {
         (
-            self.grid.cursor_pos.column as i128 - self.canvas_origin.column as i128,
-            self.grid.cursor_pos.line as i128 - self.canvas_origin.line as i128,
+            self.grid.cursor_pos.column as i128,
+            self.grid.cursor_pos.line as i128,
         )
     }
 
@@ -499,7 +498,8 @@ impl Editor {
     pub fn move_end(&mut self) {
         self.end_stroke();
         let width = self.canvas.active_row_width(self.grid.cursor_pos.line);
-        self.grid.cursor_pos.column = width.min(MAX_CANVAS_WIDTH - 1);
+        self.grid.cursor_pos.column = i16::try_from(width.min(MAX_CANVAS_WIDTH - 1))
+            .expect("canvas width fits signed coordinate range");
         self.collapse_selection();
     }
 
@@ -517,26 +517,10 @@ impl Editor {
     }
 
     pub fn resolve_pointer_coord(&mut self, line: i64, column: i64) -> Coord {
-        let prepend_lines = (line < 0)
-            .then(|| usize::try_from(line.saturating_neg()).unwrap_or(usize::MAX))
-            .unwrap_or(0);
-        let prepend_columns = (column < 0)
-            .then(|| usize::try_from(column.saturating_neg()).unwrap_or(usize::MAX))
-            .unwrap_or(0);
-        for _ in 0..prepend_lines {
-            if !self.prepend_line() {
-                break;
-            }
+        Coord {
+            line: i16::try_from(line).unwrap_or(if line < 0 { i16::MIN } else { i16::MAX }),
+            column: i16::try_from(column).unwrap_or(if column < 0 { i16::MIN } else { i16::MAX }),
         }
-        for _ in 0..prepend_columns {
-            if !self.prepend_column() {
-                break;
-            }
-        }
-        clamp_canvas_coord(Coord {
-            line: usize::try_from(line.max(0)).unwrap_or(usize::MAX),
-            column: usize::try_from(column.max(0)).unwrap_or(usize::MAX),
-        })
     }
 
     pub fn extend_selection_to(&mut self, coord: Coord) {
@@ -694,17 +678,12 @@ impl Editor {
         let bounds = self.selection.bounds();
         self.canvas.layers().iter().any(|layer| {
             layer.rows().iter().any(|(&line, cells)| {
-                let Ok(line) = usize::try_from(line) else {
-                    return false;
-                };
                 line >= bounds.top
                     && line <= bounds.bottom
                     && cells.iter().any(|(&column, data)| {
-                        usize::try_from(column).is_ok_and(|column| {
-                            column >= bounds.left
-                                && column <= bounds.right
-                                && !data.atom.contents().chars().all(char::is_whitespace)
-                        })
+                        column >= bounds.left
+                            && column <= bounds.right
+                            && !data.atom.contents().chars().all(char::is_whitespace)
                     })
             })
         })
@@ -776,7 +755,7 @@ impl Editor {
             column: self.selection.bounds().left,
         };
         let bounds = rectangle.bounds_at(origin);
-        if bounds.right >= MAX_CANVAS_WIDTH || bounds.bottom >= MAX_CANVAS_HEIGHT {
+        if rectangle.width > MAX_CANVAS_WIDTH || rectangle.rows.len() > MAX_CANVAS_HEIGHT {
             return false;
         }
         self.end_stroke();
@@ -819,7 +798,7 @@ impl Editor {
 
         let origin = self.grid.cursor_pos;
         let bounds = rectangle.bounds_at(origin);
-        if bounds.right >= MAX_CANVAS_WIDTH || bounds.bottom >= MAX_CANVAS_HEIGHT {
+        if rectangle.width > MAX_CANVAS_WIDTH || rectangle.rows.len() > MAX_CANVAS_HEIGHT {
             return false;
         }
         let removed_marker = self
@@ -849,14 +828,12 @@ impl Editor {
         self.canvas = crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())
             .expect("replacement canvas has a base layer");
         self.toolbar.sync_layer_count(self.canvas.layers().len());
-        self.canvas_origin = edited_content_origin(&lines).unwrap_or_default();
         self.grid.cursor_pos = Coord::default();
         self.active_stroke = None;
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
-        self.pending_prepend = (0, 0);
         self.toolbar.cancel_shortcut();
         self.selection.collapse(Coord::default());
         self.sync_cursor_mode_with_toolbar();
@@ -871,15 +848,6 @@ impl Editor {
         menu_selections: &DurableMenuSelections,
     ) -> anyhow::Result<()> {
         self.restore_layers(layers, active_layer)?;
-        self.canvas_origin = self
-            .layer_views()
-            .into_iter()
-            .filter_map(|layer| edited_content_origin(&layer.lines))
-            .reduce(|origin, candidate| Coord {
-                line: origin.line.min(candidate.line),
-                column: origin.column.min(candidate.column),
-            })
-            .unwrap_or_default();
         self.restore_menu_selections(menu_selections);
         let cursor = clamp_canvas_coord(cursor);
         self.grid.cursor_pos = cursor;
@@ -892,7 +860,6 @@ impl Editor {
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
-        self.pending_prepend = (0, 0);
         self.sync_cursor_mode_with_toolbar();
         Ok(())
     }
@@ -909,7 +876,6 @@ impl Editor {
         self.shape_preview = None;
         self.move_lift = None;
         self.single_replace_pending = false;
-        self.pending_prepend = (0, 0);
         self.toolbar.cancel_shortcut();
         self.selection.collapse(cursor);
         self.sync_cursor_mode_with_toolbar();
@@ -947,10 +913,6 @@ impl Editor {
 
     /// Positive values compensate for prepended cells; negative values undo
     /// that compensation when a transient edit restores its source snapshot.
-    pub fn take_pending_prepend(&mut self) -> (i64, i64) {
-        std::mem::take(&mut self.pending_prepend)
-    }
-
     pub fn content_cells(&self) -> Vec<Coord> {
         self.sparse_content_cells(false)
     }
@@ -968,16 +930,10 @@ impl Editor {
             .filter(|layer| include_hidden || layer.visible)
         {
             for (&line, row) in layer.rows() {
-                let Ok(line) = usize::try_from(line) else {
-                    continue;
-                };
                 for (&column, data) in row {
                     if data.atom.contents().chars().all(char::is_whitespace) {
                         continue;
                     }
-                    let Ok(column) = usize::try_from(column) else {
-                        continue;
-                    };
                     cells.push(Coord { line, column });
                 }
             }
@@ -991,99 +947,36 @@ impl Editor {
 
     fn prepare_adjacent(&mut self, direction: Direction) -> Option<bool> {
         self.commit_canvas();
-        match direction {
-            Direction::Up if self.grid.cursor_pos.line == 0 => {
-                if !self.prepend_line() {
-                    return None;
-                }
-                self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
-                Some(true)
-            }
-            Direction::Left if self.grid.cursor_pos.column == 0 => {
-                if !self.prepend_column() {
-                    return None;
-                }
-                self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
-                Some(true)
-            }
-            _ => adjacent_coord(self.grid.cursor_pos, direction).map(|_| false),
-        }
-    }
-
-    fn prepend_line(&mut self) -> bool {
-        if self.canvas_height() >= MAX_CANVAS_HEIGHT {
-            return false;
-        }
-        self.canvas.prepend_line_in_all_layers();
-        self.grid.cursor_pos.line = self.grid.cursor_pos.line.saturating_add(1);
-        self.selection.shift(0, 1);
-        if let Some(stroke) = self.active_stroke.as_mut() {
-            stroke.end.line = stroke.end.line.saturating_add(1);
-        }
-        self.shift_line_preview(0, 1);
-        if let Some(preview) = self.shape_preview.as_mut() {
-            preview.anchor.line = preview.anchor.line.saturating_add(1);
-            preview.end.line = preview.end.line.saturating_add(1);
-        }
-        self.pending_prepend.1 = self.pending_prepend.1.saturating_add(1);
-        true
-    }
-
-    fn prepend_column(&mut self) -> bool {
-        if self.canvas_width() >= MAX_CANVAS_WIDTH {
-            return false;
-        }
-        self.canvas.prepend_column_in_all_layers();
-        self.grid.cursor_pos.column = self.grid.cursor_pos.column.saturating_add(1);
-        self.selection.shift(1, 0);
-        if let Some(stroke) = self.active_stroke.as_mut() {
-            stroke.end.column = stroke.end.column.saturating_add(1);
-        }
-        self.shift_line_preview(1, 0);
-        if let Some(preview) = self.shape_preview.as_mut() {
-            preview.anchor.column = preview.anchor.column.saturating_add(1);
-            preview.end.column = preview.end.column.saturating_add(1);
-        }
-        self.pending_prepend.0 = self.pending_prepend.0.saturating_add(1);
-        true
+        adjacent_coord(self.grid.cursor_pos, direction).map(|_| false)
     }
 
     fn canvas_height(&self) -> usize {
-        let stored_height = self
-            .canvas
-            .bounds()
-            .and_then(|bounds| usize::try_from(bounds.max_y).ok())
-            .map_or(1, |bottom| bottom.saturating_add(1));
-        stored_height.max(
-            self.selection
-                .bounds()
-                .bottom
-                .max(self.grid.cursor_pos.line)
-                .saturating_add(1),
-        )
+        let selection = self.selection.bounds();
+        let (mut top, mut bottom) = (selection.top, selection.bottom);
+        top = top.min(self.grid.cursor_pos.line);
+        bottom = bottom.max(self.grid.cursor_pos.line);
+        if let Some(bounds) = self.canvas.bounds() {
+            top = top.min(bounds.min_y);
+            bottom = bottom.max(bounds.max_y);
+        }
+        usize::try_from(i32::from(bottom) - i32::from(top) + 1).unwrap_or(usize::MAX)
     }
 
     fn canvas_width(&self) -> usize {
-        let stored_width = self
-            .canvas
-            .bounds()
-            .and_then(|bounds| usize::try_from(bounds.max_x).ok())
-            .map_or(0, |right| right.saturating_add(1));
-        stored_width.max(
-            self.selection
-                .bounds()
-                .right
-                .max(self.grid.cursor_pos.column)
-                .saturating_add(1),
-        )
+        let selection = self.selection.bounds();
+        let (mut left, mut right) = (selection.left, selection.right);
+        left = left.min(self.grid.cursor_pos.column);
+        right = right.max(self.grid.cursor_pos.column);
+        if let Some(bounds) = self.canvas.bounds() {
+            left = left.min(bounds.min_x);
+            right = right.max(bounds.max_x);
+        }
+        usize::try_from(i32::from(right) - i32::from(left) + 1).unwrap_or(usize::MAX)
     }
 }
 
 fn clamp_canvas_coord(coord: Coord) -> Coord {
-    Coord {
-        line: coord.line.min(MAX_CANVAS_HEIGHT - 1),
-        column: coord.column.min(MAX_CANVAS_WIDTH - 1),
-    }
+    coord
 }
 
 fn truncate_canvas_lines(lines: &mut Vec<Vec<StyledAtom>>) {

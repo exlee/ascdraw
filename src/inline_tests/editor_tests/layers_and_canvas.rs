@@ -170,7 +170,7 @@ fn cursor_coordinates_use_downward_positive_screen_coordinates() {
 }
 
 #[test]
-fn loaded_document_origin_is_its_top_left_edited_cell_and_stays_fixed() {
+fn cursor_coordinates_are_absolute_signed_canvas_coordinates() {
     let mut state = state();
     state.replace_canvas(vec![
         Vec::new(),
@@ -183,15 +183,15 @@ fn loaded_document_origin_is_its_top_left_edited_cell_and_stays_fixed() {
         ],
     ]);
 
-    assert_eq!(state.cursor_coordinates(), (-1, -1));
-    state.move_to(Coord { line: 1, column: 1 });
     assert_eq!(state.cursor_coordinates(), (0, 0));
+    state.move_to(Coord { line: 1, column: 1 });
+    assert_eq!(state.cursor_coordinates(), (1, 1));
 
     state.move_cursor(Direction::Left);
     state.place_stamp();
-    assert_eq!(state.cursor_coordinates(), (-1, 0));
+    assert_eq!(state.cursor_coordinates(), (0, 1));
     state.clear_selection();
-    assert_eq!(state.cursor_coordinates(), (-1, 0));
+    assert_eq!(state.cursor_coordinates(), (0, 1));
 }
 
 #[test]
@@ -679,7 +679,6 @@ fn edit_snapshot_restores_document_cursor_selection_and_line_continuation_only()
     assert_eq!(state.window_title, "current title");
     assert_eq!(state.theme.selection.fg, "#123456");
     assert!(state.shape_preview.is_none());
-    assert_eq!(state.pending_prepend, (0, 0));
 }
 
 #[test]
@@ -759,7 +758,6 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
         end: Coord { line: 3, column: 4 },
     });
     state.single_replace_pending = true;
-    state.pending_prepend = (2, 3);
 
     state.clear_canvas();
 
@@ -772,7 +770,6 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
     assert!(state.line_markers_for_test().is_empty());
     assert!(state.shape_preview.is_none());
     assert!(!state.single_replace_pending);
-    assert_eq!(state.pending_prepend, (0, 0));
     assert_eq!(state.cursor_mode, CursorMode::Stamp);
 }
 
@@ -804,10 +801,9 @@ fn clear_canvas_preserves_a_far_cursor_and_later_inserts_there() {
     assert_eq!(state.lines_for_test(), vec![Vec::new()]);
 
     state.insert("x");
-    assert_eq!(
-        state.lines_for_test()[cursor.line][cursor.column].contents,
-        "x"
-    );
+    let line = usize::try_from(cursor.line).unwrap();
+    let column = usize::try_from(cursor.column).unwrap();
+    assert_eq!(state.lines_for_test()[line][column].contents, "x");
     assert_eq!(
         state.grid.cursor_pos,
         Coord {
@@ -899,13 +895,18 @@ fn erasing_a_display_cell_removes_trailing_implicit_blanks() {
 }
 
 #[test]
-fn blank_origin_erasing_prepends_safely_but_reports_no_document_edit() {
+fn blank_origin_erasing_moves_into_implicit_space_without_document_edit() {
     let mut state = state();
 
     assert!(!state.erase(Direction::Left));
 
-    assert_eq!(state.grid.cursor_pos, Coord::default());
-    assert_eq!(state.take_pending_prepend(), (1, 0));
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: 0,
+            column: -1
+        }
+    );
     assert!(state.selection.is_collapsed());
 }
 

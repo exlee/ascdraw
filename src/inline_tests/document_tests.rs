@@ -27,7 +27,6 @@ fn sparse_json_round_trip_and_canonical_deletion() {
     }];
     let position = CanvasPosition {
         cursor: Coord::default(),
-        canvas_origin: Coord::default(),
         viewport: ViewportOffset::default(),
         zoom: 0,
     };
@@ -60,17 +59,17 @@ fn sparse_json_normalizes_coordinates_and_deduplicates_faces() {
         ..Face::default()
     };
     let mut layer = LayerMap::new(LayerId(0), true);
-    layer.set_at(10, 7, Atom::new("x").unwrap(), &face).unwrap();
-    layer.set_at(12, 8, Atom::new("y").unwrap(), &face).unwrap();
+    layer
+        .set_at(-10, -7, Atom::new("x").unwrap(), &face)
+        .unwrap();
+    layer
+        .set_at(-8, -6, Atom::new("y").unwrap(), &face)
+        .unwrap();
     let canvas = LayerStack::new(vec![layer], true).unwrap();
     let position = CanvasPosition {
         cursor: Coord {
-            line: 8,
-            column: 12,
-        },
-        canvas_origin: Coord {
-            line: 7,
-            column: 10,
+            line: -6,
+            column: -8,
         },
         viewport: ViewportOffset { x: -120, y: -70 },
         zoom: 0,
@@ -91,8 +90,7 @@ fn sparse_json_normalizes_coordinates_and_deduplicates_faces() {
         sparse.position,
         Some(CanvasPosition {
             cursor: Coord { line: 1, column: 2 },
-            canvas_origin: Coord::default(),
-            viewport: ViewportOffset { x: -20, y: 0 },
+            viewport: ViewportOffset { x: -220, y: -140 },
             zoom: 0,
         })
     );

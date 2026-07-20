@@ -24,9 +24,9 @@ pub struct JumpBounds {
 impl JumpBounds {
     fn center(self) -> Coord {
         Coord {
-            line: usize::try_from(self.line + i64::try_from(self.rows / 2).unwrap_or(i64::MAX))
+            line: i16::try_from(self.line + i64::try_from(self.rows / 2).unwrap_or(i64::MAX))
                 .unwrap_or_default(),
-            column: usize::try_from(
+            column: i16::try_from(
                 self.column + i64::try_from(self.columns / 2).unwrap_or(i64::MAX),
             )
             .unwrap_or_default(),
@@ -324,8 +324,8 @@ mod tests {
         JumpMode::new(
             visible(columns, rows),
             Coord {
-                line: rows / 2,
-                column: columns / 2,
+                line: i16::try_from(rows / 2).unwrap(),
+                column: i16::try_from(columns / 2).unwrap(),
             },
             Duration::from_millis(10),
         )

@@ -12,10 +12,10 @@ pub struct CanvasSelection {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SelectionBounds {
-    pub left: usize,
-    pub right: usize,
-    pub top: usize,
-    pub bottom: usize,
+    pub left: i16,
+    pub right: i16,
+    pub top: i16,
+    pub bottom: i16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +29,8 @@ pub struct CanvasRegion {
 impl CanvasRegion {
     pub fn from_selection(bounds: SelectionBounds) -> Self {
         Self {
-            left: i64::try_from(bounds.left).unwrap_or(i64::MAX),
-            top: i64::try_from(bounds.top).unwrap_or(i64::MAX),
+            left: i64::from(bounds.left),
+            top: i64::from(bounds.top),
             width: bounds.width(),
             height: bounds.height(),
         }
@@ -81,6 +81,8 @@ impl CanvasSelection {
     }
 
     pub fn shift(&mut self, columns: usize, lines: usize) {
+        let columns = i16::try_from(columns).unwrap_or(i16::MAX);
+        let lines = i16::try_from(lines).unwrap_or(i16::MAX);
         self.anchor.column = self.anchor.column.saturating_add(columns);
         self.anchor.line = self.anchor.line.saturating_add(lines);
         self.active.column = self.active.column.saturating_add(columns);
@@ -124,13 +126,13 @@ impl TextRectangle {
     }
 
     pub fn bounds_at(&self, origin: Coord) -> SelectionBounds {
+        let width = i16::try_from(self.width.saturating_sub(1)).unwrap_or(i16::MAX);
+        let height = i16::try_from(self.rows.len().saturating_sub(1)).unwrap_or(i16::MAX);
         SelectionBounds {
             left: origin.column,
-            right: origin.column.saturating_add(self.width.saturating_sub(1)),
+            right: origin.column.saturating_add(width),
             top: origin.line,
-            bottom: origin
-                .line
-                .saturating_add(self.rows.len().saturating_sub(1)),
+            bottom: origin.line.saturating_add(height),
         }
     }
 }
@@ -141,24 +143,33 @@ pub fn overwrite_rectangle(
     rectangle: &TextRectangle,
 ) {
     let bounds = rectangle.bounds_at(origin);
-    while lines.len() <= bounds.bottom {
+    let Ok(top) = usize::try_from(bounds.top) else {
+        return;
+    };
+    let Ok(bottom) = usize::try_from(bounds.bottom) else {
+        return;
+    };
+    let Ok(left) = usize::try_from(bounds.left) else {
+        return;
+    };
+    let Ok(right) = usize::try_from(bounds.right) else {
+        return;
+    };
+    while lines.len() <= bottom {
         lines.push(Vec::new());
     }
-    for (line, replacement) in lines[bounds.top..=bounds.bottom]
-        .iter_mut()
-        .zip(&rectangle.rows)
-    {
-        replace_line_range_with_atoms(line, bounds.left, bounds.right, replacement);
+    for (line, replacement) in lines[top..=bottom].iter_mut().zip(&rectangle.rows) {
+        replace_line_range_with_atoms(line, left, right, replacement);
     }
 }
 
 impl SelectionBounds {
     pub fn width(self) -> usize {
-        self.right.saturating_sub(self.left).saturating_add(1)
+        usize::try_from(i32::from(self.right) - i32::from(self.left) + 1).unwrap_or(0)
     }
 
     pub fn height(self) -> usize {
-        self.bottom.saturating_sub(self.top).saturating_add(1)
+        usize::try_from(i32::from(self.bottom) - i32::from(self.top) + 1).unwrap_or(0)
     }
 
     pub fn contains(self, coord: Coord) -> bool {
@@ -168,21 +179,11 @@ impl SelectionBounds {
 }
 
 pub fn selected_text(lines: &[Vec<StyledAtom>], bounds: SelectionBounds) -> String {
-    let mut rows = Vec::with_capacity(bounds.height());
-    for line_index in bounds.top..=bounds.bottom {
-        let line = lines.get(line_index).map(Vec::as_slice).unwrap_or_default();
-        rows.push(selected_line_text(line, bounds.left, bounds.right));
-    }
-    rows.join("\n")
+    region_text(lines, CanvasRegion::from_selection(bounds))
 }
 
 pub fn selected_atoms(lines: &[Vec<StyledAtom>], bounds: SelectionBounds) -> Vec<Vec<StyledAtom>> {
-    (bounds.top..=bounds.bottom)
-        .map(|line_index| {
-            let line = lines.get(line_index).map(Vec::as_slice).unwrap_or_default();
-            selected_line_atoms(line, bounds.left, bounds.right)
-        })
-        .collect()
+    region_atoms(lines, CanvasRegion::from_selection(bounds))
 }
 
 pub fn region_atoms(lines: &[Vec<StyledAtom>], region: CanvasRegion) -> Vec<Vec<StyledAtom>> {
@@ -275,52 +276,20 @@ pub fn replace_range(
     bounds: SelectionBounds,
     replacement: Option<&str>,
 ) {
-    while lines.len() <= bounds.bottom {
+    let (Ok(top), Ok(bottom), Ok(left), Ok(right)) = (
+        usize::try_from(bounds.top),
+        usize::try_from(bounds.bottom),
+        usize::try_from(bounds.left),
+        usize::try_from(bounds.right),
+    ) else {
+        return;
+    };
+    while lines.len() <= bottom {
         lines.push(Vec::new());
     }
-    for line in &mut lines[bounds.top..=bounds.bottom] {
-        replace_line_range(line, bounds.left, bounds.right, replacement);
+    for line in &mut lines[top..=bottom] {
+        replace_line_range(line, left, right, replacement);
     }
-}
-
-fn selected_line_text(line: &[StyledAtom], left: usize, right: usize) -> String {
-    let width = SelectionBounds {
-        left,
-        right,
-        top: 0,
-        bottom: 0,
-    }
-    .width();
-    let mut result = String::new();
-    let mut result_width = 0;
-    let mut column: usize = 0;
-    for atom in line {
-        let atom_width = atom_width(atom);
-        let end = column.saturating_add(atom_width);
-        if end <= left {
-            column = end;
-            continue;
-        }
-        if column > right {
-            break;
-        }
-        let overlap_start = column.max(left);
-        let overlap_end = end.min(right.saturating_add(1));
-        if overlap_start > left.saturating_add(result_width) {
-            push_spaces(&mut result, overlap_start - left - result_width);
-            result_width = overlap_start - left;
-        }
-        let overlap_width = overlap_end.saturating_sub(overlap_start);
-        if column >= left && end <= right.saturating_add(1) {
-            result.push_str(&atom.contents);
-        } else {
-            push_spaces(&mut result, overlap_width);
-        }
-        result_width = result_width.saturating_add(overlap_width);
-        column = end;
-    }
-    push_spaces(&mut result, width.saturating_sub(result_width));
-    result
 }
 
 fn replace_line_range(
@@ -421,10 +390,6 @@ fn blank_atom() -> StyledAtom {
         face: Face::default(),
         contents: " ".to_string(),
     }
-}
-
-fn push_spaces(target: &mut String, count: usize) {
-    target.extend(std::iter::repeat_n(' ', count));
 }
 
 #[cfg(test)]

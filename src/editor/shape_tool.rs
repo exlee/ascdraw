@@ -3,7 +3,7 @@ use crate::canvas::LayerStack;
 use crate::drawing::{LineStyle, glyph_with_connection};
 #[cfg(test)]
 use crate::model::StyledAtom;
-use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{Atom, Coord, Direction};
 use crate::toolbar::ShapeKind;
 
 use super::{Editor, ShapePreview};
@@ -41,18 +41,6 @@ impl Editor {
             return true;
         }
         if had_selection {
-            let bounds = self.selection.bounds();
-            if bounds.right.saturating_add(1) >= MAX_CANVAS_WIDTH
-                || bounds.bottom.saturating_add(1) >= MAX_CANVAS_HEIGHT
-            {
-                return false;
-            }
-            if bounds.top == 0 && !self.prepend_line() {
-                return false;
-            }
-            if bounds.left == 0 && !self.prepend_column() {
-                return false;
-            }
             let bounds = self.selection.bounds();
             self.shape_preview = Some(ShapePreview {
                 anchor: Coord {
@@ -132,10 +120,10 @@ impl Editor {
 }
 
 fn rectangle_cells(
-    left: usize,
-    right: usize,
-    top: usize,
-    bottom: usize,
+    left: i16,
+    right: i16,
+    top: i16,
+    bottom: i16,
     style: LineStyle,
     rounded: bool,
     fill: Option<&str>,

@@ -1,9 +1,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::{LayerMap, LayerStack, LineData};
-use crate::model::{
-    Atom, Coord, Direction, Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom,
-};
+use crate::model::{Atom, Coord, Direction, Face, LayerId, StyledAtom};
 use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
 
 use super::{EditSnapshot, Editor, PlacedLineMarker};
@@ -15,8 +13,6 @@ pub(super) struct MoveLift {
     source_cursor: Coord,
     source_bounds: SelectionBounds,
     origin: Coord,
-    prepended_columns: usize,
-    prepended_lines: usize,
     clone_origins: Vec<Coord>,
     last_clone_press: Option<u64>,
     width: usize,
@@ -91,8 +87,6 @@ impl Editor {
                 line: source_bounds.top,
                 column: source_bounds.left,
             },
-            prepended_columns: 0,
-            prepended_lines: 0,
             clone_origins: Vec::new(),
             last_clone_press: None,
             width: source_bounds.width(),
@@ -105,63 +99,10 @@ impl Editor {
     }
 
     pub fn move_lift(&mut self, direction: Direction) -> bool {
-        let prepend = self.move_lift.as_ref().map(|lift| match direction {
-            Direction::Up if lift.origin.line == 0 => (0, 1),
-            Direction::Left if lift.origin.column == 0 => (1, 0),
-            _ => (0, 0),
-        });
-        match prepend {
-            Some((1, 0)) => {
-                if !self.prepend_column() {
-                    return false;
-                }
-                self.canvas_origin.column = self.canvas_origin.column.saturating_add(1);
-                self.move_lift
-                    .as_mut()
-                    .expect("move lift remains active after prepend")
-                    .shift(1, 0);
-            }
-            Some((0, 1)) => {
-                if !self.prepend_line() {
-                    return false;
-                }
-                self.canvas_origin.line = self.canvas_origin.line.saturating_add(1);
-                self.move_lift
-                    .as_mut()
-                    .expect("move lift remains active after prepend")
-                    .shift(0, 1);
-            }
-            Some((0, 0)) => {}
-            Some(_) => unreachable!("move lift prepends at most one row or column"),
-            None => return false,
-        }
         let Some(lift) = self.move_lift.as_mut() else {
             return false;
         };
-        let bounds = lift.bounds();
-        if direction == Direction::Right && bounds.right.saturating_add(1) >= MAX_CANVAS_WIDTH
-            || direction == Direction::Down && bounds.bottom.saturating_add(1) >= MAX_CANVAS_HEIGHT
-        {
-            return false;
-        }
-        let next = match direction {
-            Direction::Up => lift.origin.line.checked_sub(1).map(|line| Coord {
-                line,
-                column: lift.origin.column,
-            }),
-            Direction::Left => lift.origin.column.checked_sub(1).map(|column| Coord {
-                line: lift.origin.line,
-                column,
-            }),
-            Direction::Down => Some(Coord {
-                line: lift.origin.line.saturating_add(1),
-                column: lift.origin.column,
-            }),
-            Direction::Right => Some(Coord {
-                line: lift.origin.line,
-                column: lift.origin.column.saturating_add(1),
-            }),
-        };
+        let next = super::adjacent_coord(lift.origin, direction);
         let Some(next) = next else {
             return false;
         };
@@ -284,12 +225,7 @@ impl Editor {
     }
 
     fn restore_move_lift_source(&mut self, lift: MoveLift) {
-        let prefix_shift = (
-            -i64::try_from(lift.prepended_columns).unwrap_or(i64::MAX),
-            -i64::try_from(lift.prepended_lines).unwrap_or(i64::MAX),
-        );
         self.restore_edit_snapshot(lift.source_snapshot);
-        self.pending_prepend = prefix_shift;
     }
 }
 
@@ -338,13 +274,8 @@ fn apply_sparse_move(
     for origin in destinations {
         for atom in &layer.edited_atoms {
             let coord = offset_origin(*origin, atom.offset);
-            map.set_at(
-                i16::try_from(coord.column).expect("validated move column"),
-                i16::try_from(coord.line).expect("validated move line"),
-                atom.atom.clone(),
-                &atom.face,
-            )
-            .expect("moved atom occupies one sparse cell");
+            map.set_at(coord.column, coord.line, atom.atom.clone(), &atom.face)
+                .expect("moved atom occupies one sparse cell");
         }
         for marker in &layer.markers {
             let coord = offset_origin(*origin, marker.coord);
@@ -361,35 +292,13 @@ fn apply_sparse_move(
 
 impl MoveLift {
     fn bounds(&self) -> SelectionBounds {
+        let width = i16::try_from(self.width.saturating_sub(1)).unwrap_or(i16::MAX);
+        let height = i16::try_from(self.height.saturating_sub(1)).unwrap_or(i16::MAX);
         SelectionBounds {
             left: self.origin.column,
-            right: self
-                .origin
-                .column
-                .saturating_add(self.width.saturating_sub(1)),
+            right: self.origin.column.saturating_add(width),
             top: self.origin.line,
-            bottom: self
-                .origin
-                .line
-                .saturating_add(self.height.saturating_sub(1)),
-        }
-    }
-
-    fn shift(&mut self, columns: usize, lines: usize) {
-        self.prepended_columns = self.prepended_columns.saturating_add(columns);
-        self.prepended_lines = self.prepended_lines.saturating_add(lines);
-        self.source_selection.shift(columns, lines);
-        self.source_cursor.column = self.source_cursor.column.saturating_add(columns);
-        self.source_cursor.line = self.source_cursor.line.saturating_add(lines);
-        self.source_bounds.left = self.source_bounds.left.saturating_add(columns);
-        self.source_bounds.right = self.source_bounds.right.saturating_add(columns);
-        self.source_bounds.top = self.source_bounds.top.saturating_add(lines);
-        self.source_bounds.bottom = self.source_bounds.bottom.saturating_add(lines);
-        self.origin.column = self.origin.column.saturating_add(columns);
-        self.origin.line = self.origin.line.saturating_add(lines);
-        for origin in &mut self.clone_origins {
-            origin.column = origin.column.saturating_add(columns);
-            origin.line = origin.line.saturating_add(lines);
+            bottom: self.origin.line.saturating_add(height),
         }
     }
 }
@@ -397,10 +306,12 @@ impl MoveLift {
 fn lifted_edited_atoms(rectangle: &TextRectangle) -> Vec<LiftedAtom> {
     let mut lifted = Vec::new();
     for (line, row) in rectangle.rows.iter().enumerate() {
-        let mut column = 0;
+        let mut column: usize = 0;
         for atom in row {
             let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
             if !atom.contents.chars().all(char::is_whitespace) {
+                let line = i16::try_from(line).expect("lifted line fits signed canvas range");
+                let column = i16::try_from(column).expect("lifted column fits signed canvas range");
                 lifted.push(LiftedAtom {
                     offset: Coord { line, column },
                     width,
@@ -417,12 +328,13 @@ fn lifted_edited_atoms(rectangle: &TextRectangle) -> Vec<LiftedAtom> {
 
 fn lifted_atoms_cover(atoms: &[LiftedAtom], origin: Coord, coord: Coord) -> bool {
     atoms.iter().any(|atom| {
+        let width = i16::try_from(atom.width).unwrap_or(i16::MAX);
         coord.line == origin.line.saturating_add(atom.offset.line)
             && (origin.column.saturating_add(atom.offset.column)
                 ..origin
                     .column
                     .saturating_add(atom.offset.column)
-                    .saturating_add(atom.width))
+                    .saturating_add(width))
                 .contains(&coord.column)
     })
 }
@@ -439,7 +351,9 @@ fn lifted_atom_bounds(origin: Coord, atom: &LiftedAtom) -> SelectionBounds {
     let origin = offset_origin(origin, atom.offset);
     SelectionBounds {
         left: origin.column,
-        right: origin.column.saturating_add(atom.width.saturating_sub(1)),
+        right: origin
+            .column
+            .saturating_add(i16::try_from(atom.width.saturating_sub(1)).unwrap_or(i16::MAX)),
         top: origin.line,
         bottom: origin.line,
     }
@@ -454,7 +368,19 @@ fn offset_origin(origin: Coord, offset: Coord) -> Coord {
 
 fn offset_coord(coord: Coord, line_delta: i128, column_delta: i128) -> Coord {
     Coord {
-        line: usize::try_from(coord.line as i128 + line_delta).unwrap_or(0),
-        column: usize::try_from(coord.column as i128 + column_delta).unwrap_or(0),
+        line: i16::try_from(coord.line as i128 + line_delta).unwrap_or_else(|_| {
+            if line_delta.is_negative() {
+                i16::MIN
+            } else {
+                i16::MAX
+            }
+        }),
+        column: i16::try_from(coord.column as i128 + column_delta).unwrap_or_else(|_| {
+            if column_delta.is_negative() {
+                i16::MIN
+            } else {
+                i16::MAX
+            }
+        }),
     }
 }

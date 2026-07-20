@@ -49,7 +49,6 @@ pub struct Document {
 #[serde(rename_all = "kebab-case")]
 pub struct CanvasPosition {
     pub cursor: Coord,
-    pub canvas_origin: Coord,
     pub viewport: ViewportOffset,
     #[serde(default)]
     pub zoom: i32,
@@ -261,10 +260,9 @@ pub fn contents(
         .bounds()
         .map_or((0, 0), |bounds| (bounds.min_x, bounds.min_y));
     position.cursor = shifted_coord(position.cursor, origin_x, origin_y);
-    position.canvas_origin = shifted_coord(position.canvas_origin, origin_x, origin_y);
     position
         .viewport
-        .compensate_for_prepend(-i64::from(origin_x), -i64::from(origin_y), cell_size);
+        .translate_canvas(-i64::from(origin_x), -i64::from(origin_y), cell_size);
 
     let mut faces = Vec::new();
     let mut face_ids = HashMap::new();
@@ -313,9 +311,8 @@ fn normalized_key(value: i16, origin: i16) -> Result<i16> {
 }
 
 fn shifted_coord(coord: Coord, origin_x: i16, origin_y: i16) -> Coord {
-    fn shift(value: usize, origin: i16) -> usize {
-        let value = i64::try_from(value).unwrap_or(i64::MAX);
-        usize::try_from(value.saturating_sub(i64::from(origin)).max(0)).unwrap_or(usize::MAX)
+    fn shift(value: i16, origin: i16) -> i16 {
+        value.saturating_sub(origin)
     }
     Coord {
         line: shift(coord.line, origin_y),

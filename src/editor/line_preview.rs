@@ -13,8 +13,6 @@ use super::{Editor, adjacent_coord};
 struct RoutedSegment {
     end: Coord,
     routing: RoutingMode,
-    prepended_columns: usize,
-    prepended_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,10 +23,7 @@ pub(super) struct LinePreview {
     pub(super) source_canvas: crate::canvas::LayerStack,
     pub(super) source_cursor: Coord,
     pub(super) source_selection: CanvasSelection,
-    pub(super) source_canvas_origin: Coord,
     rendered_canvas: crate::canvas::LayerStack,
-    prepended_columns: usize,
-    prepended_lines: usize,
 }
 
 impl LinePreview {
@@ -40,25 +35,6 @@ impl LinePreview {
         self.segments
             .last()
             .map_or(self.start, |segment| segment.end)
-    }
-
-    fn settled_prepends(&self) -> (usize, usize) {
-        self.segments.last().map_or((0, 0), |segment| {
-            (segment.prepended_columns, segment.prepended_lines)
-        })
-    }
-
-    pub(super) fn shift(&mut self, columns: usize, lines: usize) {
-        self.start.column = self.start.column.saturating_add(columns);
-        self.start.line = self.start.line.saturating_add(lines);
-        for segment in &mut self.segments {
-            segment.end.column = segment.end.column.saturating_add(columns);
-            segment.end.line = segment.end.line.saturating_add(lines);
-        }
-        self.end.column = self.end.column.saturating_add(columns);
-        self.end.line = self.end.line.saturating_add(lines);
-        self.prepended_columns = self.prepended_columns.saturating_add(columns);
-        self.prepended_lines = self.prepended_lines.saturating_add(lines);
     }
 }
 
@@ -92,8 +68,6 @@ impl Editor {
         preview.segments.push(RoutedSegment {
             end: preview.end,
             routing,
-            prepended_columns: preview.prepended_columns,
-            prepended_lines: preview.prepended_lines,
         });
         self.apply_composed_line_preview(false)
     }
@@ -128,10 +102,7 @@ impl Editor {
             source_canvas: self.canvas.clone(),
             source_cursor: self.grid.cursor_pos,
             source_selection,
-            source_canvas_origin: self.canvas_origin,
             rendered_canvas: self.canvas.clone(),
-            prepended_columns: 0,
-            prepended_lines: 0,
         });
     }
 
@@ -174,17 +145,6 @@ impl Editor {
         let Some(_) = preview.segments.pop() else {
             return false;
         };
-        let (columns, lines) = preview.settled_prepends();
-        let remove_columns = preview.prepended_columns.saturating_sub(columns);
-        let remove_lines = preview.prepended_lines.saturating_sub(lines);
-        preview.start.column = preview.start.column.saturating_sub(remove_columns);
-        preview.start.line = preview.start.line.saturating_sub(remove_lines);
-        for segment in &mut preview.segments {
-            segment.end.column = segment.end.column.saturating_sub(remove_columns);
-            segment.end.line = segment.end.line.saturating_sub(remove_lines);
-        }
-        preview.prepended_columns = columns;
-        preview.prepended_lines = lines;
         preview.end = preview.anchor();
         self.apply_composed_line_preview(false);
         self.refresh_line_preview_render();
@@ -200,19 +160,12 @@ impl Editor {
             self.canvas = preview.source_canvas;
             self.grid.cursor_pos = preview.source_cursor;
             self.selection = preview.source_selection;
-            self.canvas_origin = preview.source_canvas_origin;
         } else {
             self.apply_composed_line_preview(false);
             self.line_preview = None;
             self.active_stroke = None;
         }
         true
-    }
-
-    pub(super) fn shift_line_preview(&mut self, columns: usize, lines: usize) {
-        if let Some(preview) = self.line_preview.as_mut() {
-            preview.shift(columns, lines);
-        }
     }
 
     #[cfg(test)]
@@ -245,24 +198,13 @@ impl Editor {
         self.grid.cursor_pos = composed.grid.cursor_pos;
         self.selection.collapse(self.grid.cursor_pos);
         self.canvas = composed.canvas;
-        self.canvas_origin = composed.canvas_origin;
         self.active_stroke = None;
         changed
     }
 
     fn composed_line_preview_state(&self, include_active: bool) -> Option<Self> {
         let preview = self.line_preview.as_ref()?;
-        let (columns, lines) = if include_active {
-            (preview.prepended_columns, preview.prepended_lines)
-        } else {
-            preview.settled_prepends()
-        };
-        let subtract_columns = preview.prepended_columns.saturating_sub(columns);
-        let subtract_lines = preview.prepended_lines.saturating_sub(lines);
-        let adjust = |coord: Coord| Coord {
-            line: coord.line.saturating_sub(subtract_lines),
-            column: coord.column.saturating_sub(subtract_columns),
-        };
+        let adjust = |coord: Coord| coord;
 
         let mut composed = self.clone();
         composed.line_preview = None;
@@ -270,16 +212,6 @@ impl Editor {
         composed.move_lift = None;
         composed.active_stroke = None;
         composed.canvas = preview.source_canvas.clone();
-        for _ in 0..lines {
-            composed.canvas.prepend_line_in_all_layers();
-        }
-        for _ in 0..columns {
-            composed.canvas.prepend_column_in_all_layers();
-        }
-        composed.canvas_origin = Coord {
-            line: preview.source_canvas_origin.line.saturating_add(lines),
-            column: preview.source_canvas_origin.column.saturating_add(columns),
-        };
         let start = adjust(preview.start);
         composed.grid.cursor_pos = start;
         composed.selection.collapse(start);

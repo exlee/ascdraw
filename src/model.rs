@@ -83,8 +83,8 @@ impl Atom {
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Coord {
-    pub line: usize,
-    pub column: usize,
+    pub line: i16,
+    pub column: i16,
 }
 
 pub const MAX_CANVAS_WIDTH: usize = 20_000;

@@ -60,19 +60,36 @@ fn selection_extension_keeps_its_anchor_and_normal_movement_collapses() {
 }
 
 #[test]
-fn top_and_left_prepend_shift_anchor_while_active_enters_new_cell() {
+fn selection_extends_into_negative_coordinates_without_moving_anchor() {
     let mut state = state();
     state.move_to(Coord { line: 0, column: 0 });
 
-    assert!(state.extend_selection(Direction::Up));
-    assert_eq!(state.selection.anchor(), Coord { line: 1, column: 0 });
-    assert_eq!(state.selection.active(), Coord { line: 0, column: 0 });
-    assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 0 });
+    assert!(!state.extend_selection(Direction::Up));
+    assert_eq!(state.selection.anchor(), Coord { line: 0, column: 0 });
+    assert_eq!(
+        state.selection.active(),
+        Coord {
+            line: -1,
+            column: 0
+        }
+    );
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: -1,
+            column: 0
+        }
+    );
 
-    assert!(state.extend_selection(Direction::Left));
-    assert_eq!(state.selection.anchor(), Coord { line: 1, column: 1 });
-    assert_eq!(state.selection.active(), Coord { line: 0, column: 0 });
-    assert_eq!(state.take_pending_prepend(), (1, 1));
+    assert!(!state.extend_selection(Direction::Left));
+    assert_eq!(state.selection.anchor(), Coord { line: 0, column: 0 });
+    assert_eq!(
+        state.selection.active(),
+        Coord {
+            line: -1,
+            column: -1
+        }
+    );
 }
 
 #[test]
@@ -149,10 +166,9 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
         Coord { line: 2, column: 1 },
         Coord { line: 2, column: 2 },
     ] {
-        assert_eq!(
-            state.lines_for_test()[coord.line][coord.column],
-            before[coord.line][coord.column]
-        );
+        let line = usize::try_from(coord.line).unwrap();
+        let column = usize::try_from(coord.column).unwrap();
+        assert_eq!(state.lines_for_test()[line][column], before[line][column]);
     }
     assert_eq!(contents(&state.lines_for_test()[1]), "├ ┤");
 }
@@ -298,7 +314,6 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
     let upper = editor.active_layer_id();
     let base_before = editor.layer_views()[0].lines.to_vec();
     editor.move_to(Coord { line: 2, column: 3 });
-    editor.canvas_origin = Coord { line: 4, column: 5 };
     let origin = editor.grid.cursor_pos;
     let signed_origin = editor.cursor_coordinates();
     let rectangle = styled_toolbar_snapshot(&editor, 52).unwrap();
@@ -528,11 +543,11 @@ fn move_draw_uses_grid_movement_without_wrapping() {
 }
 
 #[test]
-fn canvas_stops_at_maximum_width_and_height() {
+fn stored_content_respects_maximum_dimensions_without_bounding_navigation() {
     let mut state = state();
     state.move_to(Coord {
-        line: MAX_CANVAS_HEIGHT - 1,
-        column: MAX_CANVAS_WIDTH - 1,
+        line: i16::try_from(MAX_CANVAS_HEIGHT - 1).unwrap(),
+        column: i16::try_from(MAX_CANVAS_WIDTH - 1).unwrap(),
     });
     state.insert("xy");
 
@@ -544,16 +559,30 @@ fn canvas_stops_at_maximum_width_and_height() {
     assert_eq!(
         state.grid.cursor_pos,
         Coord {
-            line: MAX_CANVAS_HEIGHT - 1,
-            column: MAX_CANVAS_WIDTH - 1,
+            line: i16::try_from(MAX_CANVAS_HEIGHT - 1).unwrap(),
+            column: i16::try_from(MAX_CANVAS_WIDTH).unwrap(),
         }
     );
     assert!(!state.move_cursor(Direction::Right));
     assert!(!state.move_cursor(Direction::Down));
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: 20_000,
+            column: 20_001
+        }
+    );
 
     state.move_to(Coord::default());
     assert!(!state.move_cursor(Direction::Left));
     assert!(!state.move_cursor(Direction::Up));
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: -1,
+            column: -1
+        }
+    );
     assert_eq!(state.lines_for_test().len(), MAX_CANVAS_HEIGHT);
     assert_eq!(
         display_width(state.lines_for_test().last().unwrap()),
@@ -577,7 +606,7 @@ fn replacing_canvas_truncates_oversized_rows_and_columns() {
 }
 
 #[test]
-fn moving_up_at_zero_prepends_and_shifts_coordinate_state() {
+fn moving_up_at_zero_enters_implicit_space_without_shifting_content() {
     let mut state = state();
     state.insert("ab");
     state.move_to(Coord { line: 0, column: 1 });
@@ -591,36 +620,24 @@ fn moving_up_at_zero_prepends_and_shifts_coordinate_state() {
         end: state.grid.cursor_pos,
     });
 
-    assert!(state.move_cursor(Direction::Up));
+    assert!(!state.move_cursor(Direction::Up));
 
-    assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
-    assert_eq!(contents(&state.lines_for_test()[0]), "");
-    assert_eq!(contents(&state.lines_for_test()[1]), "ab");
-    assert_eq!(state.line_markers_for_test()[0].coord.line, 1);
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: -1,
+            column: 1
+        }
+    );
+    assert_eq!(contents(&state.lines_for_test()[0]), "ab");
+    assert_eq!(state.line_markers_for_test()[0].coord.line, 0);
     let preview = state.shape_preview.unwrap();
-    assert_eq!(preview.anchor.line, 1);
+    assert_eq!(preview.anchor.line, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
-    assert_eq!(state.take_pending_prepend(), (0, 1));
 }
 
 #[test]
-fn prepending_shifts_an_active_stroke_endpoint() {
-    let mut state = state();
-    state.active_stroke = Some(ActiveStroke {
-        end: Coord::default(),
-        end_base_glyph: "─".to_string(),
-        moving_ending: LineEnding::None,
-        incoming_connection: Direction::Left,
-        end_was_existing_line: false,
-    });
-
-    state.prepend_line();
-
-    assert_eq!(state.active_stroke.unwrap().end.line, 1);
-}
-
-#[test]
-fn moving_left_at_zero_prepends_every_line_and_shifts_coordinate_state() {
+fn moving_left_at_zero_enters_implicit_space_without_shifting_content() {
     let mut state = state();
     state.insert("a\nb");
     state.move_to(Coord::default());
@@ -634,31 +651,50 @@ fn moving_left_at_zero_prepends_every_line_and_shifts_coordinate_state() {
         end: Coord { line: 1, column: 0 },
     });
 
-    assert!(state.move_cursor(Direction::Left));
+    assert!(!state.move_cursor(Direction::Left));
 
-    assert_eq!(state.grid.cursor_pos, Coord::default());
-    assert_eq!(contents(&state.lines_for_test()[0]), " a");
-    assert_eq!(contents(&state.lines_for_test()[1]), " b");
-    assert_eq!(state.line_markers_for_test()[0].coord.column, 1);
+    assert_eq!(
+        state.grid.cursor_pos,
+        Coord {
+            line: 0,
+            column: -1
+        }
+    );
+    assert_eq!(contents(&state.lines_for_test()[0]), "a");
+    assert_eq!(contents(&state.lines_for_test()[1]), "b");
+    assert_eq!(state.line_markers_for_test()[0].coord.column, 0);
     let preview = state.shape_preview.unwrap();
-    assert_eq!(preview.anchor.column, 1);
+    assert_eq!(preview.anchor.column, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
-    assert_eq!(state.take_pending_prepend(), (1, 0));
 }
 
 #[test]
-fn drawing_connects_across_newly_prepended_top_and_left_cells() {
+fn drawing_connects_across_negative_top_and_left_cells() {
     let mut top = state();
     top.move_or_draw(Direction::Right, true);
     top.move_or_draw(Direction::Up, true);
-    assert_eq!(contents(&top.lines_for_test()[0]), " ╷");
-    assert_eq!(contents(&top.lines_for_test()[1]), "╶╯");
+    assert_eq!(
+        top.cell_contents(Coord {
+            line: -1,
+            column: 1
+        }),
+        Some("╷")
+    );
+    assert_eq!(top.cell_contents(Coord { line: 0, column: 0 }), Some("╶"));
+    assert_eq!(top.cell_contents(Coord { line: 0, column: 1 }), Some("╯"));
 
     let mut left = state();
     left.move_or_draw(Direction::Down, true);
     left.move_or_draw(Direction::Left, true);
-    assert_eq!(contents(&left.lines_for_test()[0]), " ╷");
-    assert_eq!(contents(&left.lines_for_test()[1]), "╶╯");
+    assert_eq!(left.cell_contents(Coord { line: 0, column: 0 }), Some("╷"));
+    assert_eq!(
+        left.cell_contents(Coord {
+            line: 1,
+            column: -1
+        }),
+        Some("╶")
+    );
+    assert_eq!(left.cell_contents(Coord { line: 1, column: 0 }), Some("╯"));
 }
 
 #[test]

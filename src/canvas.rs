@@ -121,11 +121,8 @@ impl LayerMap {
         })
     }
 
-    pub(crate) fn row_width(&self, line: usize) -> usize {
-        let Some(row) = i16::try_from(line)
-            .ok()
-            .and_then(|line| self.rows.get(&line))
-        else {
+    pub(crate) fn row_width(&self, line: i16) -> usize {
+        let Some(row) = self.rows.get(&line) else {
             return 0;
         };
         row.iter()
@@ -143,11 +140,6 @@ impl LayerMap {
             .map(|line| {
                 (bounds.left..=bounds.right)
                     .map(|column| {
-                        let Some((line, column)) =
-                            i16::try_from(line).ok().zip(i16::try_from(column).ok())
-                        else {
-                            return default_blank();
-                        };
                         self.get(line, column)
                             .map_or_else(default_blank, |data| StyledAtom {
                                 face: data.face.as_ref().clone(),
@@ -166,10 +158,7 @@ impl LayerMap {
                 row.iter().filter_map(move |(&column, data)| {
                     let line_data = data.line.as_ref()?;
                     Some(LineMarker {
-                        coord: Coord {
-                            line: usize::try_from(line).ok()?,
-                            column: usize::try_from(column).ok()?,
-                        },
+                        coord: Coord { line, column },
                         ending: line_data.ending,
                         base_glyph: line_data.base_glyph.clone(),
                     })
@@ -214,12 +203,7 @@ impl LayerMap {
             }
         }
         for marker in markers {
-            let (Ok(line), Ok(column)) = (
-                i16::try_from(marker.coord.line),
-                i16::try_from(marker.coord.column),
-            ) else {
-                continue;
-            };
+            let (line, column) = (marker.coord.line, marker.coord.column);
             if let Some(data) = self
                 .rows
                 .get_mut(&line)
@@ -309,15 +293,15 @@ impl LayerMap {
 
     pub(crate) fn insert_cells(
         &mut self,
-        line: usize,
-        column: usize,
+        line: i16,
+        column: i16,
         cells: Vec<(Atom, Face)>,
     ) -> Result<()> {
         if cells.is_empty() {
             return Ok(());
         }
-        let y = i16::try_from(line).context("canvas line exceeds signed range")?;
-        let x = i16::try_from(column).context("canvas column exceeds signed range")?;
+        let y = line;
+        let x = column;
         let shift = i16::try_from(cells.len()).context("insert width exceeds signed range")?;
         if let Some(row) = self.rows.remove(&y) {
             let mut shifted = BTreeMap::new();
@@ -342,12 +326,12 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn remove_cells(&mut self, line: usize, column: usize, count: usize) -> Result<()> {
+    pub(crate) fn remove_cells(&mut self, line: i16, column: i16, count: usize) -> Result<()> {
         if count == 0 {
             return Ok(());
         }
-        let y = i16::try_from(line).context("canvas line exceeds signed range")?;
-        let start = i16::try_from(column).context("canvas column exceeds signed range")?;
+        let y = line;
+        let start = column;
         let count_i16 = i16::try_from(count).context("remove width exceeds signed range")?;
         let end = start
             .checked_add(count_i16)
@@ -367,9 +351,9 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn split_row(&mut self, line: usize, column: usize) -> Result<()> {
-        let y = i16::try_from(line).context("canvas line exceeds signed range")?;
-        let x = i16::try_from(column).context("canvas column exceeds signed range")?;
+    pub(crate) fn split_row(&mut self, line: i16, column: i16) -> Result<()> {
+        let y = line;
+        let x = column;
         let next_y = y
             .checked_add(1)
             .context("split exceeds signed canvas range")?;
@@ -404,8 +388,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn insert_column(&mut self, column: usize, height: usize) -> Result<()> {
-        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+    pub(crate) fn insert_column(&mut self, column: i16, height: usize) -> Result<()> {
+        let x = column;
         for row in self.rows.values_mut() {
             *row = std::mem::take(row)
                 .into_iter()
@@ -425,8 +409,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn insert_row(&mut self, line: usize) -> Result<()> {
-        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+    pub(crate) fn insert_row(&mut self, line: i16) -> Result<()> {
+        let y = line;
         self.rows = std::mem::take(&mut self.rows)
             .into_iter()
             .map(|(existing_y, row)| {
@@ -443,8 +427,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn pull_column_left(&mut self, column: usize, affected: &[bool]) -> Result<()> {
-        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+    pub(crate) fn pull_column_left(&mut self, column: i16, affected: &[bool]) -> Result<()> {
+        let x = column;
         for (line, is_affected) in affected.iter().copied().enumerate() {
             if !is_affected {
                 continue;
@@ -472,8 +456,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn pull_column_right(&mut self, column: usize, affected: &[bool]) -> Result<()> {
-        let x = i16::try_from(column).context("column exceeds signed canvas range")?;
+    pub(crate) fn pull_column_right(&mut self, column: i16, affected: &[bool]) -> Result<()> {
+        let x = column;
         for (line, is_affected) in affected.iter().copied().enumerate() {
             if !is_affected {
                 continue;
@@ -503,8 +487,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn remove_row(&mut self, line: usize) -> Result<()> {
-        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+    pub(crate) fn remove_row(&mut self, line: i16) -> Result<()> {
+        let y = line;
         self.rows.remove(&y);
         self.rows = std::mem::take(&mut self.rows)
             .into_iter()
@@ -522,8 +506,8 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn remove_row_and_prepend_blank(&mut self, line: usize) -> Result<()> {
-        let y = i16::try_from(line).context("line exceeds signed canvas range")?;
+    pub(crate) fn remove_row_and_prepend_blank(&mut self, line: i16) -> Result<()> {
+        let y = line;
         self.rows.remove(&y);
         self.rows = std::mem::take(&mut self.rows)
             .into_iter()
@@ -541,14 +525,14 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn join_row_with_next(&mut self, line: usize) -> Result<bool> {
-        let Some(next_y) = i16::try_from(line + 1).ok() else {
+    pub(crate) fn join_row_with_next(&mut self, line: i16) -> Result<bool> {
+        let Some(next_y) = line.checked_add(1) else {
             return Ok(false);
         };
         if !self.rows.contains_key(&next_y) {
             return Ok(false);
         }
-        let y = i16::try_from(line).context("canvas line exceeds signed range")?;
+        let y = line;
         let offset =
             i16::try_from(self.row_width(line)).context("row width exceeds signed canvas range")?;
         let next = self.rows.remove(&next_y).unwrap_or_default();
@@ -573,9 +557,9 @@ impl LayerMap {
         replacement: Option<(Atom, Face)>,
     ) -> Result<()> {
         for line in bounds.top..=bounds.bottom {
-            let y = i16::try_from(line).context("selection line exceeds signed range")?;
+            let y = line;
             for column in bounds.left..=bounds.right {
-                let x = i16::try_from(column).context("selection column exceeds signed range")?;
+                let x = column;
                 self.delete_at(x, y);
                 if let Some((atom, face)) = &replacement {
                     self.set_at(x, y, atom.clone(), face)?;
@@ -591,20 +575,22 @@ impl LayerMap {
         rectangle: &TextRectangle,
     ) -> Result<()> {
         for (row_offset, row) in rectangle.rows.iter().enumerate() {
+            let row_offset =
+                i16::try_from(row_offset).context("rectangle exceeds canvas height")?;
             let line = origin
                 .line
                 .checked_add(row_offset)
                 .context("rectangle exceeds canvas height")?;
             for (column_offset, atom) in row.iter().enumerate() {
                 atom.validate_cell()?;
+                let column_offset =
+                    i16::try_from(column_offset).context("rectangle exceeds canvas width")?;
                 let column = origin
                     .column
                     .checked_add(column_offset)
                     .context("rectangle exceeds canvas width")?;
-                let x = i16::try_from(column).context("rectangle column exceeds signed range")?;
-                let y = i16::try_from(line).context("rectangle line exceeds signed range")?;
-                self.delete_at(x, y);
-                self.set_at(x, y, Atom::new(atom.contents.clone())?, &atom.face)?;
+                self.delete_at(column, line);
+                self.set_at(column, line, Atom::new(atom.contents.clone())?, &atom.face)?;
             }
         }
         Ok(())
@@ -660,22 +646,6 @@ impl LayerMap {
         }
         map.replace_line_markers(line_markers);
         Ok(map)
-    }
-
-    fn prepend_line(&mut self) {
-        self.rows = std::mem::take(&mut self.rows)
-            .into_iter()
-            .map(|(line, row)| (line.saturating_add(1), row))
-            .collect();
-    }
-
-    fn prepend_column(&mut self) {
-        for row in self.rows.values_mut() {
-            *row = std::mem::take(row)
-                .into_iter()
-                .map(|(column, data)| (column.saturating_add(1), data))
-                .collect();
-        }
     }
 
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
@@ -801,25 +771,25 @@ impl LayerStack {
 
     pub(crate) fn insert_cells(
         &mut self,
-        line: usize,
-        column: usize,
+        line: i16,
+        column: i16,
         cells: Vec<(Atom, Face)>,
     ) -> Result<()> {
         self.layers[self.active].insert_cells(line, column, cells)?;
         Ok(())
     }
 
-    pub(crate) fn remove_cells(&mut self, line: usize, column: usize, count: usize) -> Result<()> {
+    pub(crate) fn remove_cells(&mut self, line: i16, column: i16, count: usize) -> Result<()> {
         self.layers[self.active].remove_cells(line, column, count)?;
         Ok(())
     }
 
-    pub(crate) fn split_row(&mut self, line: usize, column: usize) -> Result<()> {
+    pub(crate) fn split_row(&mut self, line: i16, column: i16) -> Result<()> {
         self.layers[self.active].split_row(line, column)?;
         Ok(())
     }
 
-    pub(crate) fn join_row_with_next(&mut self, line: usize) -> Result<bool> {
+    pub(crate) fn join_row_with_next(&mut self, line: i16) -> Result<bool> {
         let joined = self.layers[self.active].join_row_with_next(line)?;
         Ok(joined)
     }
@@ -845,18 +815,14 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn insert_column_in_all_layers(
-        &mut self,
-        column: usize,
-        height: usize,
-    ) -> Result<()> {
+    pub(crate) fn insert_column_in_all_layers(&mut self, column: i16, height: usize) -> Result<()> {
         for layer in &mut self.layers {
             layer.insert_column(column, height)?;
         }
         Ok(())
     }
 
-    pub(crate) fn insert_row_in_all_layers(&mut self, line: usize) -> Result<()> {
+    pub(crate) fn insert_row_in_all_layers(&mut self, line: i16) -> Result<()> {
         for layer in &mut self.layers {
             layer.insert_row(line)?;
         }
@@ -865,7 +831,7 @@ impl LayerStack {
 
     pub(crate) fn pull_column_left_in_all_layers(
         &mut self,
-        column: usize,
+        column: i16,
         affected: &[bool],
     ) -> Result<()> {
         for layer in &mut self.layers {
@@ -876,7 +842,7 @@ impl LayerStack {
 
     pub(crate) fn pull_column_right_in_all_layers(
         &mut self,
-        column: usize,
+        column: i16,
         affected: &[bool],
     ) -> Result<()> {
         for layer in &mut self.layers {
@@ -885,14 +851,14 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn remove_row_in_all_layers(&mut self, line: usize) -> Result<()> {
+    pub(crate) fn remove_row_in_all_layers(&mut self, line: i16) -> Result<()> {
         for layer in &mut self.layers {
             layer.remove_row(line)?;
         }
         Ok(())
     }
 
-    pub(crate) fn remove_row_and_prepend_blank_in_all_layers(&mut self, line: usize) -> Result<()> {
+    pub(crate) fn remove_row_and_prepend_blank_in_all_layers(&mut self, line: i16) -> Result<()> {
         for layer in &mut self.layers {
             layer.remove_row_and_prepend_blank(line)?;
         }
@@ -908,14 +874,12 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn active_row_width(&self, line: usize) -> usize {
+    pub(crate) fn active_row_width(&self, line: i16) -> usize {
         self.layers[self.active].row_width(line)
     }
 
-    pub(crate) fn active_row_exists(&self, line: usize) -> bool {
-        i16::try_from(line)
-            .ok()
-            .is_some_and(|line| self.layers[self.active].rows().contains_key(&line))
+    pub(crate) fn active_row_exists(&self, line: i16) -> bool {
+        self.layers[self.active].rows().contains_key(&line)
     }
 
     pub(crate) fn active_line_markers(&self) -> Vec<LineMarker> {
@@ -1073,18 +1037,6 @@ impl LayerStack {
         }
     }
 
-    pub(crate) fn prepend_line_in_all_layers(&mut self) {
-        for layer in &mut self.layers {
-            layer.prepend_line();
-        }
-    }
-
-    pub(crate) fn prepend_column_in_all_layers(&mut self) {
-        for layer in &mut self.layers {
-            layer.prepend_column();
-        }
-    }
-
     pub(crate) fn clear_contents(&mut self) {
         for layer in &mut self.layers {
             *layer = LayerMap::new(layer.id, layer.visible);
@@ -1179,10 +1131,7 @@ fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
 }
 
 fn coord_i16(coord: Coord) -> Option<(i16, i16)> {
-    Some((
-        i16::try_from(coord.line).ok()?,
-        i16::try_from(coord.column).ok()?,
-    ))
+    Some((coord.line, coord.column))
 }
 
 fn default_blank() -> StyledAtom {

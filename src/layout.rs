@@ -128,8 +128,7 @@ impl ViewportOffset {
             .saturating_add((old_grid_top - new_grid_top).round() as i64);
     }
 
-    /// Negative counts reverse compensation for a canceled prepend.
-    pub fn compensate_for_prepend(&mut self, columns: i64, lines: i64, cell_size: (f32, f32)) {
+    pub fn translate_canvas(&mut self, columns: i64, lines: i64, cell_size: (f32, f32)) {
         self.x = self.x.saturating_sub(cell_shift(columns, cell_size.0));
         self.y = self.y.saturating_sub(cell_shift(lines, cell_size.1));
     }
@@ -286,8 +285,8 @@ pub fn constrained_origin(
         })
 }
 
-pub fn cursor_origin(current: i64, cursor: usize, viewport_cells: usize) -> i64 {
-    let cursor = i64::try_from(cursor).unwrap_or(i64::MAX);
+pub fn cursor_origin(current: i64, cursor: i16, viewport_cells: usize) -> i64 {
+    let cursor = i64::from(cursor);
     let last_visible = i64::try_from(viewport_cells.saturating_sub(1)).unwrap_or(i64::MAX);
     if cursor < current {
         cursor
@@ -348,7 +347,7 @@ pub fn normalized_cursor_and_origin(
         .map_or((cursor, desired), |(_, _, cursor, origin)| (cursor, origin))
 }
 
-fn cell_delta(index: usize, old_size: f32, new_size: f32) -> i64 {
+fn cell_delta(index: i16, old_size: f32, new_size: f32) -> i64 {
     (index as f64 * (old_size - new_size) as f64).round() as i64
 }
 
@@ -903,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn prepend_compensation_keeps_existing_cell_at_same_pixel() {
+    fn canvas_translation_keeps_shifted_cell_at_same_pixel() {
         let cell_size = (8.0, 16.0);
         let before = cursor_top_left(
             Coord { line: 2, column: 4 },
@@ -912,11 +911,11 @@ mod tests {
             ViewportOffset::default(),
         );
         let mut viewport = ViewportOffset::default();
-        viewport.compensate_for_prepend(1, 1, cell_size);
+        viewport.translate_canvas(1, 1, cell_size);
         let after = cursor_top_left(Coord { line: 3, column: 5 }, cell_size, 44.0, viewport);
         assert_eq!(after, before);
 
-        viewport.compensate_for_prepend(-1, -1, cell_size);
+        viewport.translate_canvas(-1, -1, cell_size);
         assert_eq!(viewport, ViewportOffset::default());
     }
 

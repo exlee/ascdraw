@@ -277,7 +277,6 @@ pub fn perform(
                 &state.toolbar.durable_selections(),
                 CanvasPosition {
                     cursor: state.grid.cursor_pos,
-                    canvas_origin: state.canvas_origin(),
                     viewport: *viewport,
                     zoom,
                 },
@@ -438,8 +437,8 @@ pub fn plain_text(state: &Editor) -> String {
     let region = CanvasRegion {
         left: i64::try_from(left).unwrap_or(i64::MAX),
         top: i64::try_from(top).unwrap_or(i64::MAX),
-        width: right.saturating_sub(left).saturating_add(1),
-        height: bottom.saturating_sub(top).saturating_add(1),
+        width: usize::try_from(i32::from(right) - i32::from(left) + 1).unwrap_or(usize::MAX),
+        height: usize::try_from(i32::from(bottom) - i32::from(top) + 1).unwrap_or(usize::MAX),
     };
     let rows = sparse_composite_region(state, region)
         .unwrap_or_else(|| flatten_visible_layers(&visible_layer_atoms(state, region)));
@@ -648,7 +647,6 @@ fn save_native_json_for_test(path: &Path, state: &Editor, viewport: ViewportOffs
         &state.toolbar.durable_selections(),
         CanvasPosition {
             cursor: state.grid.cursor_pos,
-            canvas_origin: state.canvas_origin(),
             viewport,
             zoom: 0,
         },
@@ -758,11 +756,10 @@ fn restore_native_document(
     state.restore_canvas(document.canvas);
     let position = document.position.unwrap_or(CanvasPosition {
         cursor: crate::model::Coord::default(),
-        canvas_origin: crate::model::Coord::default(),
         viewport: ViewportOffset::default(),
         zoom: 0,
     });
-    state.restore_canvas_position(position.cursor, position.canvas_origin);
+    state.restore_canvas_position(position.cursor);
     *viewport = position.viewport;
     position.zoom
 }
@@ -855,7 +852,11 @@ fn validate_persisted_layers(layers: &[PersistedLayer], active_layer: LayerId) -
 }
 
 fn validate_coordinate(name: &str, coord: crate::model::Coord) -> Result<()> {
-    if coord.line >= MAX_CANVAS_HEIGHT || coord.column >= MAX_CANVAS_WIDTH {
+    if coord.line < 0
+        || coord.column < 0
+        || usize::try_from(coord.line).unwrap_or(usize::MAX) >= MAX_CANVAS_HEIGHT
+        || usize::try_from(coord.column).unwrap_or(usize::MAX) >= MAX_CANVAS_WIDTH
+    {
         bail!(
             "{name} ({}, {}) exceeds the {MAX_CANVAS_WIDTH}x{MAX_CANVAS_HEIGHT} canvas",
             coord.line,
@@ -870,14 +871,17 @@ fn pad_to_coordinate(
     name: &str,
     coord: crate::model::Coord,
 ) -> Result<()> {
-    while lines.len() <= coord.line {
+    let line_index = usize::try_from(coord.line).context("legacy row cannot be negative")?;
+    let target_column =
+        usize::try_from(coord.column).context("legacy column cannot be negative")?;
+    while lines.len() <= line_index {
         lines.push(Vec::new());
     }
-    let line = &mut lines[coord.line];
+    let line = &mut lines[line_index];
     let mut column = 0;
     for atom in line.iter() {
         let width = atom_display_width(atom);
-        if column < coord.column && coord.column < column.saturating_add(width) {
+        if column < target_column && target_column < column.saturating_add(width) {
             bail!(
                 "{name} column {} falls inside a wide grapheme on row {}",
                 coord.column,
@@ -886,8 +890,8 @@ fn pad_to_coordinate(
         }
         column = column.saturating_add(width);
     }
-    if column < coord.column {
-        line.extend((column..coord.column).map(|_| blank_atom()));
+    if column < target_column {
+        line.extend((column..target_column).map(|_| blank_atom()));
     }
     Ok(())
 }
@@ -1408,7 +1412,6 @@ mod tests {
             &state.toolbar.durable_selections(),
             CanvasPosition {
                 cursor: state.grid.cursor_pos,
-                canvas_origin: state.canvas_origin(),
                 viewport,
                 zoom: 3,
             },

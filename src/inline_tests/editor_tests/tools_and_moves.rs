@@ -251,7 +251,6 @@ fn shape_space_draws_one_cell_outside_a_selected_region() {
 
     assert!(state.selection.is_collapsed());
     assert!(state.shape_preview.is_none());
-    assert_eq!(state.take_pending_prepend(), (0, 0));
     assert_eq!(
         state
             .lines_for_test()
@@ -263,7 +262,7 @@ fn shape_space_draws_one_cell_outside_a_selected_region() {
 }
 
 #[test]
-fn shape_space_prepends_to_surround_a_selection_at_the_origin() {
+fn shape_space_surrounds_an_origin_selection_with_negative_coordinates() {
     let mut state = state();
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
     state
@@ -272,15 +271,28 @@ fn shape_space_prepends_to_surround_a_selection_at_the_origin() {
 
     assert!(state.start_shape_or_confirm());
 
-    assert_eq!(state.take_pending_prepend(), (1, 1));
     assert_eq!(
-        state
-            .lines_for_test()
-            .iter()
-            .map(|line| contents(line))
-            .collect::<Vec<_>>(),
-        ["┌──┐", "│  │", "│  │", "└──┘"]
+        state.cell_contents(Coord {
+            line: -1,
+            column: -1
+        }),
+        Some("┌")
     );
+    assert_eq!(
+        state.cell_contents(Coord {
+            line: -1,
+            column: 2
+        }),
+        Some("┐")
+    );
+    assert_eq!(
+        state.cell_contents(Coord {
+            line: 2,
+            column: -1
+        }),
+        Some("└")
+    );
+    assert_eq!(state.cell_contents(Coord { line: 2, column: 2 }), Some("┘"));
 }
 
 #[test]
@@ -661,17 +673,16 @@ fn pull_row_removes_target_metadata_and_remaps_every_lower_coordinate() {
 }
 
 #[test]
-fn pull_vertical_no_target_is_no_op_and_origin_down_prepends_safely() {
+fn pull_vertical_without_content_in_the_target_direction_is_a_no_op() {
     let mut no_target = utility_state(&["x"], UtilityKind::Pull, Coord::default());
     let before = no_target.edit_snapshot();
     assert!(!no_target.apply_utility(Direction::Up));
     assert_eq!(no_target.edit_snapshot(), before);
 
     let mut down = utility_state(&["Q", "z"], UtilityKind::Pull, Coord::default());
-    assert!(down.apply_utility(Direction::Down));
-    assert_eq!(line_contents(&down), vec!["", "Q", "z"]);
-    assert_eq!(down.grid.cursor_pos.line, 1);
-    assert_eq!(down.take_pending_prepend(), (0, 1));
+    let before = down.edit_snapshot();
+    assert!(!down.apply_utility(Direction::Down));
+    assert_eq!(down.edit_snapshot(), before);
 
     let mut blank = utility_state(&[""], UtilityKind::Pull, Coord::default());
     assert!(!blank.apply_utility(Direction::Down));
@@ -684,22 +695,20 @@ fn pull_vertical_no_target_is_no_op_and_origin_down_prepends_safely() {
 }
 
 #[test]
-fn utility_origin_prepends_are_safe() {
+fn utility_push_at_origin_uses_signed_insertion_targets() {
     let mut left = utility_state(&["yx"], UtilityKind::Push, Coord::default());
     assert!(left.apply_utility(Direction::Left));
     assert_eq!(line_contents(&left), vec![" yx"]);
     assert_eq!(left.grid.cursor_pos.column, 1);
-    assert_eq!(left.take_pending_prepend(), (1, 0));
 
     let mut up = utility_state(&["x"], UtilityKind::Push, Coord::default());
     assert!(up.apply_utility(Direction::Up));
     assert_eq!(line_contents(&up), vec!["", "x"]);
-    assert_eq!(up.take_pending_prepend(), (0, 1));
 
     let mut pull_down = utility_state(&["x"], UtilityKind::Pull, Coord::default());
-    assert!(pull_down.apply_utility(Direction::Down));
-    assert_eq!(line_contents(&pull_down), vec!["", "x"]);
-    assert_eq!(pull_down.grid.cursor_pos.line, 1);
+    assert!(!pull_down.apply_utility(Direction::Down));
+    assert_eq!(line_contents(&pull_down), vec!["x"]);
+    assert_eq!(pull_down.grid.cursor_pos.line, 0);
 }
 
 #[test]
@@ -923,7 +932,7 @@ fn move_lift_cancel_restores_exact_cursor_selection_and_document() {
 }
 
 #[test]
-fn move_lift_extends_past_the_top_left_canvas_origin() {
+fn move_lift_extends_into_negative_canvas_coordinates() {
     let mut left = utility_state(&["  AB"], UtilityKind::Push, Coord { line: 0, column: 3 });
     left.selection
         .select(Coord { line: 0, column: 2 }, Coord { line: 0, column: 3 });
@@ -932,19 +941,17 @@ fn move_lift_extends_past_the_top_left_canvas_origin() {
     for _ in 0..5 {
         assert!(left.move_lift(Direction::Left));
     }
-    assert_eq!(left.move_lift_bounds().unwrap().left, 0);
+    assert_eq!(left.move_lift_bounds().unwrap().left, -3);
     assert_eq!(left.edit_snapshot(), before);
     assert!(left.cancel_move_lift());
     assert_eq!(left.edit_snapshot(), before);
-    assert_eq!(left.take_pending_prepend(), (-3, 0));
 
     assert!(left.begin_selected_move_lift());
     for _ in 0..5 {
         assert!(left.move_lift(Direction::Left));
     }
     assert!(left.confirm_move_lift());
-    assert_eq!(left.canvas_origin.column, 3);
-    assert_eq!(left.selection_bounds().left, 0);
+    assert_eq!(left.selection_bounds().left, -3);
     assert_eq!(left.selected_text(), "AB");
 
     let mut up = utility_state(
@@ -959,8 +966,7 @@ fn move_lift_extends_past_the_top_left_canvas_origin() {
         assert!(up.move_lift(Direction::Up));
     }
     assert!(up.confirm_move_lift());
-    assert_eq!(up.canvas_origin.line, 2);
-    assert_eq!(up.selection_bounds().top, 0);
+    assert_eq!(up.selection_bounds().top, -2);
     assert_eq!(up.selected_text(), "AB");
 
     let mut stationary = utility_state(&["AB"], UtilityKind::Push, Coord { line: 0, column: 1 });
@@ -973,7 +979,6 @@ fn move_lift_extends_past_the_top_left_canvas_origin() {
     assert!(stationary.move_lift(Direction::Right));
     assert!(!stationary.confirm_move_lift());
     assert_eq!(stationary.edit_snapshot(), before);
-    assert_eq!(stationary.take_pending_prepend(), (-1, 0));
 }
 
 #[test]

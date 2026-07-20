@@ -400,9 +400,9 @@ fn canvas_selection_outline(
 ) -> CanvasSelectionOutline {
     CanvasSelectionOutline {
         left: PADDING as f32 + bounds.left as f32 * metrics.cell_width,
-        top: row_top(bounds.top, metrics, grid_top),
-        right: PADDING as f32 + (bounds.left + bounds.width()) as f32 * metrics.cell_width - 1.0,
-        bottom: row_top(bounds.top + bounds.height(), metrics, grid_top) - 1.0,
+        top: grid_top + bounds.top as f32 * metrics.cell_height,
+        right: PADDING as f32 + (bounds.right as f32 + 1.0) * metrics.cell_width - 1.0,
+        bottom: grid_top + (bounds.bottom as f32 + 1.0) * metrics.cell_height - 1.0,
     }
 }
 
@@ -1179,7 +1179,7 @@ fn render_grid_cursor(
         FALLBACK_FG,
         FALLBACK_BG,
     );
-    let top = row_top(cursor.line, metrics, layout.grid_top);
+    let top = layout.grid_top + cursor.line as f32 * metrics.cell_height;
     if is_drawing_mode(cursor_mode) {
         let drawing_cursor = resolve_derived_face(
             &grid.default_face,
@@ -1236,7 +1236,7 @@ fn is_drawing_mode(mode: CursorMode) -> bool {
 
 fn render_hollow_drawing_cursor(
     canvas: &Canvas,
-    column: usize,
+    column: i16,
     top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
@@ -1331,32 +1331,32 @@ pub(super) fn outline_stroke_width(metrics: &CellMetrics) -> f32 {
         .max(1.0)
 }
 
-fn drawing_cursor_outline(
-    column: usize,
-    top: f32,
-    metrics: &CellMetrics,
-) -> CanvasSelectionOutline {
+fn drawing_cursor_outline(column: i16, top: f32, metrics: &CellMetrics) -> CanvasSelectionOutline {
     CanvasSelectionOutline {
         left: PADDING as f32 + column as f32 * metrics.cell_width,
         top,
-        right: PADDING as f32 + (column + 1) as f32 * metrics.cell_width - 1.0,
+        right: PADDING as f32 + (column as f32 + 1.0) * metrics.cell_width - 1.0,
         bottom: top + metrics.cell_height - 1.0,
     }
 }
 
 fn render_block_cursor(
     canvas: &Canvas,
-    column: usize,
+    column: i16,
     top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     resolved: &ResolvedFace,
 ) {
+    let translated_column = usize::try_from(column).unwrap_or(0);
+    let translation = f32::from(column.min(0)) * metrics.cell_width;
+    canvas.save();
+    canvas.translate((translation, 0.0));
     let mut bg_paint = Paint::default();
     bg_paint
         .set_anti_alias(false)
         .set_color(resolved.bg.to_color());
-    fill_cells(canvas, column, top, 1, metrics, &bg_paint);
+    fill_cells(canvas, translated_column, top, 1, metrics, &bg_paint);
 
     let mut fg_paint = Paint::default();
     fg_paint
@@ -1364,21 +1364,34 @@ fn render_block_cursor(
         .set_color(resolved.fg.to_color());
     let font = font_for_face(metrics, resolved);
     if let Some(text) = &cell.text {
-        draw_text_cluster(canvas, column, top, text, &font, metrics, &fg_paint);
+        draw_text_cluster(
+            canvas,
+            translated_column,
+            top,
+            text,
+            &font,
+            metrics,
+            &fg_paint,
+        );
     }
-    draw_text_decorations(canvas, column, top, 1, metrics, resolved);
+    draw_text_decorations(canvas, translated_column, top, 1, metrics, resolved);
+    canvas.restore();
 }
 
 fn render_beam_cursor(
     canvas: &Canvas,
-    column: usize,
+    column: i16,
     top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     base_resolved: &ResolvedFace,
     resolved: &ResolvedFace,
 ) {
-    render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
+    let translated_column = usize::try_from(column).unwrap_or(0);
+    let translation = f32::from(column.min(0)) * metrics.cell_width;
+    canvas.save();
+    canvas.translate((translation, 0.0));
+    render_cursor_base_cell(canvas, translated_column, top, cell, metrics, base_resolved);
     let width = (metrics.cell_width * CURSOR_BEAM_WIDTH_RATIO)
         .round()
         .clamp(1.0, metrics.cell_width);
@@ -1388,24 +1401,29 @@ fn render_beam_cursor(
         .set_color(cursor_indicator_color(CursorShape::Beam, resolved).to_color());
     fill_rect_pixels(
         canvas,
-        PADDING as f32 + column as f32 * metrics.cell_width,
+        PADDING as f32 + translated_column as f32 * metrics.cell_width,
         top,
         width,
         metrics.cell_height,
         &paint,
     );
+    canvas.restore();
 }
 
 fn render_underline_cursor(
     canvas: &Canvas,
-    column: usize,
+    column: i16,
     top: f32,
     cell: &CursorCell,
     metrics: &CellMetrics,
     base_resolved: &ResolvedFace,
     resolved: &ResolvedFace,
 ) {
-    render_cursor_base_cell(canvas, column, top, cell, metrics, base_resolved);
+    let translated_column = usize::try_from(column).unwrap_or(0);
+    let translation = f32::from(column.min(0)) * metrics.cell_width;
+    canvas.save();
+    canvas.translate((translation, 0.0));
+    render_cursor_base_cell(canvas, translated_column, top, cell, metrics, base_resolved);
     let height = (metrics.cell_height * CURSOR_UNDERLINE_HEIGHT_RATIO)
         .round()
         .clamp(1.0, metrics.cell_height);
@@ -1419,12 +1437,13 @@ fn render_underline_cursor(
         .set_color(cursor_indicator_color(CursorShape::Underline, resolved).to_color());
     fill_rect_pixels(
         canvas,
-        PADDING as f32 + column as f32 * metrics.cell_width,
+        PADDING as f32 + translated_column as f32 * metrics.cell_width,
         y,
         metrics.cell_width,
         height,
         &paint,
     );
+    canvas.restore();
 }
 
 fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> CursorShape {

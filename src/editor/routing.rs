@@ -21,8 +21,8 @@ pub(super) fn route_steps(start: Coord, end: Coord, mode: RoutingMode) -> Vec<Ro
     } else {
         Direction::Up
     };
-    let columns = start.column.abs_diff(end.column);
-    let lines = start.line.abs_diff(end.line);
+    let columns = usize::from(start.column.abs_diff(end.column));
+    let lines = usize::from(start.line.abs_diff(end.line));
     let mut steps = Vec::with_capacity(columns.saturating_add(lines));
     match mode {
         RoutingMode::HorizontalVertical => {
