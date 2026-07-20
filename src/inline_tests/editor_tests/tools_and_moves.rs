@@ -199,7 +199,8 @@ fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
         state.move_cursor(direction);
     }
 
-    let preview = state.lines_with_shape_preview().expect("preview is active");
+    let preview_canvas = state.shape_preview_canvas().expect("preview is active");
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(contents(&preview[0]), "┌──┐");
     assert_eq!(contents(&preview[1]), "│  │");
     assert_eq!(contents(&preview[2]), "└──┘");
@@ -212,7 +213,7 @@ fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
     );
 
     state.confirm_shape();
-    assert!(state.lines_with_shape_preview().is_none());
+    assert!(state.shape_preview_canvas().is_none());
     assert_eq!(contents(&state.lines_for_test()[0]), "┌──┐");
     assert_eq!(contents(&state.lines_for_test()[2]), "└──┘");
 }
@@ -283,15 +284,17 @@ fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
             .map(|width| (0..width).map(|_| blank_atom()).collect())
             .collect(),
     );
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord { line: 0, column: 2 },
-        end: Coord {
-            line: 4,
-            column: 10,
-        },
-    });
+    state.move_to(Coord { line: 0, column: 2 });
+    state.toggle_shape_preview();
+    for _ in 0..4 {
+        state.move_cursor(Direction::Down);
+    }
+    for _ in 0..8 {
+        state.move_cursor(Direction::Right);
+    }
 
-    let preview = state.lines_with_shape_preview().expect("preview is active");
+    let preview_canvas = state.shape_preview_canvas().expect("preview is active");
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(
         preview
             .iter()
@@ -332,13 +335,16 @@ fn reversed_rounded_shape_extends_one_cell_past_content_and_adds_missing_rows() 
         option: 1,
     });
     state.set_lines_for_test(vec![(0..4).map(|_| blank_atom()).collect()]);
-    state.shape_preview = Some(ShapePreview {
-        anchor: Coord { line: 4, column: 4 },
-        end: Coord { line: 0, column: 0 },
-    });
+    state.move_to(Coord { line: 4, column: 4 });
+    state.toggle_shape_preview();
+    for _ in 0..4 {
+        state.move_cursor(Direction::Up);
+        state.move_cursor(Direction::Left);
+    }
 
     let expected = ["╭───╮", "│   │", "│   │", "│   │", "╰───╯"];
-    let preview = state.lines_with_shape_preview().expect("preview is active");
+    let preview_canvas = state.shape_preview_canvas().expect("preview is active");
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(
         preview
             .iter()
@@ -364,11 +370,11 @@ fn escape_cancels_an_active_shape_preview() {
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
     state.toggle_shape_preview();
     state.move_cursor(Direction::Right);
-    assert!(state.lines_with_shape_preview().is_some());
+    assert!(state.shape_preview_canvas().is_some());
 
     state.toggle_shape_preview();
 
-    assert!(state.lines_with_shape_preview().is_none());
+    assert!(state.shape_preview_canvas().is_none());
     assert!(
         state.lines_for_test()[0]
             .iter()
@@ -436,7 +442,8 @@ fn rounded_shape_preview_uses_selected_fill() {
         state.move_cursor(direction);
     }
 
-    let preview = state.lines_with_shape_preview().unwrap();
+    let preview_canvas = state.shape_preview_canvas().unwrap();
+    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
     assert_eq!(contents(&preview[0]), "╭──╮");
     assert_eq!(contents(&preview[1]), "│░░│");
     assert_eq!(contents(&preview[2]), "╰──╯");

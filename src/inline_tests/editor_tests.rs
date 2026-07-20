@@ -95,30 +95,6 @@ impl Editor {
             })
             .collect()
     }
-
-    pub(crate) fn lines_with_shape_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
-        let canvas = self
-            .move_lift_render_canvas()
-            .or_else(|| self.line_preview_render_canvas());
-        if let Some(canvas) = canvas {
-            return Some(canvas.layers()[canvas.active_index()].to_dense());
-        }
-        self.shape_preview_canvas()
-            .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
-    }
-
-    pub(crate) fn move_lift_render_lines_for_layer(
-        &self,
-        id: LayerId,
-    ) -> Option<Vec<Vec<StyledAtom>>> {
-        self.move_lift_render_canvas().and_then(|canvas| {
-            canvas
-                .layers()
-                .iter()
-                .find(|layer| layer.id == id && layer.visible)
-                .map(LayerMap::to_dense)
-        })
-    }
 }
 
 fn state() -> Editor {

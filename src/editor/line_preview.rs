@@ -407,9 +407,10 @@ mod tests {
             state.apply_toolbar_action(ToolbarAction::SelectSubmenu { submenu: 3, option });
             assert!(!state.start_or_advance_line_preview());
             assert!(state.move_line_preview_to(Coord { line: 3, column: 5 }));
-            let preview = state
-                .lines_with_shape_preview()
+            let preview_canvas = state
+                .line_preview_render_canvas()
                 .expect("active route is rendered");
+            let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
             assert!(state.start_or_advance_line_preview());
             assert_eq!(state.lines_for_test(), preview);
         }
@@ -428,9 +429,10 @@ mod tests {
             option: 2,
         });
         state.move_line_preview_to(Coord { line: 5, column: 5 });
-        let live = state
-            .lines_with_shape_preview()
+        let preview_canvas = state
+            .line_preview_render_canvas()
             .expect("changed route has a preview");
+        let live = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
         assert_ne!(live, first_segment);
         assert!(
             live.iter()
@@ -533,9 +535,10 @@ mod tests {
         state.start_or_advance_line_preview();
         let target = Coord { line: 5, column: 2 };
         state.move_line_preview_to(target);
-        let preview = state
-            .lines_with_shape_preview()
+        let preview_canvas = state
+            .line_preview_render_canvas()
             .expect("mixed route is previewed");
+        let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
         assert_eq!(
             preview
                 .iter()
@@ -595,9 +598,10 @@ mod tests {
         });
         let endpoint = Coord { line: 5, column: 8 };
         state.move_line_preview_to(endpoint);
-        let preview = state
-            .lines_with_shape_preview()
+        let preview_canvas = state
+            .line_preview_render_canvas()
             .expect("both routed segments are previewed");
+        let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
         assert!(preview.iter().flatten().any(|atom| atom.contents == "╲"));
         assert_eq!(
             preview

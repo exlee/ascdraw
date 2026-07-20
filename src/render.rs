@@ -3287,14 +3287,8 @@ mod tests {
     }
 
     #[test]
-    fn truncate_atoms_does_not_split_emoji_variation_sequence() {
-        let line = vec![StyledAtom {
-            face: Face::default(),
-            contents: "a❤️b".into(),
-        }];
-
-        let truncated = truncate_atoms(&line, 2);
-
-        assert_eq!(truncated[0].contents, "a");
+    fn title_truncation_does_not_split_emoji_variation_sequence() {
+        assert_eq!(truncate_title("a❤️b", 2), "a");
+        assert_eq!(truncate_title("a❤️b", 3), "a❤️");
     }
 }
