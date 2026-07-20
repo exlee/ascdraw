@@ -66,6 +66,28 @@ module FpsBenchmark
           run_scenarios(client, warmup, operations) +
             [measure_zoom(client, "zoom-file", warmup, operations)]
         end
+        minimum_zoom_path = WorkspaceFixture.materialize(
+          fixture,
+          temporary_dir,
+          basename: "minimum-zoom-scroll",
+        )
+        reports << run_editor(socket_path, minimum_zoom_path, log) do |client|
+          zoom_to_minimum(client)
+          measure_scroll(client, "minimum-zoom-scroll", warmup, operations)
+        end
+        zoom_return_path = WorkspaceFixture.materialize(
+          fixture,
+          temporary_dir,
+          basename: "minimum-zoom-scroll-return",
+        )
+        reports << run_editor(socket_path, zoom_return_path, log) do |client|
+          measure_zoom_scroll_return(
+            client,
+            "minimum-zoom-scroll-return",
+            warmup,
+            operations,
+          )
+        end
         reports.concat(
           run_editor(socket_path, saved_document_path, log) do |client|
             run_scenarios(client, warmup, operations, "saved-file-")
@@ -179,19 +201,7 @@ module FpsBenchmark
   def run_scenarios(client, warmup, operations, name_prefix = "", include_scroll: true)
     reports = []
     if include_scroll
-      circle_points = 100
-      circle_radius = 40.0
-      scroll_step = 0
-      previous_point = point_on_circle(0.0, circle_radius)
-      reports << measure(client, "#{name_prefix}scroll", warmup, operations) do
-        t = (scroll_step % circle_points).fdiv(circle_points - 1)
-        point = point_on_circle(t, circle_radius)
-        scroll_step += 1
-        x = point[0] - previous_point[0]
-        y = point[1] - previous_point[1]
-        previous_point = point
-        client.request(command: "scroll", x: x, y: y, steps: 1)
-      end
+      reports << measure_scroll(client, "#{name_prefix}scroll", warmup, operations)
     end
 
     client.request(command: "key", key: "i", count: 1)
@@ -246,6 +256,78 @@ module FpsBenchmark
       current += step * direction
       direction = -1.0 if current >= maximum
       direction = 1.0 if current <= minimum
+    end
+  end
+
+  def measure_scroll(client, name, warmup, operations)
+    deltas = circular_scroll_deltas
+    measure(client, name, warmup, operations) do
+      x, y = deltas.next
+      client.request(command: "scroll", x: x, y: y, steps: 1)
+    end
+  end
+
+  def measure_zoom_scroll_return(client, name, warmup, operations)
+    if warmup.positive?
+      zoom_steps = zoom_to_minimum(client)
+      scroll(client, circular_scroll_deltas, warmup)
+      zoom_by_steps(client, 0.25, zoom_steps)
+    end
+
+    client.request(command: "metrics", reset: true)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    zoom_steps = zoom_to_minimum(client)
+    scroll(client, circular_scroll_deltas, operations)
+    zoom_by_steps(client, 0.25, zoom_steps)
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    metrics = client.request(command: "metrics", reset: false)
+    measured_operations = operations + zoom_steps * 2 + 1
+    {
+      "scenario" => name,
+      "operations" => measured_operations,
+      "elapsed_seconds" => elapsed,
+      "operations_per_second" => measured_operations / elapsed,
+      "metrics" => metrics,
+    }
+  end
+
+  def circular_scroll_deltas
+    Enumerator.new do |deltas|
+      points = 100
+      radius = 40.0
+      step = 0
+      previous = point_on_circle(0.0, radius)
+      loop do
+        point = point_on_circle((step % points).fdiv(points - 1), radius)
+        step += 1
+        deltas << [point[0] - previous[0], point[1] - previous[1]]
+        previous = point
+      end
+    end
+  end
+
+  def scroll(client, deltas, count)
+    count.times do
+      x, y = deltas.next
+      client.request(command: "scroll", x: x, y: y, steps: 1)
+    end
+  end
+
+  def zoom_to_minimum(client)
+    successful_steps = 0
+    loop do
+      changed = client.request(command: "zoom", delta: -0.25)
+      return successful_steps unless changed
+
+      successful_steps += 1
+      raise "minimum zoom was not reached within 1,000 steps" if successful_steps >= 1_000
+    end
+  end
+
+  def zoom_by_steps(client, delta, count)
+    count.times do
+      changed = client.request(command: "zoom", delta: delta)
+      raise "zoom stopped before returning to the initial scale" unless changed
     end
   end
 
@@ -335,7 +417,7 @@ module FpsBenchmark
 end
 
 namespace :benchmark do
-  desc "Run native-window FPS benchmarks before and after saving and reopening the active file"
+  desc "Run native-window editing, minimum-zoom scrolling, zoom-return, and reopen FPS benchmarks"
   task fps: :build_release do
     FpsBenchmark.run
   end
