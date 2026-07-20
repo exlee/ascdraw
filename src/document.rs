@@ -8,8 +8,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::canvas::{LayerMap, LayerStack};
-use crate::dense_exchange;
-use crate::editor::PersistedLayer;
 use crate::layout::ViewportOffset;
 use crate::model::{Atom, Coord, Face, LayerId};
 use crate::toolbar::DurableMenuSelections;
@@ -113,22 +111,17 @@ struct LegacySparseCell {
 }
 
 impl Document {
-    pub fn new(
-        layers: Vec<PersistedLayer>,
-        active_layer: LayerId,
+    pub(crate) fn from_legacy(
+        canvas: LayerStack,
         menu_selections: Option<DurableMenuSelections>,
         position: Option<CanvasPosition>,
-    ) -> Result<Self> {
-        let maps = layers
-            .into_iter()
-            .map(|layer| dense_exchange::from_dense(layer.id, layer.visible, &layer.lines))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
-            canvas: LayerStack::with_active(maps, active_layer, true)?,
+    ) -> Self {
+        Self {
+            canvas,
             menu_selections,
             position,
             needs_migration: true,
-        })
+        }
     }
 
     pub fn needs_migration(&self) -> bool {
@@ -397,6 +390,9 @@ fn default_path_with_env(env_var: impl Fn(&str) -> Option<OsString>, temp_dir: P
     }
     temp_dir.join("ascdraw").join("document.json")
 }
+
+#[cfg(test)]
+use crate::legacy_loader::LegacyLayer as PersistedLayer;
 
 #[cfg(test)]
 #[path = "inline_tests/document_tests.rs"]

@@ -331,7 +331,7 @@ mod tests {
         editor.insert("old");
         let (before, after, delta) =
             captured_edit(&mut editor, ViewportOffset::default(), |editor| {
-                editor.replace_canvas(crate::export::lines_from_text("new"))
+                editor.replace_canvas(crate::export::canvas_from_text("new").unwrap())
             });
         assert_eq!(delta.cells.len(), 3);
 

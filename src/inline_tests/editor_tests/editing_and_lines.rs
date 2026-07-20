@@ -595,7 +595,7 @@ fn replacing_canvas_truncates_oversized_rows_and_columns() {
     });
     let mut state = state();
 
-    state.replace_canvas(lines);
+    state.replace_canvas(crate::export::canvas_from_dense_lines(lines).unwrap());
 
     assert!(state.active_layer_for_test().rows().is_empty());
     assert_eq!(state.active_layer_for_test().bounds(), None);

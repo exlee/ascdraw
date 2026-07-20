@@ -169,16 +169,19 @@ fn cursor_coordinates_use_downward_positive_screen_coordinates() {
 #[test]
 fn cursor_coordinates_are_absolute_signed_canvas_coordinates() {
     let mut state = state();
-    state.replace_canvas(vec![
-        Vec::new(),
-        vec![
-            blank_atom(),
-            StyledAtom {
-                face: Face::default(),
-                contents: "x".to_owned(),
-            },
-        ],
-    ]);
+    state.replace_canvas(
+        crate::export::canvas_from_dense_lines(vec![
+            Vec::new(),
+            vec![
+                blank_atom(),
+                StyledAtom {
+                    face: Face::default(),
+                    contents: "x".to_owned(),
+                },
+            ],
+        ])
+        .unwrap(),
+    );
 
     assert_eq!(state.cursor_coordinates(), (0, 0));
     state.move_to(Coord { line: 1, column: 1 });

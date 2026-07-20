@@ -8,10 +8,12 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::MacosColorSpace;
+use crate::canvas::LayerStack;
 use crate::dense_exchange;
 use crate::document::{self, CanvasPosition, Document};
-use crate::editor::{Editor, PersistedLayer};
+use crate::editor::Editor;
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
+use crate::legacy_loader::{LegacyLayer, into_canvas};
 use crate::model::{Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
 use crate::selection::{CanvasRegion, CanvasSelection, TextRectangle};
@@ -310,7 +312,7 @@ pub fn perform(
             };
             let text = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            state.replace_canvas(lines_from_text(&text));
+            state.replace_canvas(canvas_from_text(&text)?);
             Ok(ExportOutcome::DocumentLoaded {
                 path,
                 format: FileKind::Txt,
@@ -340,7 +342,7 @@ pub fn perform(
                     *viewport = project.viewport;
                     return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
                 }
-                LoadedJson::Legacy(lines) => state.replace_canvas(lines),
+                LoadedJson::Legacy(lines) => state.replace_canvas(canvas_from_dense_lines(lines)?),
             }
             Ok(ExportOutcome::DocumentLoaded {
                 path,
@@ -593,7 +595,7 @@ struct ProjectCanvas {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rows: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    layers: Vec<PersistedLayer>,
+    layers: Vec<LegacyLayer>,
     #[serde(
         default,
         rename = "active-layer",
@@ -604,8 +606,7 @@ struct ProjectCanvas {
 
 #[derive(Debug)]
 struct RestoredProject {
-    layers: Vec<PersistedLayer>,
-    active_layer: LayerId,
+    canvas: crate::canvas::LayerStack,
     cursor: crate::model::Coord,
     selection: CanvasSelection,
     viewport: ViewportOffset,
@@ -630,8 +631,7 @@ pub(crate) fn load_project_json(
         LoadedJson::Native(document) => Ok(restore_native_document(state, viewport, *document)),
         LoadedJson::Project(project) => {
             state.restore_project(
-                project.layers,
-                project.active_layer,
+                project.canvas,
                 project.cursor,
                 project.selection,
                 &project.menu_selections,
@@ -640,7 +640,7 @@ pub(crate) fn load_project_json(
             Ok(0)
         }
         LoadedJson::Legacy(lines) => {
-            state.replace_canvas(lines);
+            state.replace_canvas(canvas_from_dense_lines(lines)?);
             Ok(0)
         }
     }
@@ -659,10 +659,11 @@ fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
         ),
         LoadedJson::Project(project) => flatten_visible_layers(
             &project
-                .layers
-                .into_iter()
+                .canvas
+                .effective_layers()
+                .iter()
                 .filter(|layer| layer.visible)
-                .map(|layer| layer.lines)
+                .map(|layer| dense_exchange::to_dense(layer))
                 .collect::<Vec<_>>(),
         ),
         LoadedJson::Legacy(lines) => lines,
@@ -744,7 +745,7 @@ fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject
     }
     let (mut layers, active_layer) = if document.version == 1 {
         (
-            vec![PersistedLayer {
+            vec![LegacyLayer {
                 id: LayerId(0),
                 visible: true,
                 lines: nonempty_lines(
@@ -778,9 +779,9 @@ fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject
     ] {
         pad_to_coordinate(active_lines, name, coord)?;
     }
+    let canvas = into_canvas(layers, active_layer)?;
     Ok(RestoredProject {
-        layers,
-        active_layer,
+        canvas,
         cursor: document.cursor,
         selection: document.selection,
         viewport: document.viewport,
@@ -788,7 +789,7 @@ fn restore_project_document(document: ProjectDocument) -> Result<RestoredProject
     })
 }
 
-fn validate_persisted_layers(layers: &[PersistedLayer], active_layer: LayerId) -> Result<()> {
+fn validate_persisted_layers(layers: &[LegacyLayer], active_layer: LayerId) -> Result<()> {
     if layers.is_empty() || layers.len() > crate::model::MAX_LAYERS {
         bail!(
             "project must contain between 1 and {} layers",
@@ -934,6 +935,37 @@ pub fn lines_from_text(text: &str) -> Vec<Vec<StyledAtom>> {
     nonempty_lines(lines)
 }
 
+pub(crate) fn canvas_from_text(text: &str) -> Result<LayerStack> {
+    canvas_from_dense_lines(lines_from_text(text))
+}
+
+pub(crate) fn canvas_from_dense_lines(
+    mut lines: Vec<Vec<StyledAtom>>,
+) -> Result<LayerStack> {
+    truncate_dense_lines(&mut lines);
+    let map = dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &[])?;
+    LayerStack::new(vec![map], false)
+}
+
+fn truncate_dense_lines(lines: &mut Vec<Vec<StyledAtom>>) {
+    lines.truncate(MAX_CANVAS_HEIGHT);
+    for line in lines {
+        let mut width = 0usize;
+        let keep = line
+            .iter()
+            .take_while(|atom| {
+                let next = width.saturating_add(atom_display_width(atom));
+                if next > MAX_CANVAS_WIDTH {
+                    return false;
+                }
+                width = next;
+                true
+            })
+            .count();
+        line.truncate(keep);
+    }
+}
+
 fn nonempty_lines(lines: Vec<Vec<StyledAtom>>) -> Vec<Vec<StyledAtom>> {
     if lines.is_empty() {
         vec![Vec::new()]
@@ -979,7 +1011,7 @@ mod tests {
                     .canvas()
                     .layers()
                     .iter()
-                    .map(|layer| PersistedLayer {
+                    .map(|layer| LegacyLayer {
                         id: layer.id,
                         visible: layer.visible,
                         lines: dense_exchange::to_dense(layer),
@@ -1011,7 +1043,7 @@ mod tests {
     #[test]
     fn plain_text_preserves_ragged_rows_without_blank_canvas_padding() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.replace_canvas(lines_from_text("one\nlonger\n"));
+        state.replace_canvas(canvas_from_text("one\nlonger\n").unwrap());
 
         assert_eq!(plain_text(&state), "one\nlonger");
     }
@@ -1019,7 +1051,7 @@ mod tests {
     #[test]
     fn plain_text_rebases_visible_content_to_its_minimum_coordinates() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.replace_canvas(lines_from_text("\n  ab\n\n   c"));
+        state.replace_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
 
         assert_eq!(plain_text(&state), "ab\n\n c");
     }

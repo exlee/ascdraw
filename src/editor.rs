@@ -18,7 +18,6 @@ mod color_tool;
 mod grid;
 mod jump_mode;
 mod layer_facade;
-mod layers;
 mod lifecycle;
 mod line_preview;
 mod line_tool;
@@ -29,7 +28,6 @@ mod state;
 mod text_tool;
 mod utility;
 pub(super) use grid::adjacent_coord;
-pub use layers::PersistedLayer;
 use line_preview::LinePreview;
 use line_tool::ActiveStroke;
 use move_tool::MoveLift;
@@ -649,7 +647,13 @@ impl Editor {
         if rectangle.width == 0
             || rectangle.rows.is_empty()
             || rectangle.rows.iter().any(|row| {
-                display_width(row) != rectangle.width
+                row.iter()
+                    .map(|atom| {
+                        UnicodeWidthStr::width(atom.contents.as_str())
+                            .max(usize::from(!atom.contents.is_empty()))
+                    })
+                    .sum::<usize>()
+                    != rectangle.width
                     || row
                         .iter()
                         .any(|atom| atom.contents.contains('\n') || atom.validate_cell().is_err())
@@ -711,13 +715,12 @@ impl Editor {
 
     pub fn restore_project(
         &mut self,
-        layers: Vec<PersistedLayer>,
-        active_layer: LayerId,
+        canvas: crate::canvas::LayerStack,
         cursor: Coord,
         selection: CanvasSelection,
         menu_selections: &DurableMenuSelections,
     ) -> anyhow::Result<()> {
-        self.restore_layers(layers, active_layer)?;
+        self.restore_canvas(canvas);
         self.restore_menu_selections(menu_selections);
         self.grid.cursor_pos = cursor;
         self.selection

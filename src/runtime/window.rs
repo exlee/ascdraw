@@ -14,7 +14,7 @@ use crate::app::{AppCommand, AppConfig};
 use crate::diagnostics::log_error;
 use crate::document;
 use crate::editor::Editor;
-use crate::export::{FileKind, lines_from_text, load_project_json, plain_text};
+use crate::export::{FileKind, canvas_from_text, load_project_json, plain_text};
 use crate::history::{EditHistory, HistoryGroup, HistoryRestore, HistorySnapshot};
 use crate::input::EditCommand;
 use crate::input::{OrderedModifierTracker, ViewCommand};
@@ -1916,7 +1916,7 @@ pub fn create_editor_window(
         DocumentSession::TextFile(document_path) => {
             let text = std::fs::read_to_string(document_path)
                 .with_context(|| format!("failed to read {}", document_path.display()))?;
-            state.replace_canvas(lines_from_text(&text));
+            state.replace_canvas(canvas_from_text(&text)?);
         }
         DocumentSession::JsonFile(document_path) => {
             let mut loaded = state.clone();
@@ -1924,7 +1924,7 @@ pub fn create_editor_window(
             renderer.restore_zoom(zoom);
             state = loaded;
         }
-        DocumentSession::Stdin(text) => state.replace_canvas(lines_from_text(text)),
+        DocumentSession::Stdin(text) => state.replace_canvas(canvas_from_text(text)?),
     }
     let mut editor = EditorWindow {
         window,

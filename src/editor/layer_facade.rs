@@ -9,33 +9,6 @@ impl Editor {
         self.canvas.active_id()
     }
 
-    pub fn restore_layers(
-        &mut self,
-        layers: Vec<PersistedLayer>,
-        active_layer: LayerId,
-    ) -> anyhow::Result<()> {
-        let maps = layers
-            .into_iter()
-            .map(|layer| {
-                crate::dense_exchange::from_dense_with_markers(
-                    layer.id,
-                    layer.visible,
-                    &layer.lines,
-                    &[],
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let replacement = crate::canvas::LayerStack::with_active(
-            maps,
-            active_layer,
-            self.toolbar.multi_layer_mode(),
-        )?;
-        self.canvas.record_history_replacement(&replacement);
-        self.canvas = replacement;
-        self.toolbar.sync_layer_count(self.canvas.layers().len());
-        Ok(())
-    }
-
     pub fn restore_canvas(&mut self, mut canvas: crate::canvas::LayerStack) {
         canvas.set_enabled(self.toolbar.multi_layer_mode());
         self.toolbar.sync_layer_count(canvas.layers().len());
