@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::canvas::{LayerMap, LayerStack};
 use crate::editor::PersistedLayer;
 use crate::layout::ViewportOffset;
+#[cfg(test)]
+use crate::model::StyledAtom;
 use crate::model::{Atom, Coord, Face, LayerId};
 use crate::toolbar::DurableMenuSelections;
 
@@ -140,10 +142,7 @@ fn sparse_document(sparse: SparseDocument) -> Result<Document> {
     for layer in sparse.layers {
         let mut map = LayerMap::new(layer.id, layer.visible);
         for cell in layer.cells {
-            let atom = Atom {
-                face: cell.face.clone(),
-                contents: cell.atom,
-            };
+            let atom = Atom::new(cell.atom)?;
             map.set_at(cell.column, cell.line, atom, &cell.face)?;
             map.set_line_data(cell.column, cell.line, cell.line_data);
         }
@@ -187,7 +186,7 @@ pub fn contents(
                         line,
                         column,
                         face: data.face.as_ref().clone(),
-                        atom: data.atom.contents.clone(),
+                        atom: data.atom.contents().to_owned(),
                         line_data: data.line.clone(),
                     })
                 })
@@ -307,11 +306,11 @@ mod tests {
             id: LayerId(0),
             visible: true,
             lines: vec![vec![
-                Atom {
+                StyledAtom {
                     face: Face::default(),
                     contents: "x".to_owned(),
                 },
-                Atom {
+                StyledAtom {
                     face: Face::default(),
                     contents: " ".to_owned(),
                 },
@@ -336,7 +335,7 @@ mod tests {
         let layers = [PersistedLayer {
             id: LayerId(0),
             visible: true,
-            lines: vec![vec![Atom {
+            lines: vec![vec![StyledAtom {
                 face: Face::default(),
                 contents: "界".to_owned(),
             }]],

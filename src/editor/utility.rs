@@ -1,5 +1,5 @@
 use super::{Editor, atom_width};
-use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
 use crate::toolbar::UtilityKind;
 
 impl Editor {
@@ -300,7 +300,7 @@ enum CellSlot {
     Implicit,
 }
 
-fn boundary_index(line: &[Atom], target: usize) -> Option<usize> {
+fn boundary_index(line: &[StyledAtom], target: usize) -> Option<usize> {
     let mut column: usize = 0;
     for (index, atom) in line.iter().enumerate() {
         if column == target {
@@ -315,7 +315,7 @@ fn boundary_index(line: &[Atom], target: usize) -> Option<usize> {
     (target >= column).then_some(line.len())
 }
 
-fn cell_slot(line: &[Atom], target: usize) -> CellSlot {
+fn cell_slot(line: &[StyledAtom], target: usize) -> CellSlot {
     let mut column: usize = 0;
     for (index, atom) in line.iter().enumerate() {
         let width = atom_width(atom);

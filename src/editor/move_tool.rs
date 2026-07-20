@@ -1,7 +1,9 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::{LayerMap, LayerStack, LineData};
-use crate::model::{Atom, Coord, Direction, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{
+    Atom, Coord, Direction, Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom,
+};
 use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
 
 use super::{EditSnapshot, Editor, PlacedLineMarker};
@@ -17,7 +19,8 @@ pub(super) struct MoveLift {
     prepended_lines: usize,
     clone_origins: Vec<Coord>,
     last_clone_press: Option<u64>,
-    rectangle: TextRectangle,
+    width: usize,
+    height: usize,
     layers: Vec<LiftedLayer>,
     rendered_canvas: Option<LayerStack>,
 }
@@ -34,6 +37,7 @@ struct LiftedAtom {
     offset: Coord,
     width: usize,
     atom: Atom,
+    face: Face,
 }
 
 impl Editor {
@@ -91,10 +95,8 @@ impl Editor {
             prepended_lines: 0,
             clone_origins: Vec::new(),
             last_clone_press: None,
-            rectangle: TextRectangle {
-                rows: vec![vec![super::blank_atom()]; source_bounds.height()],
-                width: source_bounds.width(),
-            },
+            width: source_bounds.width(),
+            height: source_bounds.height(),
             layers,
             rendered_canvas: None,
         });
@@ -136,7 +138,7 @@ impl Editor {
         let Some(lift) = self.move_lift.as_mut() else {
             return false;
         };
-        let bounds = lift.rectangle.bounds_at(lift.origin);
+        let bounds = lift.bounds();
         if direction == Direction::Right && bounds.right.saturating_add(1) >= MAX_CANVAS_WIDTH
             || direction == Direction::Down && bounds.bottom.saturating_add(1) >= MAX_CANVAS_HEIGHT
         {
@@ -230,19 +232,20 @@ impl Editor {
     }
 
     pub fn move_lift_bounds(&self) -> Option<SelectionBounds> {
-        self.move_lift
-            .as_ref()
-            .map(|lift| lift.rectangle.bounds_at(lift.origin))
+        self.move_lift.as_ref().map(MoveLift::bounds)
     }
 
     #[cfg(test)]
-    pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<Atom>>> {
+    pub(super) fn lines_with_move_lift_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
         self.move_lift_render_canvas()
             .map(LayerStack::active_dense_lines)
     }
 
     #[cfg(test)]
-    pub(crate) fn move_lift_render_lines_for_layer(&self, id: LayerId) -> Option<Vec<Vec<Atom>>> {
+    pub(crate) fn move_lift_render_lines_for_layer(
+        &self,
+        id: LayerId,
+    ) -> Option<Vec<Vec<StyledAtom>>> {
         self.move_lift_render_canvas().and_then(|canvas| {
             canvas
                 .layers()
@@ -292,7 +295,7 @@ impl Editor {
 
 fn lifted_layer(
     id: LayerId,
-    rows: Vec<Vec<Atom>>,
+    rows: Vec<Vec<StyledAtom>>,
     markers: Vec<PlacedLineMarker>,
     source_origin: Coord,
     source_bounds: SelectionBounds,
@@ -339,7 +342,7 @@ fn apply_sparse_move(
                 i16::try_from(coord.column).expect("validated move column"),
                 i16::try_from(coord.line).expect("validated move line"),
                 atom.atom.clone(),
-                &atom.atom.face,
+                &atom.face,
             )
             .expect("moved atom occupies one sparse cell");
         }
@@ -357,6 +360,21 @@ fn apply_sparse_move(
 }
 
 impl MoveLift {
+    fn bounds(&self) -> SelectionBounds {
+        SelectionBounds {
+            left: self.origin.column,
+            right: self
+                .origin
+                .column
+                .saturating_add(self.width.saturating_sub(1)),
+            top: self.origin.line,
+            bottom: self
+                .origin
+                .line
+                .saturating_add(self.height.saturating_sub(1)),
+        }
+    }
+
     fn shift(&mut self, columns: usize, lines: usize) {
         self.prepended_columns = self.prepended_columns.saturating_add(columns);
         self.prepended_lines = self.prepended_lines.saturating_add(lines);
@@ -386,7 +404,9 @@ fn lifted_edited_atoms(rectangle: &TextRectangle) -> Vec<LiftedAtom> {
                 lifted.push(LiftedAtom {
                     offset: Coord { line, column },
                     width,
-                    atom: atom.clone(),
+                    atom: Atom::new(atom.contents.clone())
+                        .expect("lifted atoms are validated one-cell graphemes"),
+                    face: atom.face.clone(),
                 });
             }
             column = column.saturating_add(width);

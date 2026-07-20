@@ -3,7 +3,7 @@ use crate::drawing::{
     CornerStyle, LineEnding, LineStyle, glyph_for_connection_pair,
     glyph_with_connection_and_corner, is_line_glyph, line_ending_glyph,
 };
-use crate::model::{Coord, Direction};
+use crate::model::{Atom, Coord, Direction};
 
 use super::{Editor, adjacent_coord};
 
@@ -132,19 +132,17 @@ impl Editor {
         let Some(data) = self.canvas.active_cell(coord) else {
             return;
         };
-        let mut atom = data.atom.as_ref().clone();
-        let Some(glyph) = crate::drawing::glyph_without_connection(&atom.contents, direction)
+        let Some(glyph) = crate::drawing::glyph_without_connection(data.atom.contents(), direction)
         else {
             return;
         };
-        atom.contents = glyph.to_string();
+        let atom = Atom::new(glyph.to_string()).expect("line glyph is one cell");
         let mut face = data.face.as_ref().clone();
-        if atom.contents.chars().all(char::is_whitespace) {
+        if atom.contents().chars().all(char::is_whitespace) {
             face = crate::model::Face::default();
         } else {
             face.fg = foreground;
         }
-        atom.face = face.clone();
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
@@ -153,7 +151,7 @@ impl Editor {
     pub(super) fn cell_contents(&self, coord: Coord) -> Option<&str> {
         self.canvas
             .active_cell(coord)
-            .map(|data| data.atom.contents.as_str())
+            .map(|data| data.atom.contents())
     }
 
     fn take_line_marker(&mut self, coord: Coord) -> Option<LineData> {
@@ -176,17 +174,14 @@ impl Editor {
         let existing = self
             .canvas
             .active_cell(coord)
-            .map(|data| (data.atom.contents.clone(), data.face.as_ref().clone()))
+            .map(|data| (data.atom.contents().to_owned(), data.face.as_ref().clone()))
             .unwrap_or_else(|| (" ".to_owned(), crate::model::Face::default()));
         let glyph =
             glyph_with_connection_and_corner(&existing.0, direction, line_style, corner_style)?;
         let contents = glyph.to_string();
         let mut face = existing.1;
         face.fg = foreground;
-        let atom = crate::model::Atom {
-            face: face.clone(),
-            contents: contents.clone(),
-        };
+        let atom = Atom::new(contents.clone()).expect("line glyph is one cell");
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
@@ -227,10 +222,7 @@ impl Editor {
                 data.face.as_ref().clone()
             });
         face.fg = foreground;
-        let atom = crate::model::Atom {
-            face: face.clone(),
-            contents,
-        };
+        let atom = Atom::new(contents).expect("line glyph is one cell");
         self.canvas
             .set_at(coord, atom, &face)
             .expect("line glyphs occupy one sparse cell");
@@ -255,10 +247,7 @@ impl Editor {
             return false;
         }
         let face = self.write_face();
-        let atom = crate::model::Atom {
-            face: face.clone(),
-            contents: glyph.to_owned(),
-        };
+        let atom = Atom::new(glyph).expect("diagonal glyph is one cell");
         self.canvas
             .set_at(coord, atom, &face)
             .expect("diagonal glyphs occupy one sparse cell");

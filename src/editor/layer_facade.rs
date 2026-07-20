@@ -17,7 +17,9 @@ impl Editor {
             .collect()
     }
 
-    pub(super) fn layer_contents(&self) -> Vec<(LayerId, Vec<Vec<Atom>>, Vec<PlacedLineMarker>)> {
+    pub(super) fn layer_contents(
+        &self,
+    ) -> Vec<(LayerId, Vec<Vec<StyledAtom>>, Vec<PlacedLineMarker>)> {
         self.canvas
             .layers()
             .iter()
@@ -87,7 +89,7 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self.canvas.activate(index);
         if changed {
             self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -101,7 +103,7 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self
             .canvas
             .add_above(index)
@@ -116,7 +118,7 @@ impl Editor {
     }
 
     pub fn toggle_layer_visibility(&mut self, id: LayerId) -> bool {
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self
             .canvas
             .index_of(id)
@@ -125,7 +127,7 @@ impl Editor {
     }
 
     pub fn move_layer_up(&mut self, id: LayerId) -> bool {
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self
             .canvas
             .index_of(id)
@@ -134,7 +136,7 @@ impl Editor {
     }
 
     pub fn move_layer_down(&mut self, id: LayerId) -> bool {
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self
             .canvas
             .index_of(id)
@@ -157,7 +159,7 @@ impl Editor {
     }
 
     fn merge_layer_into(&mut self, index: usize, target: usize) -> bool {
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self
             .canvas
             .merge_into(index, target)
@@ -174,7 +176,7 @@ impl Editor {
         let Some(index) = self.canvas.index_of(id) else {
             return false;
         };
-        self.sync_dense_layer_before_operation();
+        self.sync_layer_mode_before_operation();
         let changed = self.canvas.delete(index);
         if changed {
             self.toolbar.sync_layer_count(self.canvas.layers().len());
@@ -184,10 +186,8 @@ impl Editor {
         changed
     }
 
-    fn sync_dense_layer_before_operation(&mut self) {
-        if !self.canvas_is_current() {
-            self.commit_canvas();
-        }
+    fn sync_layer_mode_before_operation(&mut self) {
+        self.commit_canvas();
     }
 
     fn cancel_layer_transients(&mut self) {

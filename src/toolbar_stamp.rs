@@ -5,7 +5,7 @@ use winit::keyboard::ModifiersState;
 use crate::editor::Editor;
 use crate::face_resolution::{Rgba, UnderlineStyle, resolve_derived_face};
 use crate::layout::PADDING;
-use crate::model::{Atom, Face};
+use crate::model::{Face, StyledAtom};
 use crate::render::{FALLBACK_BG, FALLBACK_FG};
 use crate::selection::TextRectangle;
 use crate::toolbar::{ToolbarSpan, toolbar_border_spans, toolbar_bottom_border_spans};
@@ -59,7 +59,7 @@ pub(crate) fn hotspot_click(hotspot: Option<usize>, modifiers: ModifiersState) -
     }
 }
 
-pub(crate) fn toolbar_atoms(spans: &[ToolbarSpan], state: &Editor) -> Vec<Atom> {
+pub(crate) fn toolbar_atoms(spans: &[ToolbarSpan], state: &Editor) -> Vec<StyledAtom> {
     let mut atoms = Vec::new();
     for span in spans {
         let split = display_width_byte_index(&span.contents, span.bold_prefix);
@@ -67,13 +67,13 @@ pub(crate) fn toolbar_atoms(spans: &[ToolbarSpan], state: &Editor) -> Vec<Atom> 
         if !bold.is_empty() {
             let mut face = toolbar_span_face(span, state);
             face.attributes.push("bold".to_string());
-            atoms.push(Atom {
+            atoms.push(StyledAtom {
                 face,
                 contents: bold.to_string(),
             });
         }
         if !normal.is_empty() {
-            atoms.push(Atom {
+            atoms.push(StyledAtom {
                 face: toolbar_span_face(span, state),
                 contents: normal.to_string(),
             });
@@ -123,10 +123,10 @@ pub(crate) fn styled_toolbar_snapshot(state: &Editor, box_width: usize) -> Optio
     })
 }
 
-fn split_atom_graphemes(atom: Atom) -> Vec<Atom> {
+fn split_atom_graphemes(atom: StyledAtom) -> Vec<StyledAtom> {
     atom.contents
         .graphemes(true)
-        .map(|contents| Atom {
+        .map(|contents| StyledAtom {
             contents: contents.to_owned(),
             face: atom.face.clone(),
         })
@@ -206,7 +206,7 @@ mod tests {
     use crate::model::ColorId;
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
 
-    fn row_text(row: &[Atom]) -> String {
+    fn row_text(row: &[StyledAtom]) -> String {
         row.iter().map(|atom| atom.contents.as_str()).collect()
     }
 

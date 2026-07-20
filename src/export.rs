@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::MacosColorSpace;
 use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
-use crate::model::{Atom, Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{Face, LayerId, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
 use crate::render::{CanvasImage, Renderer, render_canvas_image, render_canvas_layers_image};
 #[cfg(test)]
 use crate::selection::region_atoms;
@@ -53,14 +53,14 @@ pub trait ExportPlatform {
     fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf>;
     fn render_canvas_image(
         &mut self,
-        _lines: &[Vec<Atom>],
+        _lines: &[Vec<StyledAtom>],
         _default_face: &Face,
     ) -> Result<CanvasImage> {
         bail!("PNG rendering is unavailable")
     }
     fn render_canvas_layers_image(
         &mut self,
-        layers: &[Vec<Vec<Atom>>],
+        layers: &[Vec<Vec<StyledAtom>>],
         default_face: &Face,
     ) -> Result<CanvasImage> {
         if let [lines] = layers {
@@ -145,7 +145,7 @@ impl ExportPlatform for NativeExportPlatform<'_> {
 
     fn render_canvas_image(
         &mut self,
-        lines: &[Vec<Atom>],
+        lines: &[Vec<StyledAtom>],
         default_face: &Face,
     ) -> Result<CanvasImage> {
         let context = self.png.as_ref().context("PNG renderer is unavailable")?;
@@ -160,7 +160,7 @@ impl ExportPlatform for NativeExportPlatform<'_> {
 
     fn render_canvas_layers_image(
         &mut self,
-        layers: &[Vec<Vec<Atom>>],
+        layers: &[Vec<Vec<StyledAtom>>],
         default_face: &Face,
     ) -> Result<CanvasImage> {
         let context = self.png.as_ref().context("PNG renderer is unavailable")?;
@@ -373,7 +373,7 @@ fn selected_visible_text(state: &Editor) -> String {
     )
 }
 
-fn atoms_text(lines: &[Vec<Atom>]) -> String {
+fn atoms_text(lines: &[Vec<StyledAtom>]) -> String {
     lines
         .iter()
         .map(|row| {
@@ -425,10 +425,7 @@ pub fn plain_text(state: &Editor) -> String {
         .join("\n")
 }
 
-fn sparse_composite_region(state: &Editor, region: CanvasRegion) -> Option<Vec<Vec<Atom>>> {
-    if !state.canvas_is_current() {
-        return None;
-    }
+fn sparse_composite_region(state: &Editor, region: CanvasRegion) -> Option<Vec<Vec<StyledAtom>>> {
     state.canvas().composite_region(region)
 }
 
@@ -451,27 +448,19 @@ pub fn canvas_region_for_export(
 pub fn canvas_atoms_for_export(
     state: &Editor,
     visible_canvas: VisibleCanvasCells,
-) -> Vec<Vec<Atom>> {
+) -> Vec<Vec<StyledAtom>> {
     flatten_visible_layers(&canvas_layers_for_export(state, visible_canvas))
 }
 
 pub fn canvas_layers_for_export(
     state: &Editor,
     visible_canvas: VisibleCanvasCells,
-) -> Vec<Vec<Vec<Atom>>> {
+) -> Vec<Vec<Vec<StyledAtom>>> {
     let region = canvas_region_for_export(state, visible_canvas);
     visible_layer_atoms(state, region)
 }
 
-fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<Atom>>> {
-    if !state.canvas_is_current() {
-        return state
-            .layer_views()
-            .into_iter()
-            .filter(|layer| layer.visible)
-            .map(|layer| crate::selection::region_atoms(&layer.lines, region))
-            .collect();
-    }
+fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<StyledAtom>>> {
     state
         .canvas()
         .layers()
@@ -481,7 +470,7 @@ fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<Atom
         .collect()
 }
 
-fn flatten_visible_layers(layers: &[Vec<Vec<Atom>>]) -> Vec<Vec<Atom>> {
+fn flatten_visible_layers(layers: &[Vec<Vec<StyledAtom>>]) -> Vec<Vec<StyledAtom>> {
     let height = layers.iter().map(Vec::len).max().unwrap_or(0);
     let width = layers
         .iter()
@@ -491,7 +480,7 @@ fn flatten_visible_layers(layers: &[Vec<Vec<Atom>>]) -> Vec<Vec<Atom>> {
         .unwrap_or(0);
     let mut flattened = Vec::with_capacity(height);
     for row in 0..height {
-        let mut glyphs: Vec<Option<(Atom, usize)>> = vec![None; width];
+        let mut glyphs: Vec<Option<(StyledAtom, usize)>> = vec![None; width];
         let mut owners = vec![None; width];
         for layer in layers {
             let Some(line) = layer.get(row) else {
@@ -516,7 +505,7 @@ fn flatten_visible_layers(layers: &[Vec<Vec<Atom>>]) -> Vec<Vec<Atom>> {
                             }
                         }
                         glyphs[column] = Some((
-                            Atom {
+                            StyledAtom {
                                 face: atom.face.clone(),
                                 contents: cluster.to_owned(),
                             },
@@ -551,12 +540,12 @@ struct LegacySelectionDocument {
     version: u32,
     width: usize,
     height: usize,
-    lines: Vec<Vec<Atom>>,
+    lines: Vec<Vec<StyledAtom>>,
 }
 
 #[derive(Deserialize)]
 struct NativeJsonDocument {
-    lines: Vec<Vec<Atom>>,
+    lines: Vec<Vec<StyledAtom>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -600,7 +589,7 @@ struct RestoredProject {
 #[derive(Debug)]
 enum LoadedJson {
     Project(Box<RestoredProject>),
-    Legacy(Vec<Vec<Atom>>),
+    Legacy(Vec<Vec<StyledAtom>>),
 }
 
 fn project_document(state: &Editor, viewport: ViewportOffset) -> ProjectDocument {
@@ -808,7 +797,7 @@ fn validate_coordinate(name: &str, coord: crate::model::Coord) -> Result<()> {
 }
 
 fn pad_to_coordinate(
-    lines: &mut Vec<Vec<Atom>>,
+    lines: &mut Vec<Vec<StyledAtom>>,
     name: &str,
     coord: crate::model::Coord,
 ) -> Result<()> {
@@ -834,7 +823,10 @@ fn pad_to_coordinate(
     Ok(())
 }
 
-fn normalize_legacy_lines(lines: Vec<Vec<Atom>>, width: usize) -> Result<Vec<Vec<Atom>>> {
+fn normalize_legacy_lines(
+    lines: Vec<Vec<StyledAtom>>,
+    width: usize,
+) -> Result<Vec<Vec<StyledAtom>>> {
     let lines = default_faced_lines(lines);
     let mut normalized = Vec::with_capacity(lines.len());
     for (row, line) in lines.into_iter().enumerate() {
@@ -849,7 +841,7 @@ fn normalize_legacy_lines(lines: Vec<Vec<Atom>>, width: usize) -> Result<Vec<Vec
     Ok(nonempty_lines(normalized))
 }
 
-fn default_faced_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
+fn default_faced_lines(lines: Vec<Vec<StyledAtom>>) -> Vec<Vec<StyledAtom>> {
     lines
         .into_iter()
         .map(|line| {
@@ -860,17 +852,17 @@ fn default_faced_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
         .collect()
 }
 
-fn row_atoms(row: &str) -> Vec<Atom> {
+fn row_atoms(row: &str) -> Vec<StyledAtom> {
     UnicodeSegmentation::graphemes(row, true)
-        .map(|contents| Atom {
+        .map(|contents| StyledAtom {
             face: Face::default(),
             contents: contents.to_owned(),
         })
         .collect()
 }
 
-pub fn lines_from_text(text: &str) -> Vec<Vec<Atom>> {
-    let mut lines: Vec<Vec<Atom>> = text
+pub fn lines_from_text(text: &str) -> Vec<Vec<StyledAtom>> {
+    let mut lines: Vec<Vec<StyledAtom>> = text
         .split('\n')
         .take(MAX_CANVAS_HEIGHT)
         .map(|line| {
@@ -885,7 +877,7 @@ pub fn lines_from_text(text: &str) -> Vec<Vec<Atom>> {
                     width = next;
                     true
                 })
-                .map(|contents| Atom {
+                .map(|contents| StyledAtom {
                     face: Face::default(),
                     contents: contents.to_string(),
                 })
@@ -904,7 +896,7 @@ pub fn lines_from_text(text: &str) -> Vec<Vec<Atom>> {
     nonempty_lines(lines)
 }
 
-fn nonempty_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
+fn nonempty_lines(lines: Vec<Vec<StyledAtom>>) -> Vec<Vec<StyledAtom>> {
     if lines.is_empty() {
         vec![Vec::new()]
     } else {
@@ -912,16 +904,16 @@ fn nonempty_lines(lines: Vec<Vec<Atom>>) -> Vec<Vec<Atom>> {
     }
 }
 
-fn display_width(line: &[Atom]) -> usize {
+fn display_width(line: &[StyledAtom]) -> usize {
     line.iter().map(atom_display_width).sum()
 }
 
-fn atom_display_width(atom: &Atom) -> usize {
+fn atom_display_width(atom: &StyledAtom) -> usize {
     UnicodeWidthStr::width(atom.contents.as_str()).max(usize::from(!atom.contents.is_empty()))
 }
 
-fn blank_atom() -> Atom {
-    Atom {
+fn blank_atom() -> StyledAtom {
+    StyledAtom {
         face: Face::default(),
         contents: " ".to_string(),
     }
@@ -932,7 +924,7 @@ mod tests {
     use super::*;
     use crate::history::{EditHistory, HistorySnapshot};
 
-    fn contents(line: &[Atom]) -> String {
+    fn contents(line: &[StyledAtom]) -> String {
         line.iter().map(|atom| atom.contents.as_str()).collect()
     }
     use crate::app::{CursorMode, ThemeConfig};
@@ -959,8 +951,8 @@ mod tests {
     struct MockPlatform {
         clipboard: Option<String>,
         clipboard_image: Option<CanvasImage>,
-        rendered_lines: Option<Vec<Vec<Atom>>>,
-        rendered_layers: Option<Vec<Vec<Vec<Atom>>>>,
+        rendered_lines: Option<Vec<Vec<StyledAtom>>>,
+        rendered_layers: Option<Vec<Vec<Vec<StyledAtom>>>>,
         image: Option<CanvasImage>,
         fail_clipboard_read: bool,
         fail_clipboard_write: bool,
@@ -992,7 +984,7 @@ mod tests {
         }
         fn render_canvas_image(
             &mut self,
-            lines: &[Vec<Atom>],
+            lines: &[Vec<StyledAtom>],
             _default_face: &Face,
         ) -> Result<CanvasImage> {
             self.rendered_lines = Some(lines.to_vec());
@@ -1003,7 +995,7 @@ mod tests {
         }
         fn render_canvas_layers_image(
             &mut self,
-            layers: &[Vec<Vec<Atom>>],
+            layers: &[Vec<Vec<StyledAtom>>],
             _default_face: &Face,
         ) -> Result<CanvasImage> {
             self.rendered_layers = Some(layers.to_vec());
@@ -1523,7 +1515,7 @@ mod tests {
     #[test]
     fn cut_copies_exact_ragged_rectangle_then_clears_only_that_rectangle() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.set_lines_for_test(lines_from_text("A│Z\nB\nC界Q"));
+        state.set_lines_for_test(lines_from_text("A│Z\nB\nCXYQ"));
         state.move_to(Coord { line: 0, column: 1 });
         state.extend_selection(crate::model::Direction::Right);
         state.extend_selection(crate::model::Direction::Down);
@@ -1532,7 +1524,7 @@ mod tests {
 
         assert!(cut_selection(&mut state, &mut platform).unwrap());
 
-        assert_eq!(platform.clipboard.as_deref(), Some("│Z\n  \n界"));
+        assert_eq!(platform.clipboard.as_deref(), Some("│Z\n  \nXY"));
         assert_eq!(state.selected_text(), "  \n  \n  ");
         let lines = state.lines_for_test();
         assert_eq!(contents(&lines[0]), "A");
@@ -1700,14 +1692,14 @@ mod tests {
     #[test]
     fn project_v2_round_trips_layer_order_visibility_active_layer_and_faces() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.set_lines_for_test(vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![StyledAtom {
             face: state.theme.selection.clone(),
             contents: "a".to_owned(),
         }]]);
         let base = state.active_layer_id();
         assert!(state.add_layer_above(base));
         let upper = state.active_layer_id();
-        state.set_lines_for_test(vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![StyledAtom {
             face: state.theme.cursor_block.clone(),
             contents: "b".to_owned(),
         }]]);
@@ -1853,7 +1845,7 @@ mod tests {
     #[test]
     fn txt_load_replaces_canvas_and_resets_cursor_selection_and_transients() {
         let path = temp_path("txt");
-        fs::write(&path, "new\n😀").unwrap();
+        fs::write(&path, "new\nok").unwrap();
         let mut state = state_with_selection();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes)));
         let menu_selections = state.toolbar.durable_selections();
@@ -1994,7 +1986,7 @@ mod tests {
         let mut value =
             serde_json::to_value(project_document(&source, ViewportOffset { x: 4, y: -8 }))
                 .unwrap();
-        value["canvas"]["layers"][0]["lines"][0] = serde_json::to_value(vec![Atom {
+        value["canvas"]["layers"][0]["lines"][0] = serde_json::to_value(vec![StyledAtom {
             face: Face::default(),
             contents: "😀".to_owned(),
         }])
@@ -2091,7 +2083,7 @@ mod tests {
     #[test]
     fn legacy_selection_and_native_json_keep_glyphs_but_drop_faces() {
         let configured_face = ThemeConfig::default().selection;
-        let legacy_atom = Atom {
+        let legacy_atom = StyledAtom {
             face: configured_face,
             contents: "┌".to_owned(),
         };

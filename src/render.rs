@@ -23,7 +23,7 @@ use crate::face_resolution::{
 use crate::layout::{
     LayoutMetrics, PADDING, ViewportOffset, VisibleCanvasCells, layout_metrics, minimap_rect,
 };
-use crate::model::{Atom, Coord, Face, LayerSummary};
+use crate::model::{Coord, Face, LayerSummary, StyledAtom};
 use crate::perf::FrameTiming;
 use crate::selection::SelectionBounds;
 use crate::toolbar::ToolbarState;
@@ -589,8 +589,10 @@ fn render_cached_sparse_grid_atoms(
                         .map(|cached| cached.image.clone())
                 };
                 let image = cached_image.or_else(|| {
-                    let mut atom = data.atom.as_ref().clone();
-                    atom.face = data.face.as_ref().clone();
+                    let atom = StyledAtom {
+                        face: data.face.as_ref().clone(),
+                        contents: data.atom.contents().to_owned(),
+                    };
                     let resolved_face = if face_is_default(&atom.face) {
                         root_face
                     } else {
@@ -655,7 +657,7 @@ fn sparse_raster_generation(
 }
 
 fn rendered_atom_key(
-    atom: &Atom,
+    atom: &StyledAtom,
     resolved_face: ResolvedFace,
     root_face: ResolvedFace,
     paints_background: bool,
@@ -679,7 +681,7 @@ fn rendered_atom_key(
 
 fn cached_atom_image_for_key(
     cache: &RefCell<RenderedAtomCache>,
-    atom: &Atom,
+    atom: &StyledAtom,
     key: &RenderedAtomKey,
     metrics: &CellMetrics,
 ) -> Option<skia_safe::Image> {
@@ -990,7 +992,7 @@ fn render_window_title(
 fn render_line(
     canvas: &Canvas,
     row: usize,
-    line: &[Atom],
+    line: &[StyledAtom],
     default_face: &Face,
     columns: std::ops::Range<usize>,
     metrics: &CellMetrics,
@@ -1014,7 +1016,7 @@ fn render_line(
 fn render_overlay_line(
     canvas: &Canvas,
     row: usize,
-    line: &[Atom],
+    line: &[StyledAtom],
     default_face: &Face,
     columns: std::ops::Range<usize>,
     metrics: &CellMetrics,
@@ -1038,7 +1040,7 @@ fn render_overlay_line(
 fn render_line_at(
     canvas: &Canvas,
     position: LineRenderPosition,
-    line: &[Atom],
+    line: &[StyledAtom],
     default_face: &Face,
     metrics: &CellMetrics,
     origin: DrawOrigin,
@@ -1480,7 +1482,7 @@ fn sparse_cursor_cell(
     let data = canvas.active_cell(coord)?;
     Some(CursorCell {
         face: data.face.as_ref().clone(),
-        text: Some(data.atom.contents.clone()),
+        text: Some(data.atom.contents().to_owned()),
     })
 }
 
@@ -1494,7 +1496,7 @@ pub fn atom_display_width(contents: &str) -> usize {
         .sum()
 }
 
-fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
+fn truncate_atoms(line: &[StyledAtom], max_width: usize) -> Vec<StyledAtom> {
     let mut remaining = max_width;
     let mut result = Vec::new();
 
@@ -1517,7 +1519,7 @@ fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
         }
 
         if !contents.is_empty() {
-            result.push(Atom {
+            result.push(StyledAtom {
                 face: atom.face.clone(),
                 contents,
             });
@@ -1528,7 +1530,7 @@ fn truncate_atoms(line: &[Atom], max_width: usize) -> Vec<Atom> {
 }
 
 fn truncate_title(title: &str, max_width: usize) -> String {
-    let atoms = [Atom {
+    let atoms = [StyledAtom {
         face: Face::default(),
         contents: title.to_string(),
     }];
@@ -1977,7 +1979,7 @@ mod tests {
     use crate::canvas::{LayerMap, LayerStack};
     use crate::editor::Editor;
     use crate::layout::TOOLTIP_BOTTOM_PAD;
-    use crate::model::{Atom, ColorId, Coord, Direction, LayerId};
+    use crate::model::{Atom, ColorId, Coord, Direction, LayerId, StyledAtom};
     use crate::toolbar::{MainMode, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, ModifiersState};
 
@@ -2235,17 +2237,7 @@ mod tests {
             ..Face::default()
         };
         let mut layer = LayerMap::new(LayerId(0), true);
-        layer
-            .set_at(
-                4,
-                2,
-                Atom {
-                    face: Face::default(),
-                    contents: "x".into(),
-                },
-                &face,
-            )
-            .unwrap();
+        layer.set_at(4, 2, Atom::new("x").unwrap(), &face).unwrap();
         let canvas = LayerStack::new(vec![layer], true).unwrap();
 
         let cell =
@@ -2986,7 +2978,7 @@ mod tests {
 
     #[test]
     fn truncate_atoms_does_not_split_emoji_variation_sequence() {
-        let line = vec![Atom {
+        let line = vec![StyledAtom {
             face: Face::default(),
             contents: "a❤️b".into(),
         }];

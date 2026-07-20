@@ -1,6 +1,8 @@
 use crate::app::CursorMode;
 use crate::canvas::LayerStack;
 use crate::drawing::{LineStyle, glyph_with_connection};
+#[cfg(test)]
+use crate::model::StyledAtom;
 use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
 use crate::toolbar::ShapeKind;
 
@@ -78,10 +80,7 @@ impl Editor {
         let face = self.write_face();
         for (coord, contents) in self.shape_cells(preview) {
             self.remove_line_marker(coord);
-            let atom = Atom {
-                face: face.clone(),
-                contents,
-            };
+            let atom = Atom::new(contents).expect("shape glyph is one cell");
             self.canvas
                 .set_at(coord, atom, &face)
                 .expect("shape glyphs occupy one sparse cell");
@@ -89,7 +88,7 @@ impl Editor {
     }
 
     #[cfg(test)]
-    pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<Atom>>> {
+    pub fn lines_with_shape_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
         #[cfg(not(test))]
         return None;
         #[cfg(test)]
@@ -110,10 +109,7 @@ impl Editor {
         let face = self.write_face();
         let mut canvas = self.canvas.clone();
         for (coord, contents) in self.shape_cells(preview) {
-            let atom = Atom {
-                face: face.clone(),
-                contents,
-            };
+            let atom = Atom::new(contents).expect("shape glyph is one cell");
             canvas
                 .set_at(coord, atom, &face)
                 .expect("shape preview glyphs occupy one sparse cell");

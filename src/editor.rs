@@ -10,6 +10,7 @@ use crate::drawing::is_line_glyph;
 use crate::jump::JumpMode;
 use crate::model::{
     Atom, Coord, Direction, Face, LayerId, LayerSummary, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH,
+    StyledAtom,
 };
 use crate::selection::{CanvasSelection, SelectionBounds, TextRectangle};
 use crate::toolbar::{
@@ -112,14 +113,14 @@ impl EditSnapshot {
 
 #[cfg(test)]
 impl Editor {
-    pub(crate) fn set_lines_for_test(&mut self, lines: Vec<Vec<Atom>>) {
+    pub(crate) fn set_lines_for_test(&mut self, lines: Vec<Vec<StyledAtom>>) {
         let markers = self.canvas.active_line_markers();
         self.canvas
             .commit_active_with_markers(&lines, &markers)
             .expect("test canvas contains valid one-cell atoms");
     }
 
-    pub(crate) fn lines_for_test(&self) -> Vec<Vec<Atom>> {
+    pub(crate) fn lines_for_test(&self) -> Vec<Vec<StyledAtom>> {
         self.canvas.active_dense_lines()
     }
 
@@ -167,11 +168,6 @@ impl Editor {
 
     pub fn canvas(&self) -> &crate::canvas::LayerStack {
         &self.canvas
-    }
-
-    pub fn canvas_is_current(&self) -> bool {
-        self.canvas.enabled() == self.toolbar.multi_layer_mode()
-            && !self.canvas.has_legacy_wide_atoms()
     }
 
     pub fn restore_menu_selections(&mut self, selections: &DurableMenuSelections) {
@@ -347,6 +343,7 @@ impl Editor {
         if !self.toolbar.apply_action(action) {
             return false;
         }
+        self.canvas.set_enabled(self.toolbar.multi_layer_mode());
         self.apply_pending_layer_action();
         if self.toolbar.dark_mode() != dark_was_enabled {
             reverse_theme_colors(&mut self.theme);
@@ -681,7 +678,7 @@ impl Editor {
         let Some(data) = self.canvas.active_cell(coord) else {
             return false;
         };
-        if data.atom.contents.chars().all(char::is_whitespace) {
+        if data.atom.contents().chars().all(char::is_whitespace) {
             return false;
         }
         self.canvas.delete_at(coord)
@@ -706,38 +703,20 @@ impl Editor {
 
     fn selection_contains_nonblank(&self) -> bool {
         let bounds = self.selection.bounds();
-        if self.canvas_is_current() {
-            return self.canvas.layers().iter().any(|layer| {
-                layer.rows().iter().any(|(&line, cells)| {
-                    let Ok(line) = usize::try_from(line) else {
-                        return false;
-                    };
-                    line >= bounds.top
-                        && line <= bounds.bottom
-                        && cells.iter().any(|(&column, data)| {
-                            let Ok(column) = usize::try_from(column) else {
-                                return false;
-                            };
-                            let width = atom_width(&data.atom);
-                            column <= bounds.right
-                                && column.saturating_add(width) > bounds.left
-                                && !data.atom.contents.chars().all(char::is_whitespace)
-                        })
-                })
-            });
-        }
-        self.layer_views().into_iter().any(|layer| {
-            (bounds.top..=bounds.bottom).any(|line_index| {
-                let Some(line) = layer.lines.get(line_index) else {
+        self.canvas.layers().iter().any(|layer| {
+            layer.rows().iter().any(|(&line, cells)| {
+                let Ok(line) = usize::try_from(line) else {
                     return false;
                 };
-                let mut column: usize = 0;
-                line.iter().any(|atom| {
-                    let end = column.saturating_add(atom_width(atom));
-                    let overlaps = column <= bounds.right && end > bounds.left;
-                    column = end;
-                    overlaps && !atom.contents.chars().all(char::is_whitespace)
-                })
+                line >= bounds.top
+                    && line <= bounds.bottom
+                    && cells.iter().any(|(&column, data)| {
+                        usize::try_from(column).is_ok_and(|column| {
+                            column >= bounds.left
+                                && column <= bounds.right
+                                && !data.atom.contents().chars().all(char::is_whitespace)
+                        })
+                    })
             })
         })
     }
@@ -874,7 +853,7 @@ impl Editor {
         true
     }
 
-    pub fn replace_canvas(&mut self, mut lines: Vec<Vec<Atom>>) {
+    pub fn replace_canvas(&mut self, mut lines: Vec<Vec<StyledAtom>>) {
         truncate_canvas_lines(&mut lines);
         let map = crate::canvas::LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[])
             .expect("loaded canvas contains valid graphemes");
@@ -967,10 +946,7 @@ impl Editor {
                 self.write_face()
             };
             (
-                Atom {
-                    face: face.clone(),
-                    contents: contents.to_owned(),
-                },
+                Atom::new(contents).expect("replacement was validated as one cell"),
                 face,
             )
         });
@@ -1007,16 +983,13 @@ impl Editor {
                     continue;
                 };
                 for (&column, data) in row {
-                    if data.atom.contents.chars().all(char::is_whitespace) {
+                    if data.atom.contents().chars().all(char::is_whitespace) {
                         continue;
                     }
                     let Ok(column) = usize::try_from(column) else {
                         continue;
                     };
-                    cells.extend(
-                        (column..column.saturating_add(atom_width(&data.atom)))
-                            .map(|column| Coord { line, column }),
-                    );
+                    cells.push(Coord { line, column });
                 }
             }
         }
@@ -1087,26 +1060,11 @@ impl Editor {
     }
 
     fn canvas_height(&self) -> usize {
-        if self.canvas_is_current() {
-            let stored_height = self
-                .canvas
-                .bounds()
-                .and_then(|bounds| usize::try_from(bounds.max_y).ok())
-                .map_or(1, |bottom| bottom.saturating_add(1));
-            return stored_height.max(
-                self.selection
-                    .bounds()
-                    .bottom
-                    .max(self.grid.cursor_pos.line)
-                    .saturating_add(1),
-            );
-        }
         let stored_height = self
-            .layer_views()
-            .into_iter()
-            .map(|layer| layer.lines.len())
-            .max()
-            .unwrap_or(1);
+            .canvas
+            .bounds()
+            .and_then(|bounds| usize::try_from(bounds.max_y).ok())
+            .map_or(1, |bottom| bottom.saturating_add(1));
         stored_height.max(
             self.selection
                 .bounds()
@@ -1117,27 +1075,11 @@ impl Editor {
     }
 
     fn canvas_width(&self) -> usize {
-        if self.canvas_is_current() {
-            let stored_width = self
-                .canvas
-                .bounds()
-                .and_then(|bounds| usize::try_from(bounds.max_x).ok())
-                .map_or(0, |right| right.saturating_add(1));
-            return stored_width.max(
-                self.selection
-                    .bounds()
-                    .right
-                    .max(self.grid.cursor_pos.column)
-                    .saturating_add(1),
-            );
-        }
         let stored_width = self
-            .layer_views()
-            .into_iter()
-            .flat_map(|layer| layer.lines)
-            .map(|line| display_width(&line))
-            .max()
-            .unwrap_or(0);
+            .canvas
+            .bounds()
+            .and_then(|bounds| usize::try_from(bounds.max_x).ok())
+            .map_or(0, |right| right.saturating_add(1));
         stored_width.max(
             self.selection
                 .bounds()
@@ -1155,7 +1097,7 @@ fn clamp_canvas_coord(coord: Coord) -> Coord {
     }
 }
 
-fn truncate_canvas_lines(lines: &mut Vec<Vec<Atom>>) {
+fn truncate_canvas_lines(lines: &mut Vec<Vec<StyledAtom>>) {
     lines.truncate(MAX_CANVAS_HEIGHT);
     for line in lines {
         let mut width: usize = 0;
@@ -1174,18 +1116,11 @@ fn truncate_canvas_lines(lines: &mut Vec<Vec<Atom>>) {
     }
 }
 
-fn blank_atom() -> Atom {
-    Atom {
-        face: Face::default(),
-        contents: " ".to_string(),
-    }
-}
-
-fn atom_width(atom: &Atom) -> usize {
+fn atom_width(atom: &StyledAtom) -> usize {
     UnicodeWidthStr::width(atom.contents.as_str()).max(usize::from(!atom.contents.is_empty()))
 }
 
-fn display_width(atoms: &[Atom]) -> usize {
+fn display_width(atoms: &[StyledAtom]) -> usize {
     atoms.iter().map(atom_width).sum()
 }
 

@@ -2285,7 +2285,7 @@ mod tests {
     use super::*;
     use crate::app::{AppConfig, DEFAULT_WINDOW_TITLE};
     use crate::export::{self, ExportAction, ExportOutcome, ExportPlatform, FileKind};
-    use crate::model::{Atom, Direction, Face};
+    use crate::model::{Direction, Face, StyledAtom};
     use crate::toolbar::{MainMode, ToolbarAction};
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -2366,7 +2366,7 @@ mod tests {
             rows.iter()
                 .map(|row| {
                     unicode_segmentation::UnicodeSegmentation::graphemes(*row, true)
-                        .map(|contents| Atom {
+                        .map(|contents| StyledAtom {
                             face: Face::default(),
                             contents: contents.to_string(),
                         })
@@ -2388,7 +2388,7 @@ mod tests {
         assert_eq!(index.cells(), &[Coord::default()]);
 
         let mut lines = state.lines_for_test();
-        lines[0].push(Atom {
+        lines[0].push(StyledAtom {
             face: Face::default(),
             contents: "b".to_owned(),
         });
@@ -3204,7 +3204,7 @@ mod tests {
         let mut document_dirty = true;
         let mut menu_dirty = false;
         let path = Path::new("latest-document.toml");
-        let lines = vec![vec![crate::model::Atom {
+        let lines = vec![vec![crate::model::StyledAtom {
             face: crate::model::Face::default(),
             contents: "latest".into(),
         }]];
@@ -3628,7 +3628,7 @@ mod tests {
     #[test]
     fn rejected_rectangular_paste_can_restore_grid_selection_and_cursor_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
-        state.set_lines_for_test(vec![vec![crate::model::Atom {
+        state.set_lines_for_test(vec![vec![crate::model::StyledAtom {
             face: crate::model::Face::default(),
             contents: "x".to_string(),
         }]]);
@@ -3658,11 +3658,11 @@ mod tests {
     fn rejected_utility_transform_can_restore_document_and_coordinates_atomically() {
         let mut state = Editor::new(&AppConfig::default().theme, "test");
         let mut lines = vec![Vec::new(); 6];
-        lines[5].resize_with(5, || Atom {
+        lines[5].resize_with(5, || StyledAtom {
             face: Face::default(),
             contents: " ".into(),
         });
-        lines[5].push(Atom {
+        lines[5].push(StyledAtom {
             face: Face::default(),
             contents: "x".into(),
         });
@@ -4028,7 +4028,7 @@ mod tests {
         let config = AppConfig::default();
         let (toolbar_cell_height, cell_size) = toolbar_test_metrics(&config);
         let mut state = Editor::new(&config.theme, "test");
-        state.set_lines_for_test(vec![vec![Atom {
+        state.set_lines_for_test(vec![vec![StyledAtom {
             face: config.theme.selection.clone(),
             contents: " ".into(),
         }]]);

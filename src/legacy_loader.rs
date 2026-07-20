@@ -5,14 +5,14 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::document::{CanvasPosition, Document};
 use crate::editor::PersistedLayer;
-use crate::model::{Atom, LayerId};
+use crate::model::{LayerId, StyledAtom};
 use crate::toolbar::DurableMenuSelections;
 
 #[derive(Deserialize)]
 struct LegacyDocument {
     version: u32,
     #[serde(default)]
-    lines: Vec<Vec<Atom>>,
+    lines: Vec<Vec<StyledAtom>>,
     #[serde(default)]
     layers: Vec<PersistedLayer>,
     #[serde(default, rename = "active-layer")]
@@ -50,7 +50,7 @@ pub fn load_document(contents: &str) -> Result<Document> {
     )
 }
 
-fn normalize_lines(lines: Vec<Vec<Atom>>) -> Result<Vec<Vec<Atom>>> {
+fn normalize_lines(lines: Vec<Vec<StyledAtom>>) -> Result<Vec<Vec<StyledAtom>>> {
     lines
         .into_iter()
         .map(|row| {
@@ -64,7 +64,7 @@ fn normalize_lines(lines: Vec<Vec<Atom>>) -> Result<Vec<Vec<Atom>>> {
                     if UnicodeWidthStr::width(contents.as_str()) != 1 {
                         bail!("legacy atom {contents:?} has display width other than 1");
                     }
-                    Ok(Atom { face, contents })
+                    Ok(StyledAtom { face, contents })
                 })
                 .collect()
         })

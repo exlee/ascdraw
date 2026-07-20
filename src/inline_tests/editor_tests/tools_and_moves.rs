@@ -543,27 +543,6 @@ fn pull_left_compresses_every_row_in_the_supplied_overlapping_boxes() {
 }
 
 #[test]
-fn pull_horizontal_rejects_the_whole_operation_for_either_wide_atom_cell() {
-    for cursor_column in [0, 1] {
-        let mut state = utility_state(
-            &["abc", "a界z"],
-            UtilityKind::Pull,
-            Coord {
-                line: 0,
-                column: cursor_column,
-            },
-        );
-        let before = state.edit_snapshot();
-
-        assert!(!state.apply_utility(Direction::Left));
-        assert_eq!(state.edit_snapshot(), before);
-
-        assert!(!state.apply_utility(Direction::Right));
-        assert_eq!(state.edit_snapshot(), before);
-    }
-}
-
-#[test]
 fn pull_right_shifts_ragged_finite_prefixes_without_growing_empty_rows() {
     let mut state = utility_state(
         &["a", "abcd", "", "xy"],
@@ -626,15 +605,15 @@ fn pull_preserves_shifted_faces_and_removes_or_remaps_line_metadata() {
 #[test]
 fn pull_vertical_directions_remove_entire_rows_with_nonblank_content() {
     let mut up = utility_state(
-        &["AX", "BY", "界Z", "CX"],
+        &["AX", "BY", "QZ", "CX"],
         UtilityKind::Pull,
         Coord::default(),
     );
     assert!(up.apply_utility(Direction::Up));
-    assert_eq!(line_contents(&up), vec!["AX", "界Z", "CX"]);
+    assert_eq!(line_contents(&up), vec!["AX", "QZ", "CX"]);
 
     let mut down = utility_state(
-        &["AX", "BY", "界Z", "CX"],
+        &["AX", "BY", "QZ", "CX"],
         UtilityKind::Pull,
         Coord { line: 3, column: 0 },
     );
@@ -688,9 +667,9 @@ fn pull_vertical_no_target_is_no_op_and_origin_down_prepends_safely() {
     assert!(!no_target.apply_utility(Direction::Up));
     assert_eq!(no_target.edit_snapshot(), before);
 
-    let mut down = utility_state(&["界", "z"], UtilityKind::Pull, Coord::default());
+    let mut down = utility_state(&["Q", "z"], UtilityKind::Pull, Coord::default());
     assert!(down.apply_utility(Direction::Down));
-    assert_eq!(line_contents(&down), vec!["", "界", "z"]);
+    assert_eq!(line_contents(&down), vec!["", "Q", "z"]);
     assert_eq!(down.grid.cursor_pos.line, 1);
     assert_eq!(down.take_pending_prepend(), (0, 1));
 
@@ -705,10 +684,10 @@ fn pull_vertical_no_target_is_no_op_and_origin_down_prepends_safely() {
 }
 
 #[test]
-fn utility_origin_prepend_and_wide_boundary_are_safe() {
-    let mut left = utility_state(&["界x"], UtilityKind::Push, Coord::default());
+fn utility_origin_prepends_are_safe() {
+    let mut left = utility_state(&["yx"], UtilityKind::Push, Coord::default());
     assert!(left.apply_utility(Direction::Left));
-    assert_eq!(line_contents(&left), vec![" 界x"]);
+    assert_eq!(line_contents(&left), vec![" yx"]);
     assert_eq!(left.grid.cursor_pos.column, 1);
     assert_eq!(left.take_pending_prepend(), (1, 0));
 
@@ -716,10 +695,6 @@ fn utility_origin_prepend_and_wide_boundary_are_safe() {
     assert!(up.apply_utility(Direction::Up));
     assert_eq!(line_contents(&up), vec!["", "x"]);
     assert_eq!(up.take_pending_prepend(), (0, 1));
-
-    let mut inside_wide = utility_state(&["界x"], UtilityKind::Push, Coord::default());
-    assert!(!inside_wide.apply_utility(Direction::Right));
-    assert_eq!(line_contents(&inside_wide), vec!["界x"]);
 
     let mut pull_down = utility_state(&["x"], UtilityKind::Pull, Coord::default());
     assert!(pull_down.apply_utility(Direction::Down));

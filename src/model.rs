@@ -27,13 +27,46 @@ impl Default for Face {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Atom {
+pub struct StyledAtom {
     pub face: Face,
     pub contents: String,
 }
 
-impl Atom {
+impl StyledAtom {
     pub fn validate_cell(&self) -> anyhow::Result<()> {
+        let mut graphemes = UnicodeSegmentation::graphemes(self.contents.as_str(), true);
+        let Some(grapheme) = graphemes.next() else {
+            anyhow::bail!("cell atom cannot be empty");
+        };
+        if graphemes.next().is_some() {
+            anyhow::bail!("cell atom must contain exactly one grapheme");
+        }
+        if UnicodeWidthStr::width(grapheme) != 1 {
+            anyhow::bail!("cell atom must have display width 1");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Atom {
+    contents: String,
+}
+
+impl Atom {
+    pub fn new(contents: impl Into<String>) -> anyhow::Result<Self> {
+        let atom = Self {
+            contents: contents.into(),
+        };
+        atom.validate()?;
+        Ok(atom)
+    }
+
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
         let mut graphemes = UnicodeSegmentation::graphemes(self.contents.as_str(), true);
         let Some(grapheme) = graphemes.next() else {
             anyhow::bail!("cell atom cannot be empty");

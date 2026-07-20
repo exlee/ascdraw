@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Face};
+use crate::model::{Coord, Face, StyledAtom};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CanvasSelection {
@@ -90,12 +90,12 @@ impl CanvasSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextRectangle {
-    pub rows: Vec<Vec<Atom>>,
+    pub rows: Vec<Vec<StyledAtom>>,
     pub width: usize,
 }
 
 impl TextRectangle {
-    pub fn from_rows(mut rows: Vec<Vec<Atom>>) -> Option<Self> {
+    pub fn from_rows(mut rows: Vec<Vec<StyledAtom>>) -> Option<Self> {
         let width = rows.iter().map(|row| display_width(row)).max().unwrap_or(0);
         if width == 0 {
             return None;
@@ -108,12 +108,12 @@ impl TextRectangle {
     }
 
     pub fn from_text(text: &str) -> Option<Self> {
-        let rows: Vec<Vec<Atom>> = text
+        let rows: Vec<Vec<StyledAtom>> = text
             .split('\n')
             .map(|row| {
                 let row = row.strip_suffix('\r').unwrap_or(row);
                 UnicodeSegmentation::graphemes(row, true)
-                    .map(|contents| Atom {
+                    .map(|contents| StyledAtom {
                         face: Face::default(),
                         contents: contents.to_string(),
                     })
@@ -135,7 +135,11 @@ impl TextRectangle {
     }
 }
 
-pub fn overwrite_rectangle(lines: &mut Vec<Vec<Atom>>, origin: Coord, rectangle: &TextRectangle) {
+pub fn overwrite_rectangle(
+    lines: &mut Vec<Vec<StyledAtom>>,
+    origin: Coord,
+    rectangle: &TextRectangle,
+) {
     let bounds = rectangle.bounds_at(origin);
     while lines.len() <= bounds.bottom {
         lines.push(Vec::new());
@@ -163,7 +167,7 @@ impl SelectionBounds {
     }
 }
 
-pub fn selected_text(lines: &[Vec<Atom>], bounds: SelectionBounds) -> String {
+pub fn selected_text(lines: &[Vec<StyledAtom>], bounds: SelectionBounds) -> String {
     let mut rows = Vec::with_capacity(bounds.height());
     for line_index in bounds.top..=bounds.bottom {
         let line = lines.get(line_index).map(Vec::as_slice).unwrap_or_default();
@@ -172,7 +176,7 @@ pub fn selected_text(lines: &[Vec<Atom>], bounds: SelectionBounds) -> String {
     rows.join("\n")
 }
 
-pub fn selected_atoms(lines: &[Vec<Atom>], bounds: SelectionBounds) -> Vec<Vec<Atom>> {
+pub fn selected_atoms(lines: &[Vec<StyledAtom>], bounds: SelectionBounds) -> Vec<Vec<StyledAtom>> {
     (bounds.top..=bounds.bottom)
         .map(|line_index| {
             let line = lines.get(line_index).map(Vec::as_slice).unwrap_or_default();
@@ -181,7 +185,7 @@ pub fn selected_atoms(lines: &[Vec<Atom>], bounds: SelectionBounds) -> Vec<Vec<A
         .collect()
 }
 
-pub fn region_atoms(lines: &[Vec<Atom>], region: CanvasRegion) -> Vec<Vec<Atom>> {
+pub fn region_atoms(lines: &[Vec<StyledAtom>], region: CanvasRegion) -> Vec<Vec<StyledAtom>> {
     (0..region.height)
         .map(|row_offset| {
             let row = region
@@ -197,7 +201,7 @@ pub fn region_atoms(lines: &[Vec<Atom>], region: CanvasRegion) -> Vec<Vec<Atom>>
         .collect()
 }
 
-pub fn region_text(lines: &[Vec<Atom>], region: CanvasRegion) -> String {
+pub fn region_text(lines: &[Vec<StyledAtom>], region: CanvasRegion) -> String {
     region_atoms(lines, region)
         .iter()
         .map(|row| {
@@ -209,7 +213,7 @@ pub fn region_text(lines: &[Vec<Atom>], region: CanvasRegion) -> String {
         .join("\n")
 }
 
-fn signed_line_atoms(line: &[Atom], left: i64, width: usize) -> Vec<Atom> {
+fn signed_line_atoms(line: &[StyledAtom], left: i64, width: usize) -> Vec<StyledAtom> {
     let leading = if left < 0 {
         usize::try_from(left.saturating_neg())
             .unwrap_or(usize::MAX)
@@ -233,7 +237,7 @@ fn signed_line_atoms(line: &[Atom], left: i64, width: usize) -> Vec<Atom> {
     result
 }
 
-fn selected_line_atoms(line: &[Atom], left: usize, right: usize) -> Vec<Atom> {
+fn selected_line_atoms(line: &[StyledAtom], left: usize, right: usize) -> Vec<StyledAtom> {
     let mut result = Vec::new();
     let mut result_width = 0;
     let mut column: usize = 0;
@@ -267,7 +271,7 @@ fn selected_line_atoms(line: &[Atom], left: usize, right: usize) -> Vec<Atom> {
 }
 
 pub fn replace_range(
-    lines: &mut Vec<Vec<Atom>>,
+    lines: &mut Vec<Vec<StyledAtom>>,
     bounds: SelectionBounds,
     replacement: Option<&str>,
 ) {
@@ -279,7 +283,7 @@ pub fn replace_range(
     }
 }
 
-fn selected_line_text(line: &[Atom], left: usize, right: usize) -> String {
+fn selected_line_text(line: &[StyledAtom], left: usize, right: usize) -> String {
     let width = SelectionBounds {
         left,
         right,
@@ -319,7 +323,12 @@ fn selected_line_text(line: &[Atom], left: usize, right: usize) -> String {
     result
 }
 
-fn replace_line_range(line: &mut Vec<Atom>, left: usize, right: usize, replacement: Option<&str>) {
+fn replace_line_range(
+    line: &mut Vec<StyledAtom>,
+    left: usize,
+    right: usize,
+    replacement: Option<&str>,
+) {
     let boundary = right.saturating_add(1);
     let mut prefix = Vec::new();
     let mut suffix = Vec::new();
@@ -350,10 +359,10 @@ fn replace_line_range(line: &mut Vec<Atom>, left: usize, right: usize, replaceme
 }
 
 fn replace_line_range_with_atoms(
-    line: &mut Vec<Atom>,
+    line: &mut Vec<StyledAtom>,
     left: usize,
     right: usize,
-    replacement: &[Atom],
+    replacement: &[StyledAtom],
 ) {
     let boundary = right.saturating_add(1);
     let mut prefix = Vec::new();
@@ -381,7 +390,7 @@ fn replace_line_range_with_atoms(
     *line = prefix;
 }
 
-fn replacement_atoms(replacement: Option<&str>, width: usize) -> Vec<Atom> {
+fn replacement_atoms(replacement: Option<&str>, width: usize) -> Vec<StyledAtom> {
     let Some(replacement) = replacement else {
         return (0..width).map(|_| blank_atom()).collect();
     };
@@ -389,7 +398,7 @@ fn replacement_atoms(replacement: Option<&str>, width: usize) -> Vec<Atom> {
     let mut atoms = Vec::new();
     let mut remaining = width;
     while replacement_width <= remaining {
-        atoms.push(Atom {
+        atoms.push(StyledAtom {
             face: Face::default(),
             contents: replacement.to_string(),
         });
@@ -399,16 +408,16 @@ fn replacement_atoms(replacement: Option<&str>, width: usize) -> Vec<Atom> {
     atoms
 }
 
-fn atom_width(atom: &Atom) -> usize {
+fn atom_width(atom: &StyledAtom) -> usize {
     UnicodeWidthStr::width(atom.contents.as_str()).max(usize::from(!atom.contents.is_empty()))
 }
 
-fn display_width(atoms: &[Atom]) -> usize {
+fn display_width(atoms: &[StyledAtom]) -> usize {
     atoms.iter().map(atom_width).sum()
 }
 
-fn blank_atom() -> Atom {
-    Atom {
+fn blank_atom() -> StyledAtom {
+    StyledAtom {
         face: Face::default(),
         contents: " ".to_string(),
     }
@@ -423,9 +432,9 @@ mod tests {
     use super::*;
     use crate::app::ThemeConfig;
 
-    fn atoms(text: &[&str]) -> Vec<Atom> {
+    fn atoms(text: &[&str]) -> Vec<StyledAtom> {
         text.iter()
-            .map(|contents| Atom {
+            .map(|contents| StyledAtom {
                 face: Face::default(),
                 contents: (*contents).to_string(),
             })
@@ -472,11 +481,11 @@ mod tests {
         };
         let lines = vec![
             vec![
-                Atom {
+                StyledAtom {
                     face: Face::default(),
                     contents: "x".to_string(),
                 },
-                Atom {
+                StyledAtom {
                     face: special.clone(),
                     contents: "a".to_string(),
                 },
@@ -553,11 +562,11 @@ mod tests {
         let special = ThemeConfig::default().selection;
         let lines = vec![
             vec![
-                Atom {
+                StyledAtom {
                     face: special.clone(),
                     contents: "a".to_string(),
                 },
-                Atom {
+                StyledAtom {
                     face: Face::default(),
                     contents: "b".to_string(),
                 },
@@ -634,17 +643,17 @@ mod tests {
             fg: "#123456".to_string(),
             ..Face::default()
         };
-        let left = Atom {
+        let left = StyledAtom {
             face: outside_face.clone(),
             contents: "L".to_string(),
         };
-        let right = Atom {
+        let right = StyledAtom {
             face: outside_face,
             contents: "R".to_string(),
         };
         let mut lines = vec![vec![
             left.clone(),
-            Atom {
+            StyledAtom {
                 face: Face::default(),
                 contents: "😀".to_string(),
             },

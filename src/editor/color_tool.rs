@@ -22,7 +22,7 @@ impl Editor {
         let Some(data) = self.canvas.active_cell(coord) else {
             return;
         };
-        let face = if data.atom.contents.chars().all(char::is_whitespace) {
+        let face = if data.atom.contents().chars().all(char::is_whitespace) {
             Face::default()
         } else {
             self.write_face()

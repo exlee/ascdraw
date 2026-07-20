@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{DrawOrigin, FALLBACK_BG, Renderer, resolve_root_face};
 use crate::app::MacosColorSpace;
-use crate::model::{Atom, Face};
+use crate::model::{Face, StyledAtom};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanvasImage {
@@ -26,7 +26,7 @@ pub struct CanvasImage {
 
 pub fn render_canvas_image(
     renderer: &Renderer,
-    lines: &[Vec<Atom>],
+    lines: &[Vec<StyledAtom>],
     default_face: &Face,
     scale_factor: f64,
     color_space: MacosColorSpace,
@@ -42,7 +42,7 @@ pub fn render_canvas_image(
 
 pub fn render_canvas_layers_image(
     renderer: &Renderer,
-    layers: &[Vec<Vec<Atom>>],
+    layers: &[Vec<Vec<StyledAtom>>],
     default_face: &Face,
     scale_factor: f64,
     color_space: MacosColorSpace,
@@ -136,7 +136,7 @@ pub fn render_canvas_layers_image(
     })
 }
 
-fn display_width(line: &[Atom]) -> usize {
+fn display_width(line: &[StyledAtom]) -> usize {
     line.iter()
         .map(|atom| UnicodeWidthStr::width(atom.contents.as_str()).max(1))
         .sum()
@@ -198,8 +198,8 @@ mod tests {
     use crate::face_resolution::resolve_derived_face;
     use crate::render::load_renderer;
 
-    fn atom(contents: &str, face: Face) -> Atom {
-        Atom {
+    fn atom(contents: &str, face: Face) -> StyledAtom {
+        StyledAtom {
             face,
             contents: contents.to_string(),
         }

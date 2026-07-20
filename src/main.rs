@@ -1488,7 +1488,7 @@ mod tests {
 
         fn render_canvas_image(
             &mut self,
-            lines: &[Vec<crate::model::Atom>],
+            lines: &[Vec<crate::model::StyledAtom>],
             default_face: &crate::model::Face,
         ) -> Result<render::CanvasImage> {
             let config = AppConfig::default();
@@ -3505,7 +3505,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    fn line_contents(line: &[crate::model::Atom]) -> String {
+    fn line_contents(line: &[crate::model::StyledAtom]) -> String {
         line.iter().map(|atom| atom.contents.as_str()).collect()
     }
 }

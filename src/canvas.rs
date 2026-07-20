@@ -8,16 +8,19 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::drawing::LineEnding;
-use crate::model::{Atom, Coord, Face, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
-use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle, overwrite_rectangle};
+use crate::model::{
+    Atom, Coord, Face, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS, StyledAtom,
+};
+use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
 
+mod composition;
+use composition::overlay_nonblank_atoms;
+
+#[allow(dead_code)]
 pub type Raster = Rc<Atom>;
 
 thread_local! {
-    static BLANK_ATOM: Rc<Atom> = Rc::new(Atom {
-        face: Face::default(),
-        contents: " ".to_owned(),
-    });
+    static BLANK_ATOM: Rc<Atom> = Rc::new(Atom::new(" ").expect("blank is one cell"));
 }
 
 fn blank_atom() -> Rc<Atom> {
@@ -102,12 +105,6 @@ impl LayerMap {
         self.rows.get(&line)?.get(&column)
     }
 
-    pub fn at(&self, x: i16, y: i16) -> Rc<Atom> {
-        self.get(y, x)
-            .map(|data| Rc::clone(&data.atom))
-            .unwrap_or_else(blank_atom)
-    }
-
     pub fn bounds(&self) -> Option<LayerBounds> {
         let (&min_y, _) = self.rows.first_key_value()?;
         let (&max_y, _) = self.rows.last_key_value()?;
@@ -134,15 +131,14 @@ impl LayerMap {
         row.iter()
             .filter_map(|(&column, data)| {
                 usize::try_from(column).ok().map(|column| {
-                    column
-                        .saturating_add(UnicodeWidthStr::width(data.atom.contents.as_str()).max(1))
+                    column.saturating_add(UnicodeWidthStr::width(data.atom.contents()).max(1))
                 })
             })
             .max()
             .unwrap_or(0)
     }
 
-    pub(crate) fn selected_atoms(&self, bounds: SelectionBounds) -> Vec<Vec<Atom>> {
+    pub(crate) fn selected_atoms(&self, bounds: SelectionBounds) -> Vec<Vec<StyledAtom>> {
         (bounds.top..=bounds.bottom)
             .map(|line| {
                 (bounds.left..=bounds.right)
@@ -152,11 +148,11 @@ impl LayerMap {
                         else {
                             return default_blank();
                         };
-                        self.get(line, column).map_or_else(default_blank, |data| {
-                            let mut atom = data.atom.as_ref().clone();
-                            atom.face = data.face.as_ref().clone();
-                            atom
-                        })
+                        self.get(line, column)
+                            .map_or_else(default_blank, |data| StyledAtom {
+                                face: data.face.as_ref().clone(),
+                                contents: data.atom.contents().to_owned(),
+                            })
                     })
                     .collect()
             })
@@ -238,8 +234,7 @@ impl LayerMap {
     }
 
     pub fn set_at(&mut self, x: i16, y: i16, atom: Atom, face: &Face) -> Result<()> {
-        atom.validate_cell()?;
-        if face == &Face::default() && atom.contents.chars().all(char::is_whitespace) {
+        if face == &Face::default() && atom.contents().chars().all(char::is_whitespace) {
             self.delete_at(x, y);
             return Ok(());
         }
@@ -269,15 +264,12 @@ impl LayerMap {
         else {
             return false;
         };
-        let mut atom = data.atom.as_ref().clone();
-        atom.face = face.clone();
         data.face = Rc::new(face);
-        data.atom = Rc::new(atom);
         *data.raster_cache.borrow_mut() = None;
         true
     }
 
-    pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<Atom>> {
+    pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<StyledAtom>> {
         (0..region.height)
             .map(|row_offset| {
                 let line = region
@@ -292,7 +284,11 @@ impl LayerMap {
                         else {
                             return default_blank();
                         };
-                        self.at(column, line).as_ref().clone()
+                        self.get(line, column)
+                            .map_or_else(default_blank, |data| StyledAtom {
+                                face: data.face.as_ref().clone(),
+                                contents: data.atom.contents().to_owned(),
+                            })
                     })
                     .collect()
             })
@@ -608,13 +604,13 @@ impl LayerMap {
                 let x = i16::try_from(column).context("rectangle column exceeds signed range")?;
                 let y = i16::try_from(line).context("rectangle line exceeds signed range")?;
                 self.delete_at(x, y);
-                self.set_at(x, y, atom.clone(), &atom.face)?;
+                self.set_at(x, y, Atom::new(atom.contents.clone())?, &atom.face)?;
             }
         }
         Ok(())
     }
 
-    pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<Atom>]) -> Result<Self> {
+    pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<StyledAtom>]) -> Result<Self> {
         for atom in lines.iter().flatten() {
             for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
                 if UnicodeWidthStr::width(grapheme) != 1 {
@@ -628,7 +624,7 @@ impl LayerMap {
     pub(crate) fn from_dense_with_markers(
         id: LayerId,
         visible: bool,
-        lines: &[Vec<Atom>],
+        lines: &[Vec<StyledAtom>],
         line_markers: &[LineMarker],
     ) -> Result<Self> {
         let mut map = Self::new(id, visible);
@@ -641,12 +637,9 @@ impl LayerMap {
                     if width == 0 {
                         bail!("atom {grapheme:?} has display width zero");
                     }
-                    let cell_atom = Atom {
-                        face: atom.face.clone(),
-                        contents: grapheme.to_owned(),
-                    };
+                    let cell_atom = Atom::new(grapheme)?;
                     if atom.face != Face::default()
-                        || !cell_atom.contents.chars().all(char::is_whitespace)
+                        || !cell_atom.contents().chars().all(char::is_whitespace)
                     {
                         map.set_data(
                             line,
@@ -697,7 +690,7 @@ impl LayerMap {
         self.rows.entry(y).or_default().insert(x, data);
     }
 
-    pub fn to_dense(&self) -> Vec<Vec<Atom>> {
+    pub fn to_dense(&self) -> Vec<Vec<StyledAtom>> {
         let height = self
             .rows
             .last_key_value()
@@ -713,7 +706,7 @@ impl LayerMap {
                         .filter_map(|(&column, data)| {
                             usize::try_from(column).ok().map(|column| {
                                 column.saturating_add(
-                                    UnicodeWidthStr::width(data.atom.contents.as_str()).max(1),
+                                    UnicodeWidthStr::width(data.atom.contents()).max(1),
                                 )
                             })
                         })
@@ -727,11 +720,12 @@ impl LayerMap {
                         .ok()
                         .and_then(|column| row.and_then(|row| row.get(&column)));
                     if let Some(data) = data {
-                        let mut atom = data.atom.as_ref().clone();
-                        atom.face = data.face.as_ref().clone();
                         column = column
-                            .saturating_add(UnicodeWidthStr::width(atom.contents.as_str()).max(1));
-                        atoms.push(atom);
+                            .saturating_add(UnicodeWidthStr::width(data.atom.contents()).max(1));
+                        atoms.push(StyledAtom {
+                            face: data.face.as_ref().clone(),
+                            contents: data.atom.contents().to_owned(),
+                        });
                     } else {
                         atoms.push(default_blank());
                         column += 1;
@@ -831,7 +825,7 @@ impl LayerStack {
     }
 
     #[cfg(test)]
-    pub(crate) fn active_dense_lines(&self) -> Vec<Vec<Atom>> {
+    pub(crate) fn active_dense_lines(&self) -> Vec<Vec<StyledAtom>> {
         self.layers[self.active].to_dense()
     }
 
@@ -960,19 +954,6 @@ impl LayerStack {
         self.layers.iter().position(|layer| layer.id == id)
     }
 
-    pub fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    pub fn has_legacy_wide_atoms(&self) -> bool {
-        self.layers.iter().any(|layer| {
-            layer.rows.values().any(|row| {
-                row.values()
-                    .any(|data| UnicodeWidthStr::width(data.atom.contents.as_str()) != 1)
-            })
-        })
-    }
-
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
@@ -980,7 +961,7 @@ impl LayerStack {
     #[cfg(test)]
     pub(crate) fn commit_active_with_markers(
         &mut self,
-        lines: &[Vec<Atom>],
+        lines: &[Vec<StyledAtom>],
         markers: &[LineMarker],
     ) -> Result<()> {
         let layer = &self.layers[self.active];
@@ -1122,7 +1103,7 @@ impl LayerStack {
         }
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn at(&self, line: i16, column: i16) -> Raster {
         let layers = if self.enabled {
             self.layers.as_slice()
@@ -1138,6 +1119,7 @@ impl LayerStack {
             .unwrap_or_else(blank_atom)
     }
 
+    #[allow(dead_code)]
     pub fn top_at(&self, line: i16, column: i16) -> Raster {
         let layers = if self.enabled {
             self.layers.as_slice()
@@ -1148,13 +1130,13 @@ impl LayerStack {
             .iter()
             .filter(|layer| layer.visible)
             .filter_map(|layer| layer.get(line, column))
-            .filter(|data| !data.atom.contents.chars().all(char::is_whitespace))
+            .filter(|data| !data.atom.contents().chars().all(char::is_whitespace))
             .map(|data| Rc::clone(&data.atom))
             .next_back()
             .unwrap_or_else(blank_atom)
     }
 
-    pub fn composite_region(&self, region: CanvasRegion) -> Option<Vec<Vec<Atom>>> {
+    pub fn composite_region(&self, region: CanvasRegion) -> Option<Vec<Vec<StyledAtom>>> {
         let left = i16::try_from(region.left).ok()?;
         let top = i16::try_from(region.top).ok()?;
         let width = i16::try_from(region.width).ok()?;
@@ -1165,7 +1147,18 @@ impl LayerStack {
             let mut row = Vec::with_capacity(region.width);
             for column_offset in 0..width {
                 let column = left.checked_add(column_offset)?;
-                row.push(self.top_at(line, column).as_ref().clone());
+                let atom = self
+                    .effective_layers()
+                    .iter()
+                    .filter(|layer| layer.visible)
+                    .filter_map(|layer| layer.get(line, column))
+                    .filter(|data| !data.atom.contents().chars().all(char::is_whitespace))
+                    .next_back()
+                    .map_or_else(default_blank, |data| StyledAtom {
+                        face: data.face.as_ref().clone(),
+                        contents: data.atom.contents().to_owned(),
+                    });
+                row.push(atom);
             }
             rows.push(row);
         }
@@ -1192,216 +1185,13 @@ fn coord_i16(coord: Coord) -> Option<(i16, i16)> {
     ))
 }
 
-fn overlay_nonblank_atoms(
-    target: &mut Vec<Vec<Atom>>,
-    source: &[Vec<Atom>],
-) -> Vec<SelectionBounds> {
-    let mut covered = Vec::new();
-    for (line, atoms) in source.iter().enumerate() {
-        let mut column = 0usize;
-        for atom in atoms {
-            let width = UnicodeWidthStr::width(atom.contents.as_str()).max(1);
-            if atom.contents.chars().all(char::is_whitespace) {
-                column = column.saturating_add(width);
-                continue;
-            }
-            let bounds = SelectionBounds {
-                left: column,
-                right: column.saturating_add(width.saturating_sub(1)),
-                top: line,
-                bottom: line,
-            };
-            overwrite_rectangle(
-                target,
-                Coord { line, column },
-                &TextRectangle {
-                    rows: vec![vec![atom.clone()]],
-                    width,
-                },
-            );
-            covered.push(bounds);
-            column = column.saturating_add(width);
-        }
-    }
-    covered
-}
-
-fn default_blank() -> Atom {
-    Atom {
+fn default_blank() -> StyledAtom {
+    StyledAtom {
         face: Face::default(),
         contents: " ".to_owned(),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn data(contents: &str, face: Face) -> CoordData {
-        CoordData {
-            atom: Rc::new(Atom {
-                face: face.clone(),
-                contents: contents.to_owned(),
-            }),
-            face: Rc::new(face),
-            raster_cache: RefCell::new(None),
-            line: None,
-        }
-    }
-
-    #[test]
-    fn validates_atoms_and_canonicalizes_default_whitespace() {
-        let mut layer = LayerMap::new(LayerId(0), true);
-        assert!(
-            layer
-                .set_at(
-                    0,
-                    0,
-                    data("界", Face::default()).atom.as_ref().clone(),
-                    &Face::default()
-                )
-                .is_err()
-        );
-        assert!(
-            layer
-                .set_at(
-                    0,
-                    0,
-                    data("ab", Face::default()).atom.as_ref().clone(),
-                    &Face::default()
-                )
-                .is_err()
-        );
-        layer
-            .set_at(
-                0,
-                0,
-                data(" ", Face::default()).atom.as_ref().clone(),
-                &Face::default(),
-            )
-            .unwrap();
-        assert!(layer.rows().is_empty());
-    }
-
-    #[test]
-    fn insertion_beyond_content_extends_logical_row_to_the_inserted_cell() {
-        let mut layer = LayerMap::new(LayerId(0), true);
-        let atom = data("x", Face::default()).atom.as_ref().clone();
-        layer
-            .insert_cells(2, 4, vec![(atom, Face::default())])
-            .unwrap();
-
-        assert_eq!(layer.row_width(2), 5);
-        assert_eq!(layer.get(2, 4).unwrap().atom.contents, "x");
-    }
-
-    #[test]
-    fn top_at_ignores_whitespace_and_disabled_stack_uses_base_only() {
-        let mut base = LayerMap::new(LayerId(0), true);
-        base.set_data(2, -3, data("a", Face::default()));
-        let mut top = LayerMap::new(LayerId(1), true);
-        let styled = Face {
-            bg: "selection".to_owned(),
-            ..Face::default()
-        };
-        top.set_data(2, -3, data(" ", styled));
-        let stack = LayerStack::new(vec![base.clone(), top], true).unwrap();
-        assert_eq!(stack.at(2, -3).contents, " ");
-        assert_eq!(stack.top_at(2, -3).contents, "a");
-
-        let mut overlay = LayerMap::new(LayerId(1), true);
-        overlay.set_data(2, -3, data("b", Face::default()));
-        let stack = LayerStack::new(vec![base, overlay], false).unwrap();
-        assert_eq!(stack.top_at(2, -3).contents, "a");
-    }
-
-    #[test]
-    fn bounds_follow_insertions_and_edge_deletions() {
-        let mut layer = LayerMap::new(LayerId(0), true);
-        layer
-            .set_at(
-                -4,
-                7,
-                data("a", Face::default()).atom.as_ref().clone(),
-                &Face::default(),
-            )
-            .unwrap();
-        layer
-            .set_at(
-                9,
-                -2,
-                data("b", Face::default()).atom.as_ref().clone(),
-                &Face::default(),
-            )
-            .unwrap();
-        assert_eq!(
-            layer.bounds(),
-            Some(LayerBounds {
-                min_x: -4,
-                min_y: -2,
-                max_x: 9,
-                max_y: 7,
-            })
-        );
-
-        assert!(layer.delete_at(9, -2));
-        assert_eq!(
-            layer.bounds(),
-            Some(LayerBounds {
-                min_x: -4,
-                min_y: 7,
-                max_x: -4,
-                max_y: 7,
-            })
-        );
-        assert!(layer.delete_at(-4, 7));
-        assert_eq!(layer.bounds(), None);
-    }
-
-    #[test]
-    fn cloning_coordinate_data_drops_raster_cache() {
-        let source = data("a", Face::default());
-        let image = skia_safe::surfaces::raster_n32_premul((1, 1))
-            .unwrap()
-            .image_snapshot();
-        *source.raster_cache.borrow_mut() = Some(Rc::new(Rasterized {
-            generation: 3,
-            image,
-        }));
-
-        let cloned = source.clone();
-
-        assert!(cloned.raster_cache.borrow().is_none());
-        assert_eq!(cloned, source);
-    }
-
-    #[test]
-    fn line_markers_are_stored_with_their_coordinate_data() {
-        let lines = vec![vec![Atom {
-            face: Face::default(),
-            contents: "◆".to_owned(),
-        }]];
-        let marker = LineMarker {
-            coord: Coord::default(),
-            ending: LineEnding::Fixed('◆'),
-            base_glyph: "╴".to_owned(),
-        };
-
-        let map = LayerMap::from_dense_with_markers(
-            LayerId(0),
-            true,
-            &lines,
-            std::slice::from_ref(&marker),
-        )
-        .unwrap();
-
-        assert_eq!(
-            map.get(0, 0).and_then(|data| data.line.as_ref()),
-            Some(&LineData {
-                ending: marker.ending,
-                base_glyph: marker.base_glyph.clone(),
-            })
-        );
-        assert_eq!(map.line_markers(), vec![marker]);
-    }
-}
+#[path = "inline_tests/canvas_tests.rs"]
+mod tests;

@@ -1,8 +1,8 @@
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::{Atom, Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH};
+use crate::model::{Coord, Direction, MAX_CANVAS_HEIGHT, MAX_CANVAS_WIDTH, StyledAtom};
 
-pub(crate) fn content_cells(lines: &[Vec<Atom>]) -> Vec<Coord> {
+pub(crate) fn content_cells(lines: &[Vec<StyledAtom>]) -> Vec<Coord> {
     let mut cells = Vec::new();
     for (line_index, line) in lines.iter().enumerate() {
         let mut column = 0usize;
@@ -20,7 +20,7 @@ pub(crate) fn content_cells(lines: &[Vec<Atom>]) -> Vec<Coord> {
     cells
 }
 
-pub(crate) fn edited_content_origin(lines: &[Vec<Atom>]) -> Option<Coord> {
+pub(crate) fn edited_content_origin(lines: &[Vec<StyledAtom>]) -> Option<Coord> {
     content_cells(lines)
         .into_iter()
         .reduce(|origin, coord| Coord {

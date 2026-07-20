@@ -8,6 +8,13 @@ fn state() -> Editor {
     Editor::new(&ThemeConfig::default(), "ascdraw")
 }
 
+fn blank_atom() -> StyledAtom {
+    StyledAtom {
+        face: Face::default(),
+        contents: " ".to_owned(),
+    }
+}
+
 #[path = "editor_tests/editing_and_lines.rs"]
 mod editing_and_lines;
 #[path = "editor_tests/layers_and_canvas.rs"]
@@ -21,7 +28,7 @@ fn utility_state(rows: &[&str], utility: UtilityKind, cursor: Coord) -> Editor {
         rows.iter()
             .map(|row| {
                 UnicodeSegmentation::graphemes(*row, true)
-                    .map(|contents| Atom {
+                    .map(|contents| StyledAtom {
                         face: Face::default(),
                         contents: contents.to_string(),
                     })
@@ -59,6 +66,6 @@ fn select_toolbar_option(state: &mut Editor, key: &str, count: usize) {
     });
 }
 
-fn contents(line: &[Atom]) -> String {
+fn contents(line: &[StyledAtom]) -> String {
     line.iter().map(|atom| atom.contents.as_str()).collect()
 }

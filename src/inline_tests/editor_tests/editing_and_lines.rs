@@ -125,7 +125,7 @@ fn rectangular_clear_leaves_every_perimeter_atom_and_face_unchanged() {
             .into_iter()
             .map(|row| {
                 row.chars()
-                    .map(|contents| Atom {
+                    .map(|contents| StyledAtom {
                         face: perimeter_face.clone(),
                         contents: contents.to_string(),
                     })
@@ -203,37 +203,37 @@ fn paste_rectangular_overwrite_uses_selection_origin_and_selects_result() {
     };
     state.set_lines_for_test(vec![
         vec![
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "L".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "a".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "b".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "R".into(),
             },
         ],
         vec![
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "l".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "c".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "d".into(),
             },
-            Atom {
+            StyledAtom {
                 face: outside.clone(),
                 contents: "r".into(),
             },
@@ -564,7 +564,7 @@ fn canvas_stops_at_maximum_width_and_height() {
 #[test]
 fn replacing_canvas_truncates_oversized_rows_and_columns() {
     let mut lines = vec![Vec::new(); MAX_CANVAS_HEIGHT + 1];
-    lines[0].push(Atom {
+    lines[0].push(StyledAtom {
         face: Face::default(),
         contents: "x".repeat(MAX_CANVAS_WIDTH + 1),
     });

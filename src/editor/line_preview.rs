@@ -1,7 +1,7 @@
 use crate::app::CursorMode;
 use crate::drawing::{LineEnding, is_line_glyph};
 #[cfg(test)]
-use crate::model::Atom;
+use crate::model::StyledAtom;
 use crate::model::{Coord, Direction};
 use crate::selection::CanvasSelection;
 use crate::toolbar::RoutingMode;
@@ -216,7 +216,7 @@ impl Editor {
     }
 
     #[cfg(test)]
-    pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<Atom>>> {
+    pub(super) fn lines_with_line_preview(&self) -> Option<Vec<Vec<StyledAtom>>> {
         self.line_preview
             .as_ref()
             .map(|preview| preview.rendered_canvas.active_dense_lines())

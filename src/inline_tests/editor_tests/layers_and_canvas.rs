@@ -176,7 +176,7 @@ fn loaded_document_origin_is_its_top_left_edited_cell_and_stays_fixed() {
         Vec::new(),
         vec![
             blank_atom(),
-            Atom {
+            StyledAtom {
                 face: Face::default(),
                 contents: "x".to_owned(),
             },
@@ -729,7 +729,7 @@ fn clearing_an_already_blank_selection_is_an_exact_document_no_op() {
 #[test]
 fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
     let mut state = state();
-    state.set_lines_for_test(vec![vec![Atom {
+    state.set_lines_for_test(vec![vec![StyledAtom {
         face: Face {
             fg: "#123456".into(),
             bg: "#abcdef".into(),
@@ -780,12 +780,12 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_drawing_transients() {
 fn clear_canvas_preserves_a_far_cursor_and_later_inserts_there() {
     let mut state = state();
     state.set_lines_for_test(vec![
-        vec![Atom {
+        vec![StyledAtom {
             face: Face::default(),
             contents: "drawing".into(),
         }],
         Vec::new(),
-        vec![Atom {
+        vec![StyledAtom {
             face: Face::default(),
             contents: "x".into(),
         }],
@@ -823,12 +823,12 @@ fn clear_canvas_removes_faces_from_styled_whitespace() {
     let mut state = Editor::new(&theme, "ascdraw");
     let cursor = Coord { line: 2, column: 3 };
     state.set_lines_for_test(vec![
-        vec![Atom {
+        vec![StyledAtom {
             face: theme.selection.clone(),
             contents: " ".into(),
         }],
         Vec::new(),
-        vec![Atom {
+        vec![StyledAtom {
             face: theme.tooltip.clone(),
             contents: "   ".into(),
         }],
