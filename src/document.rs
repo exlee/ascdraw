@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::canvas::{LayerMap, LayerStack};
+use crate::dense_exchange;
 use crate::editor::PersistedLayer;
 use crate::layout::ViewportOffset;
 use crate::model::{Atom, Coord, Face, LayerId};
@@ -120,7 +121,7 @@ impl Document {
     ) -> Result<Self> {
         let maps = layers
             .into_iter()
-            .map(|layer| LayerMap::from_dense(layer.id, layer.visible, &layer.lines))
+            .map(|layer| dense_exchange::from_dense(layer.id, layer.visible, &layer.lines))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             canvas: LayerStack::with_active(maps, active_layer, true)?,

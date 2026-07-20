@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::MacosColorSpace;
+use crate::dense_exchange;
 use crate::document::{self, CanvasPosition, Document};
 use crate::editor::{Editor, PersistedLayer};
 use crate::layout::{ViewportOffset, VisibleCanvasCells};
@@ -451,7 +452,7 @@ pub fn plain_text(state: &Editor) -> String {
 }
 
 fn sparse_composite_region(state: &Editor, region: CanvasRegion) -> Option<Vec<Vec<StyledAtom>>> {
-    state.canvas().composite_region(region)
+    dense_exchange::composite_region(state.canvas(), region)
 }
 
 pub fn canvas_region_for_export(
@@ -491,7 +492,7 @@ fn visible_layer_atoms(state: &Editor, region: CanvasRegion) -> Vec<Vec<Vec<Styl
         .layers()
         .iter()
         .filter(|layer| layer.visible)
-        .map(|layer| layer.atoms_in_region(region))
+        .map(|layer| dense_exchange::atoms_in_region(layer, region))
         .collect()
 }
 
@@ -653,7 +654,7 @@ fn imported_json_rectangle(loaded: LoadedJson) -> Option<TextRectangle> {
                 .effective_layers()
                 .iter()
                 .filter(|layer| layer.visible)
-                .map(crate::canvas::LayerMap::to_dense)
+                .map(dense_exchange::to_dense)
                 .collect::<Vec<_>>(),
         ),
         LoadedJson::Project(project) => flatten_visible_layers(
@@ -981,7 +982,7 @@ mod tests {
                     .map(|layer| PersistedLayer {
                         id: layer.id,
                         visible: layer.visible,
-                        lines: layer.to_dense(),
+                        lines: dense_exchange::to_dense(layer),
                     })
                     .collect(),
                 active_layer: Some(state.active_layer_id()),
@@ -1425,7 +1426,11 @@ mod tests {
             panic!("expected native sparse document");
         };
         assert_eq!(
-            contents(document.canvas.layers()[0].to_dense().last().unwrap()),
+            contents(
+                dense_exchange::to_dense(&document.canvas.layers()[0])
+                    .last()
+                    .unwrap(),
+            ),
             "outside"
         );
         let _ = fs::remove_file(path);
@@ -1488,13 +1493,15 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
         state.toggle_shape_preview();
         state.move_cursor(crate::model::Direction::Right);
-        let expected =
-            state.canvas().layers()[state.canvas().active_index()].atoms_in_region(CanvasRegion {
+        let expected = dense_exchange::atoms_in_region(
+            &state.canvas().layers()[state.canvas().active_index()],
+            CanvasRegion {
                 left: 0,
                 top: 0,
                 width: 2,
                 height: 1,
-            });
+            },
+        );
         let mut platform = MockPlatform {
             image: Some(sample_image()),
             ..MockPlatform::default()

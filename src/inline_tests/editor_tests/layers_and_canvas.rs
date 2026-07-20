@@ -50,9 +50,6 @@ fn editor_state_enum_tracks_modes_and_transient_interactions() {
     editor.toggle_text_entry();
     assert_eq!(editor.state(), EditorState::TextMode);
     assert!(editor.cancel_current_state());
-    editor.cursor_mode = CursorMode::Insert;
-    assert_eq!(editor.state(), EditorState::InsertMode);
-    assert!(editor.cancel_current_state());
     editor.toggle_replace_mode();
     assert_eq!(editor.state(), EditorState::ReplaceMode);
     assert!(editor.cancel_current_state());
@@ -230,11 +227,11 @@ fn layer_state_swaps_active_content_and_round_trips_in_edit_snapshots() {
     let snapshot = state.edit_snapshot();
     assert!(state.select_layer(base));
     state.insert("c");
-    assert_eq!(contents(&state.lines_for_test()[0]), "ac");
+    assert_eq!(sparse_row_contents(&state, 0), "ac");
 
     state.restore_edit_snapshot(snapshot);
     assert_eq!(state.active_layer_id(), upper);
-    assert_eq!(contents(&state.lines_for_test()[0]), "b");
+    assert_eq!(sparse_row_contents(&state, 0), "b");
     assert_eq!(contents(&state.layer_views()[0].lines[0]), "a");
 }
 
@@ -258,7 +255,7 @@ fn layer_limits_base_rules_reordering_deletion_and_symbol_reuse_are_stable() {
     assert!(!state.layer_summaries()[0].visible);
     assert!(state.select_layer(base));
     state.insert("base");
-    assert_eq!(contents(&state.lines_for_test()[0]), "base");
+    assert_eq!(sparse_row_contents(&state, 0), "base");
 
     let removed = created[2];
     let preserved_active = *created.last().unwrap();
@@ -360,7 +357,12 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
     state.end_stroke();
     state.move_to(Coord { line: 0, column: 2 });
     state.clear_selection();
-    let source_face = state.lines_for_test()[0][1].face.clone();
+    let source_face = state
+        .active_cell_for_test(Coord { line: 0, column: 1 })
+        .unwrap()
+        .face
+        .as_ref()
+        .clone();
     assert!(state.add_layer_above(source));
     let top = state.active_layer_id();
     state.insert("top");
@@ -376,8 +378,15 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
             .collect::<Vec<_>>(),
         [base, top]
     );
-    assert_eq!(contents(&state.lines_for_test()[0]), "A●");
-    assert_eq!(state.lines_for_test()[0][1].face, source_face);
+    assert_eq!(sparse_row_contents(&state, 0), "A●");
+    assert_eq!(
+        state
+            .active_cell_for_test(Coord { line: 0, column: 1 })
+            .unwrap()
+            .face
+            .as_ref(),
+        &source_face
+    );
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(
         state.line_markers_for_test()[0].ending,
@@ -400,7 +409,7 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
 
     assert!(down.merge_layer_down(source));
     assert_eq!(down.active_layer_id(), target);
-    assert_eq!(contents(&down.lines_for_test()[0]), "TM");
+    assert_eq!(sparse_row_contents(&down, 0), "TM");
     assert_eq!(down.layer_summaries().len(), 2);
 }
 
@@ -424,7 +433,7 @@ fn shifted_layer_shortcut_merges_and_consumes_the_selected_layer() {
     assert_eq!(state.layer_summaries().len(), 1);
     assert_eq!(state.active_layer_id(), base);
     assert_ne!(state.active_layer_id(), source);
-    assert_eq!(contents(&state.lines_for_test()[0]), "btop");
+    assert_eq!(sparse_row_contents(&state, 0), "btop");
 }
 
 #[test]
@@ -455,7 +464,12 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     assert!(state.select_layer(upper));
     state.insert(" B");
     state.set_cell_face_for_test(Coord { line: 0, column: 1 }, state.theme.tooltip.clone());
-    let upper_face = state.lines_for_test()[0][1].face.clone();
+    let upper_face = state
+        .active_cell_for_test(Coord { line: 0, column: 1 })
+        .unwrap()
+        .face
+        .as_ref()
+        .clone();
     assert_ne!(upper_face, Face::default());
     state.move_to(Coord::default());
     state.extend_selection(Direction::Right);
@@ -475,7 +489,9 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
         .iter()
         .find(|layer| layer.id == upper)
         .expect("upper preview layer");
-    assert_eq!(contents(&upper_preview.to_dense()[0]), "  B");
+    assert!(upper_preview.get(0, 0).is_none());
+    assert!(upper_preview.get(0, 1).is_none());
+    assert_eq!(upper_preview.get(0, 2).unwrap().atom.contents(), "B");
     assert!(state.confirm_move_lift());
 
     let views = state.layer_views();
@@ -533,22 +549,25 @@ fn selected_color_applies_only_to_future_nonblank_writes_in_every_editing_path()
     text.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
     text.apply_toolbar_action(ToolbarAction::SelectColor(color));
     text.insert("b");
-    assert_eq!(text.lines_for_test()[0][0].face, Face::default());
-    assert_eq!(text.lines_for_test()[0][1].face.fg, foreground);
+    assert_eq!(cell_face(&text, Coord::default()), &Face::default());
+    assert_eq!(
+        cell_face(&text, Coord { line: 0, column: 1 }).fg,
+        foreground
+    );
 
     text.move_home();
     assert!(text.begin_single_replace());
     text.write_text("r");
-    assert_eq!(text.lines_for_test()[0][0].face.fg, foreground);
+    assert_eq!(cell_face(&text, Coord::default()).fg, foreground);
     text.toggle_replace_mode();
     text.write_text("z");
-    assert_eq!(text.lines_for_test()[0][0].face.fg, foreground);
+    assert_eq!(cell_face(&text, Coord::default()).fg, foreground);
 
     let mut stamp = state();
     stamp.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
     stamp.apply_toolbar_action(ToolbarAction::SelectColor(color));
     stamp.place_stamp();
-    assert_eq!(stamp.lines_for_test()[0][0].face.fg, foreground);
+    assert_eq!(cell_face(&stamp, Coord::default()).fg, foreground);
 
     let mut line = state();
     line.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
@@ -556,11 +575,12 @@ fn selected_color_applies_only_to_future_nonblank_writes_in_every_editing_path()
     line.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
     assert!(line.move_or_draw(Direction::Right, true));
     assert!(
-        line.lines_for_test()
-            .iter()
-            .flatten()
-            .filter(|atom| !atom.contents.chars().all(char::is_whitespace))
-            .all(|atom| atom.face.fg == foreground)
+        line.active_layer_for_test()
+            .rows()
+            .values()
+            .flat_map(|row| row.values())
+            .filter(|cell| !cell.atom.contents().chars().all(char::is_whitespace))
+            .all(|cell| cell.face.fg == foreground)
     );
 
     let mut shape = state();
@@ -573,20 +593,28 @@ fn selected_color_applies_only_to_future_nonblank_writes_in_every_editing_path()
     shape.confirm_shape();
     assert!(
         shape
-            .lines_for_test()
-            .iter()
-            .flatten()
-            .filter(|atom| !atom.contents.chars().all(char::is_whitespace))
-            .all(|atom| atom.face.fg == foreground)
+            .active_layer_for_test()
+            .rows()
+            .values()
+            .flat_map(|row| row.values())
+            .filter(|cell| !cell.atom.contents().chars().all(char::is_whitespace))
+            .all(|cell| cell.face.fg == foreground)
     );
 
     let mut paste = state();
     paste.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
     paste.apply_toolbar_action(ToolbarAction::SelectColor(color));
     assert!(paste.paste_text_rectangle("p q"));
-    assert_eq!(paste.lines_for_test()[0][0].face.fg, foreground);
-    assert_eq!(paste.lines_for_test()[0][1].face, Face::default());
-    assert_eq!(paste.lines_for_test()[0][2].face.fg, foreground);
+    assert_eq!(cell_face(&paste, Coord::default()).fg, foreground);
+    assert!(
+        paste
+            .active_cell_for_test(Coord { line: 0, column: 1 })
+            .is_none()
+    );
+    assert_eq!(
+        cell_face(&paste, Coord { line: 0, column: 2 }).fg,
+        foreground
+    );
 }
 
 #[test]
@@ -602,15 +630,24 @@ fn disabling_colors_stops_future_coloring_and_moves_preserve_existing_colors() {
     assert!(state.begin_selected_move_lift());
     assert!(state.move_lift(Direction::Right));
     assert!(state.confirm_move_lift());
-    assert_eq!(state.lines_for_test()[0][1].face.fg, foreground);
+    assert_eq!(
+        cell_face(&state, Coord { line: 0, column: 1 }).fg,
+        foreground
+    );
 
     state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
     state.move_to(Coord { line: 0, column: 2 });
     state.insert("y");
-    assert_eq!(state.lines_for_test()[0][2].face, Face::default());
+    assert_eq!(
+        cell_face(&state, Coord { line: 0, column: 2 }),
+        &Face::default()
+    );
 
     state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::DarkMode));
-    assert_eq!(state.lines_for_test()[0][1].face.fg, foreground);
+    assert_eq!(
+        cell_face(&state, Coord { line: 0, column: 1 }).fg,
+        foreground
+    );
 }
 
 #[test]
@@ -627,12 +664,19 @@ fn line_connection_regeneration_uses_the_current_color() {
     state.apply_toolbar_action(ToolbarAction::SelectColor(second));
     assert!(state.move_or_draw(Direction::Down, true));
 
-    assert_eq!(state.lines_for_test()[0][0].face.fg, first.hex().unwrap());
-    assert_eq!(state.lines_for_test()[0][1].face.fg, second.hex().unwrap());
+    assert_eq!(cell_face(&state, Coord::default()).fg, first.hex().unwrap());
     assert_eq!(
-        state.lines_for_test()[1]
-            .iter()
-            .find(|atom| !atom.contents.chars().all(char::is_whitespace))
+        cell_face(&state, Coord { line: 0, column: 1 }).fg,
+        second.hex().unwrap()
+    );
+    assert_eq!(
+        state
+            .active_layer_for_test()
+            .rows()
+            .get(&1)
+            .unwrap()
+            .values()
+            .find(|cell| !cell.atom.contents().chars().all(char::is_whitespace))
             .unwrap()
             .face
             .fg,
@@ -641,11 +685,12 @@ fn line_connection_regeneration_uses_the_current_color() {
     assert!(state.erase(Direction::Up));
     assert!(
         state
-            .lines_for_test()
-            .iter()
-            .flatten()
-            .filter(|atom| atom.contents.chars().all(char::is_whitespace))
-            .all(|atom| atom.face == Face::default())
+            .active_layer_for_test()
+            .rows()
+            .values()
+            .flat_map(|row| row.values())
+            .filter(|cell| cell.atom.contents().chars().all(char::is_whitespace))
+            .all(|cell| cell.face.as_ref() == &Face::default())
     );
 }
 
@@ -741,13 +786,14 @@ fn clear_canvas_resets_cells_faces_cursor_selection_and_line_markers() {
     state.move_to(Coord { line: 1, column: 0 });
     assert!(state.move_or_draw(Direction::Right, true));
     state.end_stroke();
-    state.grid.cursor_pos = Coord { line: 3, column: 4 };
+    state.restore_canvas_position(Coord { line: 3, column: 4 });
     state
         .selection
         .select(Coord { line: 1, column: 2 }, Coord { line: 3, column: 4 });
     state.clear_canvas();
 
-    assert_eq!(state.lines_for_test(), vec![Vec::new()]);
+    assert!(state.active_layer_for_test().rows().is_empty());
+    assert_eq!(state.active_layer_for_test().bounds(), None);
     assert!(state.content_cells().is_empty());
     assert_eq!(state.grid.cursor_pos, Coord { line: 3, column: 4 });
     assert!(state.selection.is_collapsed());
@@ -788,12 +834,10 @@ fn clear_canvas_preserves_a_far_cursor_and_later_inserts_there() {
     assert_eq!(state.grid.cursor_pos, cursor);
     assert_eq!(state.selection.active(), cursor);
     assert!(state.content_cells().is_empty());
-    assert_eq!(state.lines_for_test(), vec![Vec::new()]);
+    assert!(state.active_layer_for_test().rows().is_empty());
 
     state.insert("x");
-    let line = usize::try_from(cursor.line).unwrap();
-    let column = usize::try_from(cursor.column).unwrap();
-    assert_eq!(state.lines_for_test()[line][column].contents, "x");
+    assert_eq!(state.cell_contents(cursor), Some("x"));
     assert_eq!(
         state.grid.cursor_pos,
         Coord {
@@ -826,19 +870,13 @@ fn clear_canvas_removes_faces_from_styled_whitespace() {
             .unwrap()
         )
     );
-    state.grid.cursor_pos = cursor;
+    state.restore_canvas_position(cursor);
 
     state.clear_canvas();
 
     assert_eq!(state.grid.cursor_pos, cursor);
     assert!(state.content_cells().is_empty());
-    assert!(
-        state
-            .lines_for_test()
-            .iter()
-            .flatten()
-            .all(|atom| atom.face == Face::default())
-    );
+    assert!(state.active_layer_for_test().rows().is_empty());
 }
 
 #[test]
@@ -858,11 +896,11 @@ fn erasing_moves_across_and_clears_general_non_line_content() {
     state.move_to(Coord::default());
 
     assert!(state.erase(Direction::Right));
-    assert_eq!(contents(&state.lines_for_test()[0]), "  ◆");
+    assert_eq!(sparse_row_contents(&state, 0), "  ◆");
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
 
     assert!(state.erase(Direction::Right));
-    assert_eq!(contents(&state.lines_for_test()[0]), "");
+    assert!(state.active_layer_for_test().rows().is_empty());
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
 }
 
@@ -874,7 +912,7 @@ fn erasing_a_traversed_line_edge_preserves_unrelated_connections() {
 
     assert!(state.erase(Direction::Left));
 
-    assert_eq!(contents(&state.lines_for_test()[0]), "╶╴");
+    assert_eq!(sparse_row_contents(&state, 0), "╶╴");
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
 }
 
@@ -886,8 +924,8 @@ fn erasing_a_display_cell_removes_trailing_implicit_blanks() {
 
     assert!(state.erase(Direction::Left));
 
-    assert_eq!(contents(&state.lines_for_test()[0]), "A");
-    assert_eq!(display_width(&state.lines_for_test()[0]), 1);
+    assert_eq!(state.cell_contents(Coord::default()), Some("A"));
+    assert_eq!(state.active_layer_for_test().bounds().unwrap().max_x, 0);
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
 }
 
@@ -911,7 +949,7 @@ fn blank_origin_erasing_moves_into_implicit_space_without_document_edit() {
 fn inserts_and_edits_multiple_lines() {
     let mut state = state();
     state.insert("ab\ncd");
-    assert_eq!(state.lines_for_test().len(), 2);
+    assert_eq!(state.active_layer_for_test().bounds().unwrap().max_y, 1);
     assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 2 });
     state.backspace();
     assert_eq!(state.grid.cursor_pos.column, 1);
@@ -926,7 +964,7 @@ fn replace_mode_overwrites_instead_of_inserting() {
 
     state.write_text("XY");
 
-    assert_eq!(contents(&state.lines_for_test()[0]), "aXY");
+    assert_eq!(sparse_row_contents(&state, 0), "aXY");
     assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 3 });
     state.toggle_replace_mode();
     assert_eq!(state.cursor_mode, CursorMode::Stamp);

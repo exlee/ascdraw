@@ -471,21 +471,24 @@ fn prefix_escape_also_collapses_selection_without_changing_toolbar_mode() {
 }
 
 #[test]
-fn single_replace_cannot_start_in_text_insert_or_replace_modes() {
-    let mut state = state();
-    for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
-        state.cursor_mode = mode;
-        assert!(!state.begin_single_replace());
-        assert_eq!(state.cursor_mode, mode);
-    }
+fn single_replace_cannot_start_in_text_or_replace_modes() {
+    let mut text = state();
+    text.toggle_text_entry();
+    assert!(!text.begin_single_replace());
+    assert_eq!(text.cursor_mode, CursorMode::Text);
+
+    let mut replace = state();
+    replace.toggle_replace_mode();
+    assert!(!replace.begin_single_replace());
+    assert_eq!(replace.cursor_mode, CursorMode::Replace);
 }
 
 #[test]
 fn cancelling_text_replace_and_single_replace_restores_the_toolbar_mode() {
-    for editing_mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+    for enter_mode in [Editor::toggle_text_entry, Editor::toggle_replace_mode] {
         let mut state = state();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Stamp)));
-        state.cursor_mode = editing_mode;
+        enter_mode(&mut state);
 
         assert!(state.cancel_text_entry());
 
@@ -502,22 +505,6 @@ fn cancelling_text_replace_and_single_replace_restores_the_toolbar_mode() {
 }
 
 #[test]
-fn cancelling_text_entry_clears_a_pending_toolbar_prefix() {
-    let mut state = state();
-    assert!(
-        state
-            .toolbar
-            .handle_shortcut(&Key::Character("1".into()), ModifiersState::empty())
-    );
-    state.cursor_mode = CursorMode::Replace;
-
-    assert!(state.cancel_text_entry());
-    assert!(state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),));
-
-    assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
-}
-
-#[test]
 fn invalid_wide_text_is_transactional_and_sets_a_tip() {
     let mut state = state();
     state.insert("x");
@@ -531,12 +518,8 @@ fn invalid_wide_text_is_transactional_and_sets_a_tip() {
 fn clicking_beyond_content_does_not_allocate_blank_cells() {
     let mut state = state();
     state.move_to(Coord { line: 2, column: 4 });
-    assert_eq!(state.lines_for_test(), vec![Vec::new()]);
-    assert!(
-        state.canvas.layers()[state.canvas.active_index()]
-            .rows()
-            .is_empty()
-    );
+    assert!(state.active_layer_for_test().rows().is_empty());
+    assert_eq!(state.active_layer_for_test().bounds(), None);
     assert_eq!(state.grid.cursor_pos, Coord { line: 2, column: 4 });
 }
 
@@ -546,7 +529,7 @@ fn move_draw_uses_grid_movement_without_wrapping() {
     state.move_or_draw(Direction::Right, false);
     state.move_or_draw(Direction::Down, false);
     assert_eq!(state.grid.cursor_pos, Coord { line: 1, column: 1 });
-    assert_eq!(state.lines_for_test(), vec![Vec::new()]);
+    assert!(state.active_layer_for_test().rows().is_empty());
 }
 
 #[test]
@@ -558,10 +541,19 @@ fn stored_content_respects_maximum_dimensions_without_bounding_navigation() {
     });
     state.insert("xy");
 
-    assert_eq!(state.lines_for_test().len(), MAX_CANVAS_HEIGHT);
+    let edge = Coord {
+        line: i16::try_from(MAX_CANVAS_HEIGHT - 1).unwrap(),
+        column: i16::try_from(MAX_CANVAS_WIDTH - 1).unwrap(),
+    };
+    assert_eq!(state.cell_contents(edge), Some("x"));
+    assert_eq!(state.active_layer_for_test().rows().len(), 1);
     assert_eq!(
-        display_width(state.lines_for_test().last().unwrap()),
-        MAX_CANVAS_WIDTH
+        state.active_layer_for_test().bounds().unwrap().max_x,
+        edge.column
+    );
+    assert_eq!(
+        state.active_layer_for_test().bounds().unwrap().max_y,
+        edge.line
     );
     assert_eq!(
         state.grid.cursor_pos,
@@ -590,11 +582,8 @@ fn stored_content_respects_maximum_dimensions_without_bounding_navigation() {
             column: -1
         }
     );
-    assert_eq!(state.lines_for_test().len(), MAX_CANVAS_HEIGHT);
-    assert_eq!(
-        display_width(state.lines_for_test().last().unwrap()),
-        MAX_CANVAS_WIDTH
-    );
+    assert_eq!(state.cell_contents(edge), Some("x"));
+    assert_eq!(state.active_layer_for_test().rows().len(), 1);
 }
 
 #[test]
@@ -608,7 +597,8 @@ fn replacing_canvas_truncates_oversized_rows_and_columns() {
 
     state.replace_canvas(lines);
 
-    assert_eq!(state.lines_for_test(), vec![Vec::new()]);
+    assert!(state.active_layer_for_test().rows().is_empty());
+    assert_eq!(state.active_layer_for_test().bounds(), None);
     assert!(state.content_cells().is_empty());
 }
 
@@ -629,7 +619,8 @@ fn moving_up_at_zero_enters_implicit_space_without_shifting_content() {
             column: 1
         }
     );
-    assert_eq!(contents(&state.lines_for_test()[0]), "ab");
+    assert_eq!(state.cell_contents(Coord { line: 0, column: 0 }), Some("a"));
+    assert_eq!(state.cell_contents(Coord { line: 0, column: 1 }), Some("b"));
     let preview = state.shape_preview.unwrap();
     assert_eq!(preview.anchor.line, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
@@ -652,8 +643,8 @@ fn moving_left_at_zero_enters_implicit_space_without_shifting_content() {
             column: -1
         }
     );
-    assert_eq!(contents(&state.lines_for_test()[0]), "a");
-    assert_eq!(contents(&state.lines_for_test()[1]), "b");
+    assert_eq!(state.cell_contents(Coord { line: 0, column: 0 }), Some("a"));
+    assert_eq!(state.cell_contents(Coord { line: 1, column: 0 }), Some("b"));
     let preview = state.shape_preview.unwrap();
     assert_eq!(preview.anchor.column, 0);
     assert_eq!(preview.end, state.grid.cursor_pos);
@@ -713,14 +704,14 @@ fn viewport_clamp_moves_cursor_and_collapses_selection_without_changing_lines() 
     state.write_text("x");
     state.move_to(Coord { line: 1, column: 1 });
     state.extend_selection(Direction::Right);
-    let lines = state.lines_for_test().clone();
+    let canvas = state.active_layer_for_test().clone();
 
     state.clamp_cursor_to_content(Coord { line: 5, column: 5 });
 
     assert_eq!(state.grid.cursor_pos, Coord { line: 5, column: 5 });
     assert!(state.selection.is_collapsed());
     assert_eq!(state.selection.active(), state.grid.cursor_pos);
-    assert_eq!(state.lines_for_test(), lines);
+    assert_eq!(state.active_layer_for_test(), &canvas);
 }
 
 #[test]

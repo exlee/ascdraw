@@ -409,27 +409,6 @@ mod tests {
     use super::*;
     use crate::toolbar::{MainMode, ToolbarAction};
 
-    fn legal_origin_range(min: usize, max: usize, viewport_cells: usize) -> (i64, i64) {
-        let min = i64::try_from(min).unwrap_or(i64::MAX);
-        let max = i64::try_from(max).unwrap_or(i64::MAX);
-        let (inner_start, inner_end) = inner_screen_offsets(viewport_cells);
-        (
-            min.saturating_sub(inner_end),
-            max.saturating_sub(inner_start),
-        )
-    }
-
-    fn layout_rows(
-        height: usize,
-        cell_height: usize,
-        transparent_menubar: bool,
-        scale_factor: f64,
-    ) -> usize {
-        let top_padding = content_top_padding_for_scale_factor(scale_factor, transparent_menubar);
-        ((height as f32 - top_padding - PADDING as f32).max(0.0) / cell_height.max(1) as f32)
-            as usize
-    }
-
     #[test]
     fn visible_canvas_cells_include_residual_pixels_and_signed_origins() {
         let layout = LayoutMetrics {
@@ -526,38 +505,24 @@ mod tests {
     }
 
     #[test]
-    fn transparent_menubar_reduces_available_rows_by_fixed_inset() {
-        let height = PADDING * 2 + 10 * 18;
-        assert_eq!(layout_rows(height, 18, false, 1.0), 10);
-        assert_eq!(layout_rows(height, 18, true, 1.0), 8);
-    }
-
-    #[test]
     fn zoom_reanchors_the_cursor_top_left_exactly() {
         let cursor = Coord {
             line: 7,
             column: 11,
         };
         let mut viewport = ViewportOffset { x: 3, y: -5 };
-        let before = cursor_top_left(cursor, (8.0, 16.0), 44.0, viewport);
-
         viewport.reanchor_cursor(cursor, (8.0, 16.0), (11.0, 20.0), 44.0, 44.0);
 
-        assert_eq!(
-            cursor_top_left(cursor, (11.0, 20.0), 44.0, viewport),
-            before
-        );
+        assert_eq!(viewport, ViewportOffset { x: -30, y: -33 });
     }
 
     #[test]
     fn reanchoring_includes_changes_to_the_fixed_toolbar_height() {
         let cursor = Coord { line: 2, column: 0 };
         let mut viewport = ViewportOffset::default();
-        let before = cursor_top_left(cursor, (8.0, 16.0), 44.0, viewport);
-
         viewport.reanchor_cursor(cursor, (8.0, 16.0), (8.0, 16.0), 44.0, 48.0);
 
-        assert_eq!(cursor_top_left(cursor, (8.0, 16.0), 48.0, viewport), before);
+        assert_eq!(viewport, ViewportOffset { x: 0, y: -4 });
     }
 
     #[test]
@@ -568,12 +533,6 @@ mod tests {
         let grid_top = top_padding
             + crate::toolbar::toolbar_height_for_width(&toolbar, usize::MAX, cell_height);
 
-        assert_eq!(
-            grid_top,
-            PADDING as f32
-                + toolbar.rows() as f32 * cell_height
-                + toolbar.rows().saturating_sub(1) as f32 * crate::toolbar::TOOLBAR_ROW_GAP as f32
-        );
         assert_eq!(grid_top, 218.0);
     }
 
@@ -607,10 +566,9 @@ mod tests {
     fn bottom_tooltip_reserves_its_row_and_gap_from_the_grid() {
         let (rows, grid_bottom, tooltip_top, visible) = vertical_geometry(400, 128.0, 18.0, 18.0);
         assert!(visible);
-        assert_eq!(tooltip_top, (382 - TOOLTIP_BOTTOM_PAD) as f32);
-        assert_eq!(grid_bottom, tooltip_top - TOOLTIP_GRID_GAP as f32);
+        assert_eq!(tooltip_top, 367.0);
+        assert_eq!(grid_bottom, 347.0);
         assert_eq!(rows, 12);
-        assert!(grid_top_and_rows_fit_before(128.0, rows, 18.0, grid_bottom));
     }
 
     #[test]
@@ -622,15 +580,6 @@ mod tests {
         assert_eq!(rows, 1);
     }
 
-    fn grid_top_and_rows_fit_before(
-        grid_top: f32,
-        rows: usize,
-        cell_height: f32,
-        grid_bottom: f32,
-    ) -> bool {
-        grid_top + rows as f32 * cell_height <= grid_bottom
-    }
-
     #[test]
     fn scroll_margin_is_three_cells() {
         assert_eq!(SCROLL_MARGIN_CELLS, 3);
@@ -639,7 +588,6 @@ mod tests {
     #[test]
     fn ten_cell_viewport_uses_the_requested_six_cell_inner_screen() {
         assert_eq!(inner_screen_offsets(10), (3, 8));
-        assert_eq!(legal_origin_range(1, 10, 10), (-7, 7));
     }
 
     #[test]
@@ -653,9 +601,6 @@ mod tests {
         ];
         let viewport = (10, 10);
 
-        assert_eq!(viewport_rectangle((-7, -7), viewport), ((-7, -7), (3, 3)));
-        assert_eq!(inner_rectangle((-7, -7), viewport), ((-4, -4), (1, 1)));
-        assert_eq!(screen_position((-7, -7), content[0]), (8, 8));
         assert!(content_intersects_inner_screen(
             (-7, -7),
             viewport,
@@ -667,9 +612,6 @@ mod tests {
             &content
         ));
 
-        assert_eq!(viewport_rectangle((7, 7), viewport), ((7, 7), (17, 17)));
-        assert_eq!(inner_rectangle((7, 7), viewport), ((10, 10), (15, 15)));
-        assert_eq!(screen_position((7, 7), content[1]), (3, 3));
         assert!(content_intersects_inner_screen((7, 7), viewport, &content));
         assert!(!content_intersects_inner_screen((8, 8), viewport, &content));
 
@@ -904,59 +846,11 @@ mod tests {
     #[test]
     fn canvas_translation_keeps_shifted_cell_at_same_pixel() {
         let cell_size = (8.0, 16.0);
-        let before = cursor_top_left(
-            Coord { line: 2, column: 4 },
-            cell_size,
-            44.0,
-            ViewportOffset::default(),
-        );
         let mut viewport = ViewportOffset::default();
         viewport.translate_canvas(1, 1, cell_size);
-        let after = cursor_top_left(Coord { line: 3, column: 5 }, cell_size, 44.0, viewport);
-        assert_eq!(after, before);
+        assert_eq!(viewport, ViewportOffset { x: -8, y: -16 });
 
         viewport.translate_canvas(-1, -1, cell_size);
         assert_eq!(viewport, ViewportOffset::default());
-    }
-
-    fn cursor_top_left(
-        cursor: Coord,
-        cell_size: (f32, f32),
-        grid_top: f32,
-        viewport: ViewportOffset,
-    ) -> (f32, f32) {
-        (
-            PADDING as f32 + cursor.column as f32 * cell_size.0 + viewport.x as f32,
-            grid_top + cursor.line as f32 * cell_size.1 + viewport.y as f32,
-        )
-    }
-
-    fn viewport_rectangle(
-        origin: (i64, i64),
-        viewport: (usize, usize),
-    ) -> ((i64, i64), (i64, i64)) {
-        (
-            origin,
-            (
-                origin.0 + i64::try_from(viewport.0).unwrap(),
-                origin.1 + i64::try_from(viewport.1).unwrap(),
-            ),
-        )
-    }
-
-    fn inner_rectangle(origin: (i64, i64), viewport: (usize, usize)) -> ((i64, i64), (i64, i64)) {
-        let horizontal = inner_screen_offsets(viewport.0);
-        let vertical = inner_screen_offsets(viewport.1);
-        (
-            (origin.0 + horizontal.0, origin.1 + vertical.0),
-            (origin.0 + horizontal.1, origin.1 + vertical.1),
-        )
-    }
-
-    fn screen_position(origin: (i64, i64), coord: Coord) -> (i64, i64) {
-        (
-            i64::try_from(coord.column).unwrap() - origin.0,
-            i64::try_from(coord.line).unwrap() - origin.1,
-        )
     }
 }

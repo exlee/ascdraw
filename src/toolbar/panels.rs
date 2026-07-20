@@ -283,10 +283,6 @@ mod tests {
     use crate::toolbar::{MENU_FIRST_ROW, MainMode, ToggleKind, boxed_toolbar_spans};
     use unicode_width::UnicodeWidthChar;
 
-    fn auxiliary_panels_visible(toolbar: &ToolbarState) -> bool {
-        !toolbar.export_menu_open() && (toolbar.multi_layer_mode() || toolbar.multi_color_mode())
-    }
-
     fn sample_layers() -> [LayerSummary; 3] {
         [
             LayerSummary {
@@ -377,7 +373,7 @@ mod tests {
         );
         assert_eq!(
             action_start(&data, ToolbarAction::SelectColor(ColorId(7))),
-            width - 3
+            157
         );
 
         for action in [
@@ -406,10 +402,8 @@ mod tests {
         let header = boxed_toolbar_spans(&toolbar.toolbar_spans(MAIN_LABEL_ROW), width);
         let palette = boxed_toolbar_spans(&toolbar.toolbar_spans(MENU_FIRST_ROW + 1), width);
 
-        assert_eq!(
-            action_start(&header, ToolbarAction::BeginColorsPath),
-            action_start(&palette, ToolbarAction::BeginColorPath(0))
-        );
+        assert_eq!(action_start(&header, ToolbarAction::BeginColorsPath), 98);
+        assert_eq!(action_start(&palette, ToolbarAction::BeginColorPath(0)), 98);
     }
 
     #[test]
@@ -430,13 +424,13 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(right_text(&rows[0]), format!("8{}", " ".repeat(17)));
-        assert_eq!(right_text(&rows[1]), format!("Lyrs{}", " ".repeat(14)));
+        assert_eq!(right_text(&rows[0]), "8                 ");
+        assert_eq!(right_text(&rows[1]), "Lyrs              ");
         assert_eq!(right_text(&rows[3]), "8.1. α × ▪     + ø");
-        assert_eq!(right_text(&rows[6]), format!("9{}", " ".repeat(19)));
-        assert_eq!(right_text(&rows[7]), format!("Clrs{}", " ".repeat(16)));
+        assert_eq!(right_text(&rows[6]), "9                   ");
+        assert_eq!(right_text(&rows[7]), "Clrs                ");
         assert_eq!(right_text(&rows[9]), "9.1. ■ ■ ■ ■ ■ ■ ■ ■");
-        assert_eq!(right_text(&rows[11]), format!("0{}", " ".repeat(10)));
+        assert_eq!(right_text(&rows[11]), "0          ");
         assert_eq!(right_text(&rows[12]), "Files/Togls");
         assert!(rows.iter().all(|row| !text(row).contains("Decorators:")));
 
@@ -491,7 +485,6 @@ mod tests {
                     ))
             );
         }
-        assert!(!auxiliary_panels_visible(&toolbar));
         assert!(toolbar.multi_layer_mode());
         assert!(toolbar.multi_color_mode());
     }

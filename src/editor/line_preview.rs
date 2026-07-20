@@ -410,7 +410,9 @@ mod tests {
             let preview_canvas = state
                 .line_preview_render_canvas()
                 .expect("active route is rendered");
-            let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+            let preview = crate::dense_exchange::to_dense(
+                &preview_canvas.layers()[preview_canvas.active_index()],
+            );
             assert!(state.start_or_advance_line_preview());
             assert_eq!(state.lines_for_test(), preview);
         }
@@ -432,7 +434,9 @@ mod tests {
         let preview_canvas = state
             .line_preview_render_canvas()
             .expect("changed route has a preview");
-        let live = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+        let live = crate::dense_exchange::to_dense(
+            &preview_canvas.layers()[preview_canvas.active_index()],
+        );
         assert_ne!(live, first_segment);
         assert!(
             live.iter()
@@ -538,7 +542,9 @@ mod tests {
         let preview_canvas = state
             .line_preview_render_canvas()
             .expect("mixed route is previewed");
-        let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+        let preview = crate::dense_exchange::to_dense(
+            &preview_canvas.layers()[preview_canvas.active_index()],
+        );
         assert_eq!(
             preview
                 .iter()
@@ -601,7 +607,9 @@ mod tests {
         let preview_canvas = state
             .line_preview_render_canvas()
             .expect("both routed segments are previewed");
-        let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+        let preview = crate::dense_exchange::to_dense(
+            &preview_canvas.layers()[preview_canvas.active_index()],
+        );
         assert!(preview.iter().flatten().any(|atom| atom.contents == "╲"));
         assert_eq!(
             preview

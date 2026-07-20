@@ -17,7 +17,7 @@ impl Editor {
         let maps = layers
             .into_iter()
             .map(|layer| {
-                crate::canvas::LayerMap::from_dense_with_markers(
+                crate::dense_exchange::from_dense_with_markers(
                     layer.id,
                     layer.visible,
                     &layer.lines,

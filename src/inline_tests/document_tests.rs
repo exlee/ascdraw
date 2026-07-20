@@ -4,7 +4,9 @@ use crate::model::StyledAtom;
 fn canvas(layers: &[PersistedLayer]) -> LayerStack {
     let maps = layers
         .iter()
-        .map(|layer| LayerMap::from_dense(layer.id, layer.visible, &layer.lines).unwrap())
+        .map(|layer| {
+            crate::dense_exchange::from_dense(layer.id, layer.visible, &layer.lines).unwrap()
+        })
         .collect();
     LayerStack::new(maps, true).unwrap()
 }
@@ -37,7 +39,10 @@ fn sparse_json_round_trip_and_canonical_deletion() {
     assert_eq!(serialized.matches("\"fg\"").count(), 1);
     let sparse: SparseDocument = serde_json::from_str(&serialized).unwrap();
     let loaded = sparse_document(sparse).unwrap();
-    assert_eq!(loaded.canvas.layers()[0].to_dense()[0][0].contents, "x");
+    assert_eq!(
+        crate::dense_exchange::to_dense(&loaded.canvas.layers()[0])[0][0].contents,
+        "x"
+    );
 }
 
 #[test]
@@ -50,7 +55,7 @@ fn sparse_write_rejects_wide_atoms() {
             contents: "界".to_owned(),
         }]],
     }];
-    assert!(LayerMap::from_dense(LayerId(0), true, &layers[0].lines).is_err());
+    assert!(crate::dense_exchange::from_dense(LayerId(0), true, &layers[0].lines).is_err());
 }
 
 #[test]

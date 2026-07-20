@@ -1,5 +1,5 @@
 use super::*;
-use crate::canvas::{LayerMap, LineMarker as PlacedLineMarker};
+use crate::canvas::{CoordData, LayerMap, LineMarker as PlacedLineMarker};
 use crate::drawing::LineEnding;
 use crate::editor_event::EditorState;
 use crate::model::ColorId;
@@ -20,12 +20,13 @@ impl Editor {
         self.sparse_content_cells(true)
     }
 
+    /// Builds dense display/exchange fixtures for tests outside the editor behavior suite.
     pub(crate) fn set_lines_for_test(&mut self, lines: Vec<Vec<StyledAtom>>) {
         let active = self.canvas.active_id();
         let visible = self.canvas.layers()[self.canvas.active_index()].visible;
         let markers = self.canvas.active_line_markers();
         let mut replacement = Some(
-            LayerMap::from_dense_with_markers(active, visible, &lines, &markers)
+            crate::dense_exchange::from_dense_with_markers(active, visible, &lines, &markers)
                 .expect("test canvas contains valid one-cell atoms"),
         );
         self.canvas.mutate_layers(|id, layer| {
@@ -36,7 +37,15 @@ impl Editor {
     }
 
     pub(crate) fn lines_for_test(&self) -> Vec<Vec<StyledAtom>> {
-        self.canvas.layers()[self.canvas.active_index()].to_dense()
+        crate::dense_exchange::to_dense(&self.canvas.layers()[self.canvas.active_index()])
+    }
+
+    pub(crate) fn active_layer_for_test(&self) -> &LayerMap {
+        &self.canvas.layers()[self.canvas.active_index()]
+    }
+
+    pub(crate) fn active_cell_for_test(&self, coord: Coord) -> Option<&CoordData> {
+        self.canvas.active_cell(coord)
     }
 
     pub(crate) fn set_cell_face_for_test(&mut self, coord: Coord, face: Face) {
@@ -59,7 +68,7 @@ impl Editor {
             .layers()
             .iter()
             .map(|layer| LayerView {
-                lines: layer.to_dense(),
+                lines: crate::dense_exchange::to_dense(layer),
             })
             .collect()
     }
@@ -118,4 +127,22 @@ fn select_toolbar_option(state: &mut Editor, key: &str, count: usize) {
 
 fn contents(line: &[StyledAtom]) -> String {
     line.iter().map(|atom| atom.contents.as_str()).collect()
+}
+
+fn sparse_row_contents(state: &Editor, line: i16) -> String {
+    let Some(row) = state.active_layer_for_test().rows().get(&line) else {
+        return String::new();
+    };
+    let Some((&last_column, _)) = row.last_key_value() else {
+        return String::new();
+    };
+    (0..=last_column)
+        .map(|column| row.get(&column).map_or(" ", |cell| cell.atom.contents()))
+        .collect()
+}
+
+fn cell_face(state: &Editor, coord: Coord) -> &Face {
+    state
+        .active_cell_for_test(coord)
+        .map_or(&state.grid.default_face, |cell| cell.face.as_ref())
 }

@@ -83,7 +83,10 @@ mod tests {
             "lines": [[{"face": Face::default(), "contents": "abc"}]]
         });
         let loaded = load_document(&document.to_string()).unwrap();
-        assert_eq!(loaded.canvas.layers()[0].to_dense()[0].len(), 3);
+        assert_eq!(
+            crate::dense_exchange::to_dense(&loaded.canvas.layers()[0])[0].len(),
+            3
+        );
 
         let wide = serde_json::json!({
             "version": 1,

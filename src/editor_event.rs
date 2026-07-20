@@ -269,6 +269,171 @@ mod tests {
             assert_eq!(classified.clipboard_command(), Some(expected));
             assert_eq!(classified.input().key, &key);
         }
+
+        for modifiers in [
+            ModifiersState::SUPER,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
+            for key in ["c", "C"] {
+                assert_eq!(
+                    classify_key(
+                        EditorState::LineMode,
+                        false,
+                        input(&Key::Character(key.into()), modifiers),
+                    )
+                    .clipboard_command(),
+                    Some(ClipboardCommand::Copy)
+                );
+            }
+        }
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
+            for (key, expected) in [
+                ("x", ClipboardCommand::Cut),
+                ("X", ClipboardCommand::Cut),
+                ("v", ClipboardCommand::Paste),
+                ("V", ClipboardCommand::Paste),
+            ] {
+                assert_eq!(
+                    classify_key(
+                        EditorState::LineMode,
+                        false,
+                        input(&Key::Character(key.into()), modifiers),
+                    )
+                    .clipboard_command(),
+                    Some(expected)
+                );
+            }
+        }
+        for (key, modifiers) in [
+            ("c", ModifiersState::CONTROL),
+            ("c", ModifiersState::CONTROL | ModifiersState::ALT),
+            ("x", ModifiersState::SUPER | ModifiersState::ALT),
+        ] {
+            assert_eq!(
+                classify_key(
+                    EditorState::LineMode,
+                    false,
+                    input(&Key::Character(key.into()), modifiers),
+                )
+                .clipboard_command(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_global_and_plain_history_shortcuts_in_their_valid_states() {
+        for state in [
+            EditorState::LineMode,
+            EditorState::StampMode,
+            EditorState::ShapeMode,
+            EditorState::UtilityMode,
+            EditorState::TextMode,
+            EditorState::InsertMode,
+            EditorState::ReplaceMode,
+        ] {
+            for modifiers in [
+                ModifiersState::CONTROL,
+                ModifiersState::SUPER,
+                ModifiersState::CONTROL | ModifiersState::SHIFT,
+                ModifiersState::SUPER | ModifiersState::SHIFT,
+            ] {
+                assert_eq!(
+                    classify_key(
+                        state,
+                        state.accepts_text(),
+                        input(&Key::Character("z".into()), modifiers),
+                    )
+                    .history_command(),
+                    Some(HistoryCommand::Undo)
+                );
+                assert_eq!(
+                    classify_key(
+                        state,
+                        state.accepts_text(),
+                        input(&Key::Character("R".into()), modifiers),
+                    )
+                    .history_command(),
+                    Some(HistoryCommand::Redo)
+                );
+            }
+        }
+
+        for state in [
+            EditorState::LineMode,
+            EditorState::StampMode,
+            EditorState::ShapeMode,
+            EditorState::UtilityMode,
+        ] {
+            assert_eq!(
+                classify_key(
+                    state,
+                    false,
+                    input(&Key::Character("u".into()), ModifiersState::empty()),
+                )
+                .history_command(),
+                Some(HistoryCommand::Undo)
+            );
+            for modifiers in [ModifiersState::empty(), ModifiersState::SHIFT] {
+                assert_eq!(
+                    classify_key(state, false, input(&Key::Character("U".into()), modifiers),)
+                        .history_command(),
+                    Some(HistoryCommand::Redo)
+                );
+            }
+        }
+
+        for state in [
+            EditorState::TextMode,
+            EditorState::InsertMode,
+            EditorState::ReplaceMode,
+        ] {
+            for key in ["u", "U"] {
+                assert_eq!(
+                    classify_key(
+                        state,
+                        true,
+                        input(&Key::Character(key.into()), ModifiersState::empty()),
+                    )
+                    .history_command(),
+                    None
+                );
+            }
+        }
+        for modifiers in [
+            ModifiersState::ALT,
+            ModifiersState::CONTROL,
+            ModifiersState::SUPER,
+            ModifiersState::SHIFT | ModifiersState::ALT,
+            ModifiersState::SHIFT | ModifiersState::CONTROL,
+        ] {
+            assert_eq!(
+                classify_key(
+                    EditorState::StampMode,
+                    false,
+                    input(&Key::Character("U".into()), modifiers),
+                )
+                .history_command(),
+                None
+            );
+        }
+        assert_eq!(
+            classify_key(
+                EditorState::StampMode,
+                false,
+                input(
+                    &Key::Character("r".into()),
+                    ModifiersState::CONTROL | ModifiersState::ALT,
+                ),
+            )
+            .history_command(),
+            None
+        );
     }
 
     #[test]

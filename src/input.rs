@@ -626,70 +626,8 @@ fn toolbar_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor_event::{EditorState, KeyInput, classify_key};
+    use crate::editor::Editor;
     use crate::model::Coord;
-
-    fn history_command(
-        key: &Key,
-        modifiers: ModifiersState,
-        mode: CursorMode,
-    ) -> Option<HistoryCommand> {
-        classify_key(
-            EditorState::NavigationMode,
-            mode.accepts_text(),
-            KeyInput {
-                key,
-                text: None,
-                repeat: false,
-                modifiers,
-            },
-        )
-        .history_command()
-    }
-
-    fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
-        classify_key(
-            EditorState::NavigationMode,
-            false,
-            KeyInput {
-                key,
-                text: None,
-                repeat: false,
-                modifiers,
-            },
-        )
-        .clipboard_command()
-    }
-
-    fn pointer_position_to_coord_with_metrics(
-        x: f64,
-        y: f64,
-        grid_top: f32,
-        cell_width: f32,
-        cell_height: f32,
-        viewport: ViewportOffset,
-    ) -> Option<Coord> {
-        let (line, column) = pointer_position_to_canvas_coord_with_metrics(
-            x,
-            y,
-            grid_top,
-            cell_width,
-            cell_height,
-            viewport,
-        )?;
-        Some(Coord {
-            line: i16::try_from(line).ok()?,
-            column: i16::try_from(column).ok()?,
-        })
-    }
-
-    fn direction_key_for_event<'a>(key: &'a Key, key_without_modifiers: &'a Key) -> &'a Key {
-        if direction_for_key(key_without_modifiers).is_some() {
-            key_without_modifiers
-        } else {
-            key
-        }
-    }
 
     #[test]
     fn boxed_toolbar_hit_testing_skips_borders_and_translates_content_offsets() {
@@ -836,6 +774,7 @@ mod tests {
 
     #[test]
     fn pointer_mapping_keeps_an_anchored_cell_across_grid_top_changes() {
+        let state = Editor::new(&AppConfig::default().theme, "test");
         let cell_width = 8;
         let cell_height = 16;
         let coord = Coord {
@@ -855,50 +794,54 @@ mod tests {
             + cell_height as i64 / 2;
 
         assert_eq!(
-            pointer_position_to_coord_with_metrics(
+            pointer_position_to_canvas_coord_with_metrics(
                 screen_x as f64,
                 screen_y as f64,
                 old_grid_top as f32,
                 cell_width as f32,
                 cell_height as f32,
                 viewport,
-            ),
+            )
+            .map(|(line, column)| state.resolve_pointer_coord(line, column)),
             Some(coord)
         );
 
         viewport.reanchor_grid_top(old_grid_top as f32, new_grid_top as f32);
         assert_eq!(
-            pointer_position_to_coord_with_metrics(
+            pointer_position_to_canvas_coord_with_metrics(
                 screen_x as f64,
                 screen_y as f64,
                 new_grid_top as f32,
                 cell_width as f32,
                 cell_height as f32,
                 viewport,
-            ),
+            )
+            .map(|(line, column)| state.resolve_pointer_coord(line, column)),
             Some(coord)
         );
     }
 
     #[test]
     fn pointer_mapping_does_not_expose_canvas_behind_toolbar() {
+        let state = Editor::new(&AppConfig::default().theme, "test");
         let grid_top = 100.0;
         let viewport = ViewportOffset { x: -80, y: -160 };
 
         assert_eq!(
-            pointer_position_to_coord_with_metrics(
+            pointer_position_to_canvas_coord_with_metrics(
                 (PADDING + 10) as f64,
                 grid_top as f64 - 1.0,
                 grid_top,
                 8.0,
                 16.0,
                 viewport,
-            ),
+            )
+            .map(|(line, column)| state.resolve_pointer_coord(line, column)),
             None,
             "toolbar remains inert when the canvas is panned upward"
         );
         assert!(
-            pointer_position_to_coord_with_metrics(
+            pointer_position_to_canvas_coord_with_metrics(
                 PADDING as f64,
                 grid_top as f64,
                 grid_top,
@@ -906,6 +849,7 @@ mod tests {
                 16.0,
                 viewport,
             )
+            .map(|(line, column)| state.resolve_pointer_coord(line, column))
             .is_some(),
             "the visible canvas origin remains interactive"
         );
@@ -1665,16 +1609,9 @@ mod tests {
             ("k", Direction::Up),
             ("l", Direction::Right),
         ] {
-            let logical_key = Key::Character(format!("modified-{key}").into());
             let unmodified_key = Key::Character(key.into());
             assert_eq!(
-                move_selection_command(
-                    direction_key_for_event(&logical_key, &unmodified_key),
-                    modifiers,
-                    false,
-                    true,
-                    Some(7),
-                ),
+                move_selection_command(&unmodified_key, modifiers, false, true, Some(7),),
                 Some(MoveSelectionCommand::BeginCloneAndStep(direction, 7))
             );
         }
@@ -1773,180 +1710,6 @@ mod tests {
                     "mode={mode:?}, key={key:?}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn command_copy_and_control_or_command_cut_paste_are_global() {
-        for modifiers in [
-            ModifiersState::SUPER,
-            ModifiersState::SUPER | ModifiersState::SHIFT,
-        ] {
-            assert_eq!(
-                clipboard_command(&Key::Character("c".into()), modifiers),
-                Some(ClipboardCommand::Copy)
-            );
-            assert_eq!(
-                clipboard_command(&Key::Character("C".into()), modifiers),
-                Some(ClipboardCommand::Copy)
-            );
-        }
-        for modifiers in [
-            ModifiersState::CONTROL,
-            ModifiersState::SUPER,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-            ModifiersState::SUPER | ModifiersState::SHIFT,
-        ] {
-            assert_eq!(
-                clipboard_command(&Key::Character("x".into()), modifiers),
-                Some(ClipboardCommand::Cut)
-            );
-            assert_eq!(
-                clipboard_command(&Key::Character("X".into()), modifiers),
-                Some(ClipboardCommand::Cut)
-            );
-            assert_eq!(
-                clipboard_command(&Key::Character("v".into()), modifiers),
-                Some(ClipboardCommand::Paste)
-            );
-            assert_eq!(
-                clipboard_command(&Key::Character("V".into()), modifiers),
-                Some(ClipboardCommand::Paste)
-            );
-        }
-        assert_eq!(
-            clipboard_command(&Key::Character("c".into()), ModifiersState::CONTROL),
-            None
-        );
-        assert_eq!(
-            clipboard_command(
-                &Key::Character("c".into()),
-                ModifiersState::CONTROL | ModifiersState::ALT
-            ),
-            None
-        );
-        assert_eq!(
-            clipboard_command(
-                &Key::Character("x".into()),
-                ModifiersState::SUPER | ModifiersState::ALT
-            ),
-            None
-        );
-        assert_eq!(
-            edit_command_for_key(
-                &Key::Character("c".into()),
-                ModifiersState::CONTROL,
-                CursorMode::Text
-            ),
-            None,
-            "Ctrl-C is handled by the cancel-key classifier before edit commands"
-        );
-    }
-
-    #[test]
-    fn control_and_command_history_shortcuts_are_global_and_alt_is_excluded() {
-        for mode in [
-            CursorMode::MoveDraw,
-            CursorMode::Stamp,
-            CursorMode::Shapes,
-            CursorMode::Utilities,
-            CursorMode::Text,
-            CursorMode::Insert,
-            CursorMode::Replace,
-        ] {
-            for modifiers in [
-                ModifiersState::CONTROL,
-                ModifiersState::SUPER,
-                ModifiersState::CONTROL | ModifiersState::SHIFT,
-                ModifiersState::SUPER | ModifiersState::SHIFT,
-            ] {
-                assert_eq!(
-                    history_command(&Key::Character("z".into()), modifiers, mode),
-                    Some(HistoryCommand::Undo)
-                );
-                assert_eq!(
-                    history_command(&Key::Character("R".into()), modifiers, mode),
-                    Some(HistoryCommand::Redo)
-                );
-            }
-        }
-        assert_eq!(
-            history_command(
-                &Key::Character("r".into()),
-                ModifiersState::CONTROL | ModifiersState::ALT,
-                CursorMode::Stamp,
-            ),
-            None
-        );
-        assert_eq!(
-            history_command(
-                &Key::Character("r".into()),
-                ModifiersState::empty(),
-                CursorMode::Stamp,
-            ),
-            None
-        );
-        for mode in [
-            CursorMode::MoveDraw,
-            CursorMode::Stamp,
-            CursorMode::Shapes,
-            CursorMode::Utilities,
-            CursorMode::Text,
-            CursorMode::Insert,
-            CursorMode::Replace,
-        ] {
-            assert_eq!(
-                edit_command_for_key(&Key::Character("r".into()), ModifiersState::CONTROL, mode),
-                None,
-                "Ctrl-R must never start or type Replace in {mode:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn plain_vim_history_shortcuts_use_logical_case_only_in_canvas_modes() {
-        for mode in [
-            CursorMode::MoveDraw,
-            CursorMode::Stamp,
-            CursorMode::Shapes,
-            CursorMode::Utilities,
-        ] {
-            assert_eq!(
-                history_command(&Key::Character("u".into()), ModifiersState::empty(), mode,),
-                Some(HistoryCommand::Undo),
-                "mode {mode:?}"
-            );
-            for modifiers in [ModifiersState::empty(), ModifiersState::SHIFT] {
-                assert_eq!(
-                    history_command(&Key::Character("U".into()), modifiers, mode),
-                    Some(HistoryCommand::Redo),
-                    "mode {mode:?}, modifiers {modifiers:?}"
-                );
-            }
-        }
-
-        for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
-            for key in ["u", "U"] {
-                assert_eq!(
-                    history_command(&Key::Character(key.into()), ModifiersState::empty(), mode,),
-                    None,
-                    "mode {mode:?}, key {key}"
-                );
-            }
-        }
-
-        for modifiers in [
-            ModifiersState::ALT,
-            ModifiersState::CONTROL,
-            ModifiersState::SUPER,
-            ModifiersState::SHIFT | ModifiersState::ALT,
-            ModifiersState::SHIFT | ModifiersState::CONTROL,
-        ] {
-            assert_eq!(
-                history_command(&Key::Character("U".into()), modifiers, CursorMode::Stamp),
-                None,
-                "modifiers {modifiers:?}"
-            );
         }
     }
 

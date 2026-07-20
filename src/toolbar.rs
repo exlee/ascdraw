@@ -2007,11 +2007,7 @@ mod tests {
         assert_eq!(toolbar.menu_row_count(), 5);
         assert_eq!(toolbar.content_rows(), 8);
         assert_eq!(toolbar.rows(), 10);
-        assert_eq!(
-            toolbar_height_for_width(&toolbar, usize::MAX, 18.0),
-            toolbar.rows() as f32 * 18.0
-                + toolbar.rows().saturating_sub(1) as f32 * TOOLBAR_ROW_GAP as f32
-        );
+        assert_eq!(toolbar_height_for_width(&toolbar, usize::MAX, 18.0), 198.0);
 
         toolbar.apply_action(ToolbarAction::SelectMain(MainMode::Stamp));
         assert_eq!(toolbar.menu_row_count(), 5);
@@ -3520,7 +3516,7 @@ mod tests {
     fn mouse_export_entry_and_action_match_keyboard_paths() {
         let mut toolbar = ToolbarState::default();
         let width = 60;
-        let entry_column = width - 2 - UnicodeWidthStr::width("Files/Togls");
+        let entry_column = 47;
         let toggle = toolbar
             .action_at(0, entry_column, width)
             .expect("export entry clickable");

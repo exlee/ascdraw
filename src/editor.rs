@@ -579,16 +579,18 @@ impl Editor {
 
     #[allow(dead_code)] // Public extraction hook for the queued export implementation.
     pub fn selected_text(&self) -> String {
-        self.canvas.layers()[self.canvas.active_index()]
-            .selected_atoms(self.selection.bounds())
-            .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|atom| atom.contents)
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::dense_exchange::selected_atoms(
+            &self.canvas.layers()[self.canvas.active_index()],
+            self.selection.bounds(),
+        )
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|atom| atom.contents)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 
     pub fn paste_text_rectangle(&mut self, text: &str) -> bool {
@@ -632,8 +634,7 @@ impl Editor {
             }
         }
         self.commit_canvas();
-        self.canvas
-            .overwrite_active_rectangle(origin, &rectangle)
+        crate::dense_exchange::overwrite_active_rectangle(&mut self.canvas, origin, &rectangle)
             .expect("pasted text contains one-cell atoms");
         let active = Coord {
             line: bounds.bottom,
@@ -671,15 +672,16 @@ impl Editor {
             .active_line_markers()
             .iter()
             .any(|marker| bounds.contains(marker.coord));
-        let unchanged = self.canvas.layers()[self.canvas.active_index()].selected_atoms(bounds)
-            == rectangle.rows;
+        let unchanged = crate::dense_exchange::selected_atoms(
+            &self.canvas.layers()[self.canvas.active_index()],
+            bounds,
+        ) == rectangle.rows;
         if unchanged && !removed_marker {
             return false;
         }
 
         self.commit_canvas();
-        self.canvas
-            .overwrite_active_rectangle(origin, rectangle)
+        crate::dense_exchange::overwrite_active_rectangle(&mut self.canvas, origin, rectangle)
             .expect("styled rectangle contains one-cell atoms");
         self.selection.collapse(origin);
         self.grid.cursor_pos = origin;
@@ -688,7 +690,7 @@ impl Editor {
 
     pub fn replace_canvas(&mut self, mut lines: Vec<Vec<StyledAtom>>) {
         truncate_canvas_lines(&mut lines);
-        let map = crate::canvas::LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &[])
+        let map = crate::dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &[])
             .expect("loaded canvas contains valid graphemes");
         let replacement =
             crate::canvas::LayerStack::new(vec![map], self.toolbar.multi_layer_mode())

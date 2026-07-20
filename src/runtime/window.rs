@@ -857,7 +857,7 @@ impl EditorWindow {
             .effective_layers()
             .iter()
             .filter(|layer| layer.visible)
-            .map(crate::canvas::LayerMap::to_dense)
+            .map(crate::dense_exchange::to_dense)
             .collect::<Vec<_>>();
         let image = render_canvas_layers_image(
             &self.renderer,
@@ -2147,21 +2147,6 @@ mod tests {
     use winit::dpi::PhysicalPosition;
     use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-    fn reconcile_view_cursor(previous: &Editor, current: &Editor) -> bool {
-        previous.view_active() != current.view_active()
-    }
-
-    fn grid_top(
-        scale_factor: f64,
-        transparent_menubar: bool,
-        toolbar_cell_height: f32,
-        toolbar: &crate::toolbar::ToolbarState,
-    ) -> f32 {
-        (content_top_padding(scale_factor, transparent_menubar)
-            + crate::toolbar::toolbar_height_for_width(toolbar, usize::MAX, toolbar_cell_height))
-        .round()
-    }
-
     #[test]
     fn line_double_click_requires_same_stationary_cell_within_interval() {
         let first = Instant::now();
@@ -2684,7 +2669,7 @@ mod tests {
         let previous = state.clone();
         assert!(state.begin_selected_move_lift());
         assert!(state.move_lift(Direction::Right));
-        assert!(!reconcile_view_cursor(&previous, &state));
+        assert_eq!(state.view_active(), previous.view_active());
         assert_ne!(state.grid.cursor_pos, previous.grid.cursor_pos);
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 1 });
     }
@@ -2700,12 +2685,12 @@ mod tests {
             submenu: 0,
             option: 2,
         }));
-        assert!(reconcile_view_cursor(&previous, &state));
+        assert_ne!(state.view_active(), previous.view_active());
         assert_eq!(state.grid.cursor_pos, cursor);
 
         let previous = state.clone();
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line,)));
-        assert!(reconcile_view_cursor(&previous, &state));
+        assert_ne!(state.view_active(), previous.view_active());
         assert_eq!(state.grid.cursor_pos, cursor);
     }
 
@@ -2843,16 +2828,18 @@ mod tests {
         toolbar_cell_height: f32,
         cell_size: (f32, f32),
     ) {
-        let old_grid_top = grid_top(
+        let old_grid_top = grid_top_for_width(
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1.0, toolbar_cell_height),
             old_toolbar,
         );
-        let new_grid_top = grid_top(
+        let new_grid_top = grid_top_for_width(
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1.0, toolbar_cell_height),
             new_toolbar,
         );
         let before = [
@@ -2939,10 +2926,11 @@ mod tests {
         cell_size: (f32, f32),
     ) -> ViewportOffset {
         let cursor = state.grid.cursor_pos;
-        let current_grid_top = grid_top(
+        let current_grid_top = grid_top_for_width(
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1.0, toolbar_cell_height),
             &state.toolbar,
         );
         let before = canvas_screen_position(cursor, current_grid_top, cell_size, viewport);
@@ -3741,10 +3729,11 @@ mod tests {
                 x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 5,
                 y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 4,
             };
-            let initial_grid_top = grid_top(
+            let initial_grid_top = grid_top_for_width(
                 1.0,
                 config.transparent_menubar,
-                toolbar_cell_height,
+                usize::MAX,
+                (1.0, toolbar_cell_height),
                 &state.toolbar,
             );
             let initial_screen =
@@ -3771,10 +3760,11 @@ mod tests {
                 );
             }
             let export_viewport = viewport;
-            let export_grid_top = grid_top(
+            let export_grid_top = grid_top_for_width(
                 1.0,
                 config.transparent_menubar,
-                toolbar_cell_height,
+                usize::MAX,
+                (1.0, toolbar_cell_height),
                 &state.toolbar,
             );
 
@@ -3837,10 +3827,11 @@ mod tests {
             x: -(cursor.column as i64 * cell_size.0 as i64) + cell_size.0 as i64 * 4,
             y: -(cursor.line as i64 * cell_size.1 as i64) + cell_size.1 as i64 * 3,
         };
-        let initial_grid_top = grid_top(
+        let initial_grid_top = grid_top_for_width(
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1.0, toolbar_cell_height),
             &state.toolbar,
         );
         let screen = canvas_screen_position(cursor, initial_grid_top, cell_size, initial);
@@ -3870,10 +3861,11 @@ mod tests {
             cell_size,
         );
 
-        let export_grid_top = grid_top(
+        let export_grid_top = grid_top_for_width(
             1.0,
             config.transparent_menubar,
-            toolbar_cell_height,
+            usize::MAX,
+            (1.0, toolbar_cell_height),
             &state.toolbar,
         );
         assert_eq!(

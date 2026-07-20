@@ -4,14 +4,11 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::drawing::LineEnding;
-use crate::model::{
-    Atom, Coord, Face, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS, StyledAtom,
-};
-use crate::selection::{CanvasRegion, SelectionBounds, TextRectangle};
+use crate::model::{Atom, Coord, Face, LAYER_SYMBOLS, LayerId, LayerSummary, MAX_LAYERS};
+use crate::selection::SelectionBounds;
 
 mod history;
 pub use history::HistoryCanvasDelta;
@@ -129,22 +126,6 @@ impl LayerMap {
             .unwrap_or(0)
     }
 
-    pub(crate) fn selected_atoms(&self, bounds: SelectionBounds) -> Vec<Vec<StyledAtom>> {
-        (bounds.top..=bounds.bottom)
-            .map(|line| {
-                (bounds.left..=bounds.right)
-                    .map(|column| {
-                        self.get(line, column)
-                            .map_or_else(default_blank, |data| StyledAtom {
-                                face: data.face.as_ref().clone(),
-                                contents: data.atom.contents().to_owned(),
-                            })
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
     pub(crate) fn line_markers(&self) -> Vec<LineMarker> {
         self.rows
             .iter()
@@ -187,27 +168,6 @@ impl LayerMap {
 
     pub(crate) fn remove_line_at(&mut self, coord: Coord) -> bool {
         self.take_line_at(coord).is_some()
-    }
-
-    fn replace_line_markers(&mut self, markers: &[LineMarker]) {
-        for row in self.rows.values_mut() {
-            for data in row.values_mut() {
-                data.line = None;
-            }
-        }
-        for marker in markers {
-            let (line, column) = (marker.coord.line, marker.coord.column);
-            if let Some(data) = self
-                .rows
-                .get_mut(&line)
-                .and_then(|row| row.get_mut(&column))
-            {
-                data.line = Some(LineData {
-                    ending: marker.ending,
-                    base_glyph: marker.base_glyph.clone(),
-                });
-            }
-        }
     }
 
     pub fn set_at(&mut self, x: i16, y: i16, atom: Atom, face: &Face) -> Result<()> {
@@ -253,32 +213,6 @@ impl LayerMap {
             self.set_data_untracked(y, x, data);
         }
         Ok(())
-    }
-
-    pub fn atoms_in_region(&self, region: CanvasRegion) -> Vec<Vec<StyledAtom>> {
-        (0..region.height)
-            .map(|row_offset| {
-                let line = region
-                    .top
-                    .saturating_add(i64::try_from(row_offset).unwrap_or(i64::MAX));
-                (0..region.width)
-                    .map(|column_offset| {
-                        let column = region
-                            .left
-                            .saturating_add(i64::try_from(column_offset).unwrap_or(i64::MAX));
-                        let (Ok(line), Ok(column)) = (i16::try_from(line), i16::try_from(column))
-                        else {
-                            return default_blank();
-                        };
-                        self.get(line, column)
-                            .map_or_else(default_blank, |data| StyledAtom {
-                                face: data.face.as_ref().clone(),
-                                contents: data.atom.contents().to_owned(),
-                            })
-                    })
-                    .collect()
-            })
-            .collect()
     }
 
     pub fn delete_at(&mut self, x: i16, y: i16) -> bool {
@@ -581,87 +515,21 @@ impl LayerMap {
         Ok(())
     }
 
-    pub(crate) fn overwrite_rectangle(
-        &mut self,
-        origin: Coord,
-        rectangle: &TextRectangle,
-    ) -> Result<()> {
-        for (row_offset, row) in rectangle.rows.iter().enumerate() {
-            let row_offset =
-                i16::try_from(row_offset).context("rectangle exceeds canvas height")?;
-            let line = origin
-                .line
-                .checked_add(row_offset)
-                .context("rectangle exceeds canvas height")?;
-            for (column_offset, atom) in row.iter().enumerate() {
-                atom.validate_cell()?;
-                let column_offset =
-                    i16::try_from(column_offset).context("rectangle exceeds canvas width")?;
-                let column = origin
-                    .column
-                    .checked_add(column_offset)
-                    .context("rectangle exceeds canvas width")?;
-                self.delete_at(column, line);
-                self.set_at(column, line, Atom::new(atom.contents.clone())?, &atom.face)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn from_dense(id: LayerId, visible: bool, lines: &[Vec<StyledAtom>]) -> Result<Self> {
-        for atom in lines.iter().flatten() {
-            for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
-                if UnicodeWidthStr::width(grapheme) != 1 {
-                    bail!("atom {grapheme:?} has display width other than 1");
-                }
-            }
-        }
-        Self::from_dense_with_markers(id, visible, lines, &[])
-    }
-
-    pub(crate) fn from_dense_with_markers(
-        id: LayerId,
-        visible: bool,
-        lines: &[Vec<StyledAtom>],
-        line_markers: &[LineMarker],
-    ) -> Result<Self> {
-        let mut map = Self::new(id, visible);
-        for (line_index, row) in lines.iter().enumerate() {
-            let line = i16::try_from(line_index).context("canvas line exceeds signed i16 range")?;
-            let mut column = 0i16;
-            for atom in row {
-                for grapheme in UnicodeSegmentation::graphemes(atom.contents.as_str(), true) {
-                    let width = UnicodeWidthStr::width(grapheme);
-                    if width == 0 {
-                        bail!("atom {grapheme:?} has display width zero");
-                    }
-                    let cell_atom = Atom::new(grapheme)?;
-                    if atom.face != Face::default()
-                        || !cell_atom.contents().chars().all(char::is_whitespace)
-                    {
-                        map.set_data_untracked(
-                            line,
-                            column,
-                            CoordData {
-                                face: Rc::new(atom.face.clone()),
-                                atom: Rc::new(cell_atom),
-                                raster_cache: RefCell::new(None),
-                                line: None,
-                            },
-                        );
-                    }
-                    column = column
-                        .checked_add(i16::try_from(width).context("atom width exceeds i16")?)
-                        .context("canvas column exceeds signed i16 range")?;
-                }
-            }
-        }
-        map.replace_line_markers(line_markers);
-        Ok(map)
-    }
-
     pub fn set_line_data(&mut self, x: i16, y: i16, line: Option<LineData>) -> bool {
         record_cell_before(self.id, y, x, self.get(y, x));
+        let Some(data) = self.rows.get_mut(&y).and_then(|row| row.get_mut(&x)) else {
+            return false;
+        };
+        data.line = line;
+        true
+    }
+
+    pub(crate) fn set_line_data_untracked(
+        &mut self,
+        x: i16,
+        y: i16,
+        line: Option<LineData>,
+    ) -> bool {
         let Some(data) = self.rows.get_mut(&y).and_then(|row| row.get_mut(&x)) else {
             return false;
         };
@@ -676,52 +544,6 @@ impl LayerMap {
 
     fn set_data_untracked(&mut self, y: i16, x: i16, data: CoordData) {
         self.rows.entry(y).or_default().insert(x, data);
-    }
-
-    pub fn to_dense(&self) -> Vec<Vec<StyledAtom>> {
-        let height = self
-            .rows
-            .last_key_value()
-            .and_then(|(&line, _)| usize::try_from(line).ok())
-            .map_or(1, |line| line.saturating_add(1));
-        (0..height)
-            .map(|line| {
-                let row = i16::try_from(line)
-                    .ok()
-                    .and_then(|line| self.rows.get(&line));
-                let width = row.map_or(0, |row| {
-                    row.iter()
-                        .filter_map(|(&column, data)| {
-                            usize::try_from(column).ok().map(|column| {
-                                column.saturating_add(
-                                    UnicodeWidthStr::width(data.atom.contents()).max(1),
-                                )
-                            })
-                        })
-                        .max()
-                        .unwrap_or(0)
-                });
-                let mut atoms = Vec::new();
-                let mut column = 0usize;
-                while column < width {
-                    let data = i16::try_from(column)
-                        .ok()
-                        .and_then(|column| row.and_then(|row| row.get(&column)));
-                    if let Some(data) = data {
-                        column = column
-                            .saturating_add(UnicodeWidthStr::width(data.atom.contents()).max(1));
-                        atoms.push(StyledAtom {
-                            face: data.face.as_ref().clone(),
-                            contents: data.atom.contents().to_owned(),
-                        });
-                    } else {
-                        atoms.push(default_blank());
-                        column += 1;
-                    }
-                }
-                atoms
-            })
-            .collect()
     }
 
     fn overlay_nonblank_from(&mut self, source: &Self) {
@@ -890,13 +712,8 @@ impl LayerStack {
         Ok(())
     }
 
-    pub(crate) fn overwrite_active_rectangle(
-        &mut self,
-        origin: Coord,
-        rectangle: &TextRectangle,
-    ) -> Result<()> {
-        self.layers[self.active].overwrite_rectangle(origin, rectangle)?;
-        Ok(())
+    pub(crate) fn active_layer_mut(&mut self) -> &mut LayerMap {
+        &mut self.layers[self.active]
     }
 
     pub(crate) fn active_row_width(&self, line: i16) -> usize {
@@ -1057,35 +874,6 @@ impl LayerStack {
             &self.layers[..1]
         }
     }
-
-    pub fn composite_region(&self, region: CanvasRegion) -> Option<Vec<Vec<StyledAtom>>> {
-        let left = i16::try_from(region.left).ok()?;
-        let top = i16::try_from(region.top).ok()?;
-        let width = i16::try_from(region.width).ok()?;
-        let height = i16::try_from(region.height).ok()?;
-        let mut rows = Vec::with_capacity(region.height);
-        for line_offset in 0..height {
-            let line = top.checked_add(line_offset)?;
-            let mut row = Vec::with_capacity(region.width);
-            for column_offset in 0..width {
-                let column = left.checked_add(column_offset)?;
-                let atom = self
-                    .effective_layers()
-                    .iter()
-                    .filter(|layer| layer.visible)
-                    .filter_map(|layer| layer.get(line, column))
-                    .filter(|data| !data.atom.contents().chars().all(char::is_whitespace))
-                    .next_back()
-                    .map_or_else(default_blank, |data| StyledAtom {
-                        face: data.face.as_ref().clone(),
-                        contents: data.atom.contents().to_owned(),
-                    });
-                row.push(atom);
-            }
-            rows.push(row);
-        }
-        Some(rows)
-    }
 }
 
 fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
@@ -1098,13 +886,6 @@ fn combined_bounds(layers: &[LayerMap]) -> Option<LayerBounds> {
             max_x: left.max_x.max(right.max_x),
             max_y: left.max_y.max(right.max_y),
         })
-}
-
-fn default_blank() -> StyledAtom {
-    StyledAtom {
-        face: Face::default(),
-        contents: " ".to_owned(),
-    }
 }
 
 #[cfg(test)]

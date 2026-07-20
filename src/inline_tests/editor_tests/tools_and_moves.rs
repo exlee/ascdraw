@@ -103,9 +103,9 @@ fn export_activation_is_transient_and_does_not_mutate_editor_state() {
 
 #[test]
 fn toolbar_shortcuts_are_bypassed_in_every_text_accepting_mode() {
-    for mode in [CursorMode::Text, CursorMode::Insert, CursorMode::Replace] {
+    for enter_mode in [Editor::toggle_text_entry, Editor::toggle_replace_mode] {
         let mut state = state();
-        state.cursor_mode = mode;
+        enter_mode(&mut state);
 
         assert!(
             !state.handle_toolbar_shortcut(&Key::Character("2".into()), ModifiersState::empty(),)
@@ -200,7 +200,8 @@ fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
     }
 
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "┌──┐");
     assert_eq!(contents(&preview[1]), "│  │");
     assert_eq!(contents(&preview[2]), "└──┘");
@@ -278,12 +279,29 @@ fn shape_space_surrounds_an_origin_selection_with_negative_coordinates() {
 fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
     let mut state = state();
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
-    state.set_lines_for_test(
-        [11, 7, 0, 7, 11]
-            .into_iter()
-            .map(|width| (0..width).map(|_| blank_atom()).collect())
-            .collect(),
-    );
+    let padding_face = state.theme.tooltip.clone();
+    for (line, width) in [11, 7, 0, 7, 11].into_iter().enumerate() {
+        if width == 0 {
+            continue;
+        }
+        state.move_to(Coord {
+            line: i16::try_from(line).unwrap(),
+            column: 0,
+        });
+        assert!(
+            state.paste_styled_rectangle_at_cursor(
+                &TextRectangle::from_rows(vec![
+                    (0..width)
+                        .map(|_| StyledAtom {
+                            face: padding_face.clone(),
+                            contents: " ".into(),
+                        })
+                        .collect(),
+                ])
+                .unwrap(),
+            )
+        );
+    }
     state.move_to(Coord { line: 0, column: 2 });
     state.toggle_shape_preview();
     for _ in 0..4 {
@@ -294,7 +312,8 @@ fn shape_preview_and_commit_keep_right_edge_aligned_on_ragged_rows() {
     }
 
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(
         preview
             .iter()
@@ -334,7 +353,19 @@ fn reversed_rounded_shape_extends_one_cell_past_content_and_adds_missing_rows() 
         submenu: 0,
         option: 1,
     });
-    state.set_lines_for_test(vec![(0..4).map(|_| blank_atom()).collect()]);
+    assert!(
+        state.paste_styled_rectangle_at_cursor(
+            &TextRectangle::from_rows(vec![
+                (0..4)
+                    .map(|_| StyledAtom {
+                        face: state.theme.tooltip.clone(),
+                        contents: " ".into(),
+                    })
+                    .collect(),
+            ])
+            .unwrap(),
+        )
+    );
     state.move_to(Coord { line: 4, column: 4 });
     state.toggle_shape_preview();
     for _ in 0..4 {
@@ -344,7 +375,8 @@ fn reversed_rounded_shape_extends_one_cell_past_content_and_adds_missing_rows() 
 
     let expected = ["╭───╮", "│   │", "│   │", "│   │", "╰───╯"];
     let preview_canvas = state.shape_preview_canvas().expect("preview is active");
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(
         preview
             .iter()
@@ -443,7 +475,8 @@ fn rounded_shape_preview_uses_selected_fill() {
     }
 
     let preview_canvas = state.shape_preview_canvas().unwrap();
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "╭──╮");
     assert_eq!(contents(&preview[1]), "│░░│");
     assert_eq!(contents(&preview[2]), "╰──╯");
@@ -674,7 +707,8 @@ fn move_lift_previews_without_mutation_then_composes_edited_cells() {
     let preview_canvas = state
         .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "  ab");
     assert_eq!(contents(&preview[1]), "  cd");
     assert_eq!(preview[0][2].face, configured_face);
@@ -706,17 +740,20 @@ fn clone_move_lift_clones_once_per_shift_press_and_can_clone_after_moving() {
     assert!(initial.clone_move_lift(Direction::Right, 1));
     assert_eq!(initial.edit_snapshot(), before);
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "AA");
 
     assert!(initial.clone_move_lift(Direction::Right, 1));
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "A A");
 
     assert!(initial.clone_move_lift(Direction::Left, 2));
     let preview_canvas = initial.move_lift_render_canvas().unwrap();
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "AAA");
     assert!(initial.confirm_move_lift());
     assert_eq!(line_contents(&initial), vec!["AAA"]);
@@ -822,7 +859,8 @@ fn move_lift_treats_unedited_cells_as_transparent() {
     let preview_canvas = state
         .move_lift_render_canvas()
         .expect("lifted selection has a composited preview");
-    let preview = preview_canvas.layers()[preview_canvas.active_index()].to_dense();
+    let preview =
+        crate::dense_exchange::to_dense(&preview_canvas.layers()[preview_canvas.active_index()]);
     assert_eq!(contents(&preview[0]), "");
     assert_eq!(contents(&preview[1]), "A◆C");
 

@@ -1,4 +1,6 @@
 use super::*;
+use crate::model::StyledAtom;
+use crate::selection::CanvasRegion;
 
 fn data(contents: &str, face: Face) -> CoordData {
     CoordData {
@@ -62,12 +64,18 @@ fn composition_ignores_whitespace_and_disabled_stack_uses_base_only() {
         width: 1,
         height: 1,
     };
-    assert_eq!(stack.composite_region(region).unwrap()[0][0].contents, "a");
+    assert_eq!(
+        crate::dense_exchange::composite_region(&stack, region).unwrap()[0][0].contents,
+        "a"
+    );
 
     let mut overlay = LayerMap::new(LayerId(1), true);
     overlay.set_data(2, -3, data("b", Face::default()));
     let stack = LayerStack::new(vec![base, overlay], false).unwrap();
-    assert_eq!(stack.composite_region(region).unwrap()[0][0].contents, "a");
+    assert_eq!(
+        crate::dense_exchange::composite_region(&stack, region).unwrap()[0][0].contents,
+        "a"
+    );
 }
 
 #[test]
@@ -146,9 +154,13 @@ fn line_markers_are_stored_with_their_coordinate_data() {
         base_glyph: "╴".to_owned(),
     };
 
-    let map =
-        LayerMap::from_dense_with_markers(LayerId(0), true, &lines, std::slice::from_ref(&marker))
-            .unwrap();
+    let map = crate::dense_exchange::from_dense_with_markers(
+        LayerId(0),
+        true,
+        &lines,
+        std::slice::from_ref(&marker),
+    )
+    .unwrap();
 
     assert_eq!(
         map.get(0, 0).and_then(|data| data.line.as_ref()),
@@ -182,7 +194,8 @@ fn cell_and_row_edits_remap_embedded_line_metadata() {
             ..marker
         },
     ];
-    let mut map = LayerMap::from_dense_with_markers(LayerId(0), true, &lines, &markers).unwrap();
+    let mut map =
+        crate::dense_exchange::from_dense_with_markers(LayerId(0), true, &lines, &markers).unwrap();
 
     map.insert_cells(0, 0, vec![(Atom::new("z").unwrap(), Face::default())])
         .unwrap();
@@ -208,7 +221,7 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
         ending: LineEnding::Fixed('◆'),
         base_glyph: contents.to_owned(),
     };
-    let mut columns = LayerMap::from_dense_with_markers(
+    let mut columns = crate::dense_exchange::from_dense_with_markers(
         LayerId(0),
         true,
         &[vec![styled("A"), styled("B"), styled("C"), styled("D")]],
@@ -221,7 +234,7 @@ fn structural_row_and_column_edits_remap_embedded_line_metadata() {
     columns.insert_column(2).unwrap();
     assert_eq!(columns.line_markers(), vec![marker(0, 3, "D")]);
 
-    let mut rows = LayerMap::from_dense_with_markers(
+    let mut rows = crate::dense_exchange::from_dense_with_markers(
         LayerId(0),
         true,
         &[

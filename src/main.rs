@@ -13,6 +13,7 @@ use winit::window::WindowId;
 
 mod app;
 mod canvas;
+mod dense_exchange;
 mod diagnostics;
 mod document;
 mod drawing;
@@ -1344,45 +1345,23 @@ mod tests {
     use crate::toolbar::{MainMode, PendingShortcut, ToggleKind, ToolbarAction};
     use winit::keyboard::{Key, NamedKey};
 
-    fn history_command(
-        key: &Key,
-        modifiers: ModifiersState,
-        mode: CursorMode,
-    ) -> Option<HistoryCommand> {
-        classify_key(
-            EditorState::NavigationMode,
-            mode.accepts_text(),
-            KeyInput {
-                key,
-                text: None,
-                repeat: false,
-                modifiers,
-            },
-        )
-        .history_command()
-    }
-
-    fn clipboard_command(key: &Key, modifiers: ModifiersState) -> Option<ClipboardCommand> {
-        classify_key(
-            EditorState::NavigationMode,
-            false,
-            KeyInput {
-                key,
-                text: None,
-                repeat: false,
-                modifiers,
-            },
-        )
-        .clipboard_command()
-    }
-
     fn handle_clipboard_shortcut(
         state: &mut Editor,
         key: &Key,
         modifiers: ModifiersState,
         platform: &mut impl export::ExportPlatform,
     ) -> Option<Result<bool>> {
-        let command = clipboard_command(key, modifiers)?;
+        let command = classify_key(
+            state.state(),
+            state.cursor_mode.accepts_text(),
+            KeyInput {
+                key,
+                text: None,
+                repeat: false,
+                modifiers,
+            },
+        )
+        .clipboard_command()?;
         Some(handle_clipboard_command(state, command, platform))
     }
 
@@ -1598,7 +1577,7 @@ mod tests {
         assert_eq!(
             state
                 .line_preview_render_canvas()
-                .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
+                .map(|canvas| { dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]) })
                 .expect("line preview is composited")
                 .iter()
                 .flatten()
@@ -1800,7 +1779,7 @@ mod tests {
         assert_eq!(
             state
                 .line_preview_render_canvas()
-                .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
+                .map(|canvas| { dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]) })
                 .expect("earlier preview segment remains active")
                 .iter()
                 .flatten()
@@ -1853,7 +1832,7 @@ mod tests {
 
         let preview = state
             .shape_preview_canvas()
-            .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
+            .map(|canvas| dense_exchange::to_dense(&canvas.layers()[canvas.active_index()]))
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
         assert!(apply_edit_command(
@@ -2101,11 +2080,17 @@ mod tests {
             assert!(edit_history.record_change(before.clone(), edited, delta));
 
             assert_eq!(
-                history_command(
-                    &Key::Character("u".into()),
-                    ModifiersState::empty(),
-                    state.cursor_mode,
-                ),
+                classify_key(
+                    state.state(),
+                    state.cursor_mode.accepts_text(),
+                    KeyInput {
+                        key: &Key::Character("u".into()),
+                        text: None,
+                        repeat: false,
+                        modifiers: ModifiersState::empty(),
+                    },
+                )
+                .history_command(),
                 Some(HistoryCommand::Undo),
                 "mode {main_mode:?}"
             );
@@ -2116,11 +2101,17 @@ mod tests {
             assert_eq!(line_contents(&state.lines_for_test()[0]), "");
 
             assert_eq!(
-                history_command(
-                    &Key::Character("U".into()),
-                    ModifiersState::SHIFT,
-                    state.cursor_mode,
-                ),
+                classify_key(
+                    state.state(),
+                    state.cursor_mode.accepts_text(),
+                    KeyInput {
+                        key: &Key::Character("U".into()),
+                        text: None,
+                        repeat: false,
+                        modifiers: ModifiersState::SHIFT,
+                    },
+                )
+                .history_command(),
                 Some(HistoryCommand::Redo),
                 "mode {main_mode:?}"
             );
@@ -2140,7 +2131,17 @@ mod tests {
             state.cursor_mode = mode;
             for (key, modifiers) in [("u", ModifiersState::empty()), ("U", ModifiersState::SHIFT)] {
                 assert_eq!(
-                    history_command(&Key::Character(key.into()), modifiers, state.cursor_mode),
+                    classify_key(
+                        state.state(),
+                        state.cursor_mode.accepts_text(),
+                        KeyInput {
+                            key: &Key::Character(key.into()),
+                            text: Some(key),
+                            repeat: false,
+                            modifiers,
+                        },
+                    )
+                    .history_command(),
                     None,
                     "mode {mode:?}, key {key}"
                 );
@@ -2168,7 +2169,17 @@ mod tests {
             state.move_to(Coord::default());
             assert!(state.begin_single_replace());
             assert_eq!(
-                history_command(&Key::Character(key.into()), modifiers, state.cursor_mode),
+                classify_key(
+                    state.state(),
+                    state.cursor_mode.accepts_text(),
+                    KeyInput {
+                        key: &Key::Character(key.into()),
+                        text: Some(key),
+                        repeat: false,
+                        modifiers,
+                    },
+                )
+                .history_command(),
                 None
             );
             assert_eq!(
@@ -2194,11 +2205,17 @@ mod tests {
         );
         assert!(state.toolbar.pending_shortcut().is_some());
         assert_eq!(
-            history_command(
-                &Key::Character("u".into()),
-                ModifiersState::empty(),
-                state.cursor_mode,
-            ),
+            classify_key(
+                state.state(),
+                state.cursor_mode.accepts_text(),
+                KeyInput {
+                    key: &Key::Character("u".into()),
+                    text: None,
+                    repeat: false,
+                    modifiers: ModifiersState::empty(),
+                },
+            )
+            .history_command(),
             Some(HistoryCommand::Undo)
         );
         assert!(state.prepare_history_command());
@@ -2368,9 +2385,10 @@ mod tests {
         assert_eq!(state.selection_bounds().left, 2);
         assert_eq!(
             line_contents(
-                &state.move_lift_render_canvas().unwrap().layers()
-                    [state.move_lift_render_canvas().unwrap().active_index()]
-                .to_dense()[0],
+                &dense_exchange::to_dense(
+                    &state.move_lift_render_canvas().unwrap().layers()
+                        [state.move_lift_render_canvas().unwrap().active_index()],
+                )[0]
             )
             .trim_end(),
             " AA"
@@ -2418,9 +2436,10 @@ mod tests {
 
         assert_eq!(
             line_contents(
-                &state.move_lift_render_canvas().unwrap().layers()
-                    [state.move_lift_render_canvas().unwrap().active_index()]
-                .to_dense()[0],
+                &dense_exchange::to_dense(
+                    &state.move_lift_render_canvas().unwrap().layers()
+                        [state.move_lift_render_canvas().unwrap().active_index()],
+                )[0]
             ),
             "AAA"
         );
