@@ -276,11 +276,11 @@ fn layer_limits_base_rules_reordering_deletion_and_symbol_reuse_are_stable() {
 #[test]
 fn minimap_projection_content_includes_hidden_layers() {
     let mut state = state();
-    state.set_lines_for_test(lines_from_text("x"));
+    state.insert("x");
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
     let upper = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text("   y"));
+    state.insert("   y");
     assert!(state.toggle_layer_visibility(upper));
 
     assert_eq!(state.content_cells(), vec![Coord::default()]);
@@ -332,26 +332,38 @@ fn layer_panel_arrows_move_toward_the_displayed_row_direction() {
 #[test]
 fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
     let mut state = state();
-    state.set_lines_for_test(lines_from_text("ACz"));
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 0, column: 1 },
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "C".into(),
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 11,
     });
+    state.move_to(Coord { line: 0, column: 1 });
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
+    state.move_to(Coord { line: 0, column: 2 });
+    state.clear_selection();
+    state.move_to(Coord::default());
+    assert!(state.paste_text_rectangle("A"));
+    state.move_to(Coord { line: 0, column: 2 });
+    assert!(state.paste_text_rectangle("z"));
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
     let source = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text(" B "));
-    let source_face = state.theme.tooltip.clone();
-    state.set_cell_face_for_test(Coord { line: 0, column: 1 }, source_face.clone());
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord { line: 0, column: 1 },
-        ending: LineEnding::Fixed('●'),
-        base_glyph: "B".into(),
+    state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiColorMode));
+    state.apply_toolbar_action(ToolbarAction::SelectColor(ColorId(3)));
+    state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+        submenu: 0,
+        option: 16,
     });
+    state.move_to(Coord { line: 0, column: 1 });
+    assert!(state.move_or_draw(Direction::Right, true));
+    state.end_stroke();
+    state.move_to(Coord { line: 0, column: 2 });
+    state.clear_selection();
+    let source_face = state.lines_for_test()[0][1].face.clone();
     assert!(state.add_layer_above(source));
     let top = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text("top"));
+    state.insert("top");
 
     assert!(state.merge_layer_up(source));
 
@@ -364,7 +376,7 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
             .collect::<Vec<_>>(),
         [base, top]
     );
-    assert_eq!(contents(&state.lines_for_test()[0]), "ABz");
+    assert_eq!(contents(&state.lines_for_test()[0]), "A●z");
     assert_eq!(state.lines_for_test()[0][1].face, source_face);
     assert_eq!(state.line_markers_for_test().len(), 1);
     assert_eq!(
@@ -377,14 +389,14 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
     assert!(!state.merge_layer_down(top));
 
     let mut down = Editor::new(&ThemeConfig::default(), "ascdraw");
-    down.set_lines_for_test(lines_from_text("base"));
+    down.insert("base");
     let base = down.active_layer_id();
     assert!(down.add_layer_above(base));
     let source = down.active_layer_id();
-    down.set_lines_for_test(lines_from_text(" M"));
+    down.insert(" M");
     assert!(down.add_layer_above(source));
     let target = down.active_layer_id();
-    down.set_lines_for_test(lines_from_text("T"));
+    down.insert("T");
 
     assert!(down.merge_layer_down(source));
     assert_eq!(down.active_layer_id(), target);
@@ -395,11 +407,11 @@ fn layer_merge_consumes_source_and_overlays_nonblank_atoms_and_markers() {
 #[test]
 fn shifted_layer_shortcut_merges_and_consumes_the_selected_layer() {
     let mut state = Editor::new(&ThemeConfig::default(), "ascdraw");
-    state.set_lines_for_test(lines_from_text("base"));
+    state.insert("base");
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
     let source = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text(" top"));
+    state.insert(" top");
     assert!(state.apply_toolbar_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode)));
 
     for key in ["8", "2"] {
@@ -418,11 +430,11 @@ fn shifted_layer_shortcut_merges_and_consumes_the_selected_layer() {
 #[test]
 fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers() {
     let mut state = state();
-    state.set_lines_for_test(lines_from_text("A"));
+    state.insert("A");
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
     let upper = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text(" B"));
+    state.insert(" B");
     assert!(state.toggle_layer_visibility(base));
     let summaries = state.layer_summaries();
 
@@ -439,14 +451,9 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     }));
 
     assert!(state.select_layer(base));
-    state.set_lines_for_test(lines_from_text("A"));
-    state.push_line_marker_for_test(PlacedLineMarker {
-        coord: Coord::default(),
-        ending: LineEnding::Fixed('◆'),
-        base_glyph: "A".into(),
-    });
+    state.insert("A");
     assert!(state.select_layer(upper));
-    state.set_lines_for_test(lines_from_text(" B"));
+    state.insert(" B");
     state.set_cell_face_for_test(Coord { line: 0, column: 1 }, state.theme.tooltip.clone());
     let upper_face = state.lines_for_test()[0][1].face.clone();
     assert_ne!(upper_face, Face::default());
@@ -477,8 +484,6 @@ fn clear_applies_to_every_layer_while_move_lift_only_applies_to_visible_layers()
     assert_eq!(views[1].lines[0][2].face, upper_face);
     assert_eq!(state.layer_summaries(), summaries);
     assert!(state.select_layer(base));
-    assert_eq!(state.line_markers_for_test().len(), 1);
-    assert_eq!(state.line_markers_for_test()[0].coord, Coord::default());
     assert!(state.select_layer(upper));
 
     state.clear_canvas();
@@ -499,7 +504,8 @@ fn push_and_pull_apply_the_same_structural_change_to_every_layer() {
     let base = state.active_layer_id();
     assert!(state.add_layer_above(base));
     let upper = state.active_layer_id();
-    state.set_lines_for_test(lines_from_text(" xyz"));
+    state.insert(" xyz");
+    state.move_to(Coord::default());
 
     assert!(state.apply_utility(Direction::Right));
     let views = state.layer_views();

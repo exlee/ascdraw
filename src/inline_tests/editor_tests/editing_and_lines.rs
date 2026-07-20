@@ -301,7 +301,6 @@ fn paste_rejects_wide_source_graphemes_transactionally() {
 
 #[test]
 fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo() {
-    use crate::selection::{CanvasRegion, region_atoms};
     use crate::toolbar_stamp::styled_toolbar_snapshot;
 
     let mut editor = state();
@@ -329,15 +328,22 @@ fn styled_toolbar_paste_uses_cursor_origin_active_layer_dimensions_and_one_undo(
     assert!(editor.selection.is_collapsed());
     assert_eq!(editor.active_layer_id(), upper);
     assert_eq!(editor.layer_views()[0].lines, base_before);
-    let pasted = region_atoms(
-        &editor.lines_for_test(),
-        CanvasRegion {
-            left: origin.column as i64,
-            top: origin.line as i64,
-            width: rectangle.width,
-            height: rectangle.rows.len(),
-        },
-    );
+    let lines = editor.lines_for_test();
+    let top = usize::try_from(origin.line).unwrap();
+    let left = usize::try_from(origin.column).unwrap();
+    let pasted = (0..rectangle.rows.len())
+        .map(|line| {
+            (0..rectangle.width)
+                .map(|column| {
+                    lines
+                        .get(top + line)
+                        .and_then(|row| row.get(left + column))
+                        .cloned()
+                        .unwrap_or_else(blank_atom)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     assert_eq!(pasted, rectangle.rows);
     assert!(pasted.iter().any(|row| {
         row.iter()
