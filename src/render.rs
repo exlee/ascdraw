@@ -1839,7 +1839,9 @@ impl Renderer {
 
         self.logical_font_size.set(next);
         self.content_metrics_cache.borrow_mut().take();
-        self.toolbar_cache.borrow_mut().take();
+        // Don't empty Toolbar on font size reset
+        // its fonts do not change size
+        //self.toolbar_cache.borrow_mut().take();
         self.rendered_atom_cache.borrow_mut().images.clear();
         self.rendered_atom_cache
             .borrow_mut()
@@ -1855,7 +1857,9 @@ impl Renderer {
 
         self.logical_font_size.set(self.default_logical_font_size);
         self.content_metrics_cache.borrow_mut().take();
-        self.toolbar_cache.borrow_mut().take();
+        // Don't empty Toolbar on font size reset
+        // its fonts do not change size
+        // self.toolbar_cache.borrow_mut().take();
         self.rendered_atom_cache.borrow_mut().images.clear();
         self.rendered_atom_cache
             .borrow_mut()
