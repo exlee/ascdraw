@@ -312,7 +312,7 @@ pub fn perform(
             };
             let text = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            state.restore_canvas(canvas_from_text(&text)?);
+            state.replace_canvas(canvas_from_text(&text)?);
             Ok(ExportOutcome::DocumentLoaded {
                 path,
                 format: FileKind::Txt,
@@ -341,7 +341,7 @@ pub fn perform(
                     *viewport = project.viewport;
                     return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
                 }
-                LoadedJson::Legacy(lines) => state.restore_canvas(canvas_from_dense_lines(lines)?),
+                LoadedJson::Legacy(lines) => state.replace_canvas(canvas_from_dense_lines(lines)?),
             }
             Ok(ExportOutcome::DocumentLoaded {
                 path,
@@ -639,7 +639,7 @@ pub(crate) fn load_project_json(
             Ok(0)
         }
         LoadedJson::Legacy(lines) => {
-            state.restore_canvas(canvas_from_dense_lines(lines)?);
+            state.replace_canvas(canvas_from_dense_lines(lines)?);
             Ok(0)
         }
     }
@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn plain_text_preserves_ragged_rows_without_blank_canvas_padding() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.restore_canvas(canvas_from_text("one\nlonger\n").unwrap());
+        state.replace_canvas(canvas_from_text("one\nlonger\n").unwrap());
 
         assert_eq!(plain_text(&state), "one\nlonger");
     }
@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn plain_text_rebases_visible_content_to_its_minimum_coordinates() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
-        state.restore_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
+        state.replace_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
 
         assert_eq!(plain_text(&state), "ab\n\n c");
     }
