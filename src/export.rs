@@ -960,7 +960,6 @@ fn blank_atom() -> StyledAtom {
 mod tests {
     use super::*;
     use crate::history::{EditHistory, HistorySnapshot};
-    use crate::selection::region_atoms;
 
     fn contents(line: &[StyledAtom]) -> String {
         line.iter().map(|atom| atom.contents.as_str()).collect()
@@ -1489,8 +1488,7 @@ mod tests {
         state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
         state.toggle_shape_preview();
         state.move_cursor(crate::model::Direction::Right);
-        let expected = region_atoms(
-            &state.lines_for_test(),
+        let expected = state.canvas().layers()[state.canvas().active_index()].atoms_in_region(
             CanvasRegion {
                 left: 0,
                 top: 0,
@@ -1974,7 +1972,7 @@ mod tests {
         );
         assert_eq!(state.grid.cursor_pos, Coord::default());
         assert!(state.selection.is_collapsed());
-        assert!(state.lines_with_shape_preview().is_none());
+        assert!(!state.has_shape_preview());
         assert_eq!(state.cursor_mode, CursorMode::Shapes);
         assert_eq!(state.selected_text(), "n");
         assert_eq!(state.toolbar.durable_selections(), menu_selections);

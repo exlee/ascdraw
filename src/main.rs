@@ -1597,7 +1597,8 @@ mod tests {
         assert!(state.content_cells().is_empty());
         assert_eq!(
             state
-                .lines_with_shape_preview()
+                .line_preview_render_canvas()
+                .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
                 .expect("line preview is composited")
                 .iter()
                 .flatten()
@@ -1798,7 +1799,8 @@ mod tests {
         assert_eq!(state.grid.cursor_pos, Coord { line: 0, column: 2 });
         assert_eq!(
             state
-                .lines_with_shape_preview()
+                .line_preview_render_canvas()
+                .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
                 .expect("earlier preview segment remains active")
                 .iter()
                 .flatten()
@@ -1850,14 +1852,15 @@ mod tests {
         }
 
         let preview = state
-            .lines_with_shape_preview()
+            .shape_preview_canvas()
+            .map(|canvas| canvas.layers()[canvas.active_index()].to_dense())
             .expect("preview is visible");
         assert_eq!(line_contents(&preview[0]), "┌──┐");
         assert!(apply_edit_command(
             &mut state,
             EditCommand::StartOrConfirmShape
         ));
-        assert!(state.lines_with_shape_preview().is_none());
+        assert!(!state.has_shape_preview());
         assert_eq!(line_contents(&state.lines_for_test()[2]), "└──┘");
     }
 
@@ -2364,7 +2367,12 @@ mod tests {
         );
         assert_eq!(state.selection_bounds().left, 2);
         assert_eq!(
-            line_contents(&state.lines_with_shape_preview().unwrap()[0]).trim_end(),
+            line_contents(
+                &state.move_lift_render_canvas().unwrap().layers()
+                    [state.move_lift_render_canvas().unwrap().active_index()]
+                    .to_dense()[0],
+            )
+            .trim_end(),
             " AA"
         );
 
@@ -2409,7 +2417,11 @@ mod tests {
         }
 
         assert_eq!(
-            line_contents(&state.lines_with_shape_preview().unwrap()[0]),
+            line_contents(
+                &state.move_lift_render_canvas().unwrap().layers()
+                    [state.move_lift_render_canvas().unwrap().active_index()]
+                    .to_dense()[0],
+            ),
             "AAA"
         );
     }
@@ -2818,7 +2830,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(shape.grid.cursor_pos.column, 5);
-        assert!(shape.lines_with_shape_preview().is_some());
+        assert!(shape.has_shape_preview());
 
         let mut utility = Editor::new(&app::ThemeConfig::default(), "test");
         utility.insert("x");
