@@ -1873,7 +1873,6 @@ pub fn create_editor_window(
     background: BackgroundSender,
 ) -> Result<EditorWindow> {
     let window = Rc::new(elwt.create_window(window_attributes(config))?);
-    let surface = WindowSurface::new(&window, config)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -1883,6 +1882,7 @@ pub fn create_editor_window(
         window.focus_window();
     }
 
+    let surface = WindowSurface::new(&window, config)?;
     let title = document_session.window_title();
     window.set_title(&title);
     let mut state = Editor::new(&config.theme, title);
