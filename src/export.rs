@@ -1331,7 +1331,7 @@ mod tests {
         }));
         assert_eq!(state.toolbar.custom_stamp(), None);
         assert_eq!(state.toolbar.stamp(), "□");
-        assert_eq!(state.toolbar.rows(), custom_stamp_rows - 2);
+        assert_eq!(state.toolbar.rows(), custom_stamp_rows);
     }
 
     #[test]

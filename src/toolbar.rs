@@ -852,7 +852,6 @@ impl ToolbarState {
 
     pub fn content_rows_for_width(&self, box_width: usize) -> usize {
         self.standard_content_rows_for_width(box_width)
-            + usize::from(self.custom_stamp.is_some()) * 2
     }
 
     fn standard_content_rows_for_width(&self, box_width: usize) -> usize {
@@ -913,18 +912,19 @@ impl ToolbarState {
         layers: &[LayerSummary],
     ) -> Vec<ToolbarSpan> {
         let indicator_row = self.standard_content_rows_for_width(box_width);
-        if self.custom_stamp.is_some() && row == indicator_row {
-            return custom_stamp::cap_spans(box_width);
-        }
-        if let Some(stamp) = self.custom_stamp.as_deref()
-            && row == indicator_row + 1
-        {
-            return custom_stamp::glyph_spans(box_width, stamp);
-        }
-        boxed_toolbar_spans(
+        let spans = boxed_toolbar_spans(
             &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
             box_width,
-        )
+        );
+        if self.custom_stamp.is_some() && row == indicator_row.saturating_sub(2) {
+            return custom_stamp::attach_cap(spans, box_width);
+        }
+        if let Some(stamp) = self.custom_stamp.as_deref()
+            && row == indicator_row.saturating_sub(1)
+        {
+            return custom_stamp::attach_glyph(spans, box_width, stamp);
+        }
+        spans
     }
 
     fn top_level_headers_wrap(&self, box_width: usize) -> bool {
