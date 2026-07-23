@@ -1134,11 +1134,10 @@ impl EditorWindow {
             if origin != current {
                 self.viewport.set_origin(origin, cell_size);
             }
-            debug_assert!(cursor_is_visible(
-                origin,
-                self.state.grid.cursor_pos,
-                viewport_cells
-            ));
+            debug_assert!(
+                viewport_policy == StateChangeViewportPolicy::Stable
+                    || cursor_is_visible(origin, self.state.grid.cursor_pos, viewport_cells)
+            );
             debug_assert!(
                 matches!(
                     viewport_policy,

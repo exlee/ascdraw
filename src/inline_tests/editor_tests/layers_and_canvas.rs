@@ -239,6 +239,33 @@ fn layer_state_swaps_active_content_and_round_trips_in_edit_snapshots() {
 }
 
 #[test]
+fn selecting_a_shorter_layer_requests_a_stable_viewport() {
+    let mut state = state();
+    state.insert("abcdefghij");
+    let base = state.active_layer_id();
+    assert!(state.add_layer_above(base));
+    let upper = state.active_layer_id();
+    state.insert("x");
+    state.move_to(Coord { line: 0, column: 8 });
+
+    assert!(state.apply_toolbar_action(ToolbarAction::Layer {
+        layer: base,
+        operation: LayerOperation::Select,
+    }));
+    assert_eq!(state.grid.cursor_pos.column, 8);
+    assert!(state.take_toolbar_viewport_stable());
+    assert!(!state.take_toolbar_document_change());
+
+    assert!(state.apply_toolbar_action(ToolbarAction::Layer {
+        layer: upper,
+        operation: LayerOperation::Select,
+    }));
+    assert_eq!(state.grid.cursor_pos.column, 1);
+    assert!(state.take_toolbar_viewport_stable());
+    assert!(!state.take_toolbar_document_change());
+}
+
+#[test]
 fn layer_limits_base_rules_reordering_deletion_and_symbol_reuse_are_stable() {
     let mut state = state();
     let base = state.active_layer_id();

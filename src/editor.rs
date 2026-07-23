@@ -305,7 +305,8 @@ impl Editor {
         let Some((layer, operation)) = self.toolbar.take_layer_action() else {
             return;
         };
-        self.toolbar_viewport_stable = operation == LayerOperation::Show;
+        self.toolbar_viewport_stable =
+            matches!(operation, LayerOperation::Select | LayerOperation::Show);
         self.toolbar_document_changed = match operation {
             LayerOperation::Select => {
                 self.select_layer(layer);
