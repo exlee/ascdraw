@@ -156,6 +156,21 @@ fn stamp_mode_places_the_exclusively_selected_stamp() {
 }
 
 #[test]
+fn custom_stamp_fills_selection_and_rejects_invalid_atoms() {
+    let mut state = state();
+    state.insert("abcd");
+    state.move_to(Coord { line: 0, column: 1 });
+    state.extend_selection(Direction::Right);
+
+    assert!(state.select_custom_stamp("◇"));
+    state.place_stamp();
+    assert_eq!(contents(&state.lines_for_test()[0]), "a◇◇d");
+    assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
+    assert!(!state.select_custom_stamp("😀"));
+    assert!(!state.select_custom_stamp("xy"));
+}
+
+#[test]
 fn stamp_in_middle_of_line_preserves_the_other_segments() {
     let mut state = state();
     state.insert("╷\n│\n╵");

@@ -200,9 +200,11 @@ impl ExportPlatform for NativeExportPlatform<'_> {
     }
 }
 
-pub fn copy_selection(state: &Editor, platform: &mut impl ExportPlatform) -> Result<()> {
+pub fn copy_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<()> {
     let text = selected_visible_text(state);
-    platform.set_clipboard_text(&text)
+    platform.set_clipboard_text(&text)?;
+    state.select_custom_stamp(&text);
+    Ok(())
 }
 
 /// Copies the normalized selection before clearing it. Keeping the clipboard
@@ -1285,7 +1287,7 @@ mod tests {
         }
         let mut platform = MockPlatform::default();
 
-        copy_selection(&state, &mut platform).unwrap();
+        copy_selection(&mut state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("AABBB"));
 
         assert!(cut_selection(&mut state, &mut platform).unwrap());
@@ -1305,24 +1307,31 @@ mod tests {
     }
 
     #[test]
-    fn copying_does_not_change_the_active_tool_or_toolbar_height() {
+    fn copying_one_cell_selects_a_custom_stamp_until_a_bundled_stamp_is_selected() {
         let mut state = Editor::new(&ThemeConfig::default(), "test");
         state.set_lines_for_test(lines_from_text("◇x"));
         assert!(state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Line)));
-        let toolbar_rows = state.toolbar.rows();
         let mut platform = MockPlatform::default();
 
-        copy_selection(&state, &mut platform).unwrap();
+        copy_selection(&mut state, &mut platform).unwrap();
 
         assert_eq!(platform.clipboard.as_deref(), Some("◇"));
-        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
-        assert_eq!(state.toolbar.rows(), toolbar_rows);
+        assert_eq!(state.toolbar.main_mode(), MainMode::Stamp);
+        assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
+        let custom_stamp_rows = state.toolbar.rows();
 
         state.extend_selection(crate::model::Direction::Right);
-        copy_selection(&state, &mut platform).unwrap();
+        copy_selection(&mut state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("◇x"));
-        assert_eq!(state.toolbar.main_mode(), MainMode::Line);
-        assert_eq!(state.toolbar.rows(), toolbar_rows);
+        assert_eq!(state.toolbar.custom_stamp(), Some("◇"));
+
+        assert!(state.apply_toolbar_action(ToolbarAction::SelectSubmenu {
+            submenu: 0,
+            option: 0,
+        }));
+        assert_eq!(state.toolbar.custom_stamp(), None);
+        assert_eq!(state.toolbar.stamp(), "□");
+        assert_eq!(state.toolbar.rows(), custom_stamp_rows - 2);
     }
 
     #[test]
@@ -1623,7 +1632,7 @@ mod tests {
         state.extend_selection(crate::model::Direction::Down);
         let before = state.clone();
         let mut platform = MockPlatform::default();
-        copy_selection(&state, &mut platform).unwrap();
+        copy_selection(&mut state, &mut platform).unwrap();
         assert_eq!(platform.clipboard.as_deref(), Some("ab \n   \nz  "));
         assert_eq!(state.lines_for_test(), before.lines_for_test());
         assert_eq!(state.selection, before.selection);

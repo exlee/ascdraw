@@ -941,6 +941,7 @@ fn render_toolbar(
             max_columns,
             crate::layout::minimap_width_in_cells(max_columns),
             state.cursor_coordinates(),
+            state.toolbar.custom_stamp().is_some(),
         ),
     ));
 

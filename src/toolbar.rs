@@ -7,6 +7,7 @@ use crate::export::ExportAction;
 use crate::model::{LayerId, LayerSummary};
 
 mod colors;
+mod custom_stamp;
 mod layers;
 mod menu_layout;
 mod modes;
@@ -14,6 +15,7 @@ mod panels;
 mod selections;
 mod toggles;
 use crate::model::ColorId;
+pub use custom_stamp::toolbar_bottom_border_spans;
 pub use layers::LayerOperation;
 pub use modes::{MainMode, ShapeKind, Tooltip, UtilityKind};
 pub use selections::DurableMenuSelections;
@@ -92,14 +94,6 @@ pub fn toolbar_minimap_border_spans(
     }
 
     vec![plain_span(border.into_iter().collect())]
-}
-
-pub fn toolbar_bottom_border_spans(
-    width: usize,
-    minimap_width: usize,
-    coordinates: (i128, i128),
-) -> Vec<ToolbarSpan> {
-    toolbar_minimap_border_spans(width, minimap_width, coordinates)
 }
 
 pub fn boxed_toolbar_spans(spans: &[ToolbarSpan], width: usize) -> Vec<ToolbarSpan> {
@@ -355,6 +349,7 @@ pub struct ToolbarState {
     line_selected: [usize; LINE_LABELS.len()],
     stamp_selected: [usize; STAMP_LABELS.len()],
     stamp_active_category: usize,
+    custom_stamp: Option<String>,
     shape_selected: [usize; SHAPE_LABELS.len()],
     utility_selected: usize,
     shortcut_prefix: Option<PendingShortcut>,
@@ -857,6 +852,7 @@ impl ToolbarState {
 
     pub fn content_rows_for_width(&self, box_width: usize) -> usize {
         self.standard_content_rows_for_width(box_width)
+            + usize::from(self.custom_stamp.is_some()) * 2
     }
 
     fn standard_content_rows_for_width(&self, box_width: usize) -> usize {
@@ -916,6 +912,15 @@ impl ToolbarState {
         box_width: usize,
         layers: &[LayerSummary],
     ) -> Vec<ToolbarSpan> {
+        let indicator_row = self.standard_content_rows_for_width(box_width);
+        if self.custom_stamp.is_some() && row == indicator_row {
+            return custom_stamp::cap_spans(box_width);
+        }
+        if let Some(stamp) = self.custom_stamp.as_deref()
+            && row == indicator_row + 1
+        {
+            return custom_stamp::glyph_spans(box_width, stamp);
+        }
         boxed_toolbar_spans(
             &self.toolbar_spans_with_layers_for_width(row, box_width, layers),
             box_width,
@@ -1250,7 +1255,10 @@ impl ToolbarState {
     }
 
     pub fn stamp(&self) -> &str {
-        STAMP_OPTIONS[self.stamp_active_category][self.stamp_selected[self.stamp_active_category]]
+        self.custom_stamp.as_deref().unwrap_or_else(|| {
+            STAMP_OPTIONS[self.stamp_active_category]
+                [self.stamp_selected[self.stamp_active_category]]
+        })
     }
 
     pub fn shape_kind(&self) -> ShapeKind {
@@ -1332,6 +1340,9 @@ impl ToolbarState {
                 let Some(selected) = selected else {
                     return false;
                 };
+                if self.main_mode == MainMode::Stamp {
+                    self.custom_stamp = None;
+                }
                 *selected = option;
                 true
             }
@@ -1426,7 +1437,11 @@ impl ToolbarState {
                 labels: &STAMP_LABELS,
                 options: &STAMP_OPTIONS,
                 selected: &self.stamp_selected,
-                exclusive_submenu: Some(self.stamp_active_category),
+                exclusive_submenu: Some(
+                    self.custom_stamp
+                        .as_ref()
+                        .map_or(self.stamp_active_category, |_| usize::MAX),
+                ),
                 page_lengths: &STAMP_PAGE_LENGTHS,
             }),
             MainMode::Shapes => Some(MenuLayout {

@@ -160,6 +160,19 @@ impl Editor {
             .boxed_spans_with_layers_for_width(row, box_width, &self.layer_summaries())
     }
 
+    pub fn select_custom_stamp(&mut self, text: &str) -> bool {
+        let Ok(atom) = Atom::new(text) else {
+            return false;
+        };
+        self.end_stroke();
+        self.cancel_line_preview();
+        self.cancel_move_lift();
+        self.shape_preview = None;
+        self.toolbar.select_custom_stamp(atom.contents().to_owned());
+        self.sync_cursor_mode_with_toolbar();
+        true
+    }
+
     pub fn cursor_coordinates(&self) -> (i128, i128) {
         (
             self.grid.cursor_pos.column as i128,

@@ -58,7 +58,8 @@ obvious shortcuts. Directions are arrow keys or `h`, `j`, `k`, `l`.
 | Copy / cut / paste | Cmd + `C` / Ctrl/Cmd + `X` / Ctrl/Cmd + `V` |
 | Cancel | Escape, Ctrl + `C`, or Ctrl + `G` |
 
-- **Stamp:** place symbols, arrows, fills, and blocks.
+- **Stamp:** place symbols, arrows, fills, and blocks. Copy one cell to use its glyph as a custom
+  stamp until you select a bundled stamp.
 - **Line:** draw connected Unicode lines; Space starts a routed preview.
 - **Shape:** draw outlined or filled rectangles.
 - **Utils:** push/pull rows and columns, or pan the viewport.
