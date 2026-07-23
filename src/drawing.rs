@@ -109,6 +109,18 @@ pub fn glyph_with_connection_and_corner(
     Some(glyph_for_connections(connections, style, corner_style))
 }
 
+pub fn merge_line_glyphs(
+    existing: &str,
+    incoming: &str,
+    style: LineStyle,
+    corner_style: CornerStyle,
+) -> Option<char> {
+    let existing = connections_for_glyph(existing)?;
+    let incoming = connections_for_glyph(incoming)?;
+    (existing != 0 && incoming != 0)
+        .then(|| glyph_for_connections(existing | incoming, style, corner_style))
+}
+
 pub fn glyph_for_connection_pair(
     first: Direction,
     second: Direction,

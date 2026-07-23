@@ -1,6 +1,6 @@
 use crate::app::CursorMode;
 use crate::canvas::LayerStack;
-use crate::drawing::{LineStyle, glyph_with_connection};
+use crate::drawing::{CornerStyle, LineStyle, glyph_with_connection, merge_line_glyphs};
 use crate::model::{Atom, Coord, Direction};
 use crate::toolbar::ShapeKind;
 
@@ -64,7 +64,17 @@ impl Editor {
             return;
         };
         let face = self.write_face();
+        let style = self.toolbar.shape_line_style();
+        let corner_style = shape_corner_style(self.toolbar.shape_kind());
         for (coord, contents) in self.shape_cells(preview) {
+            let contents = merged_shape_contents(
+                self.canvas
+                    .active_cell(coord)
+                    .map(|data| data.atom.contents()),
+                &contents,
+                style,
+                corner_style,
+            );
             self.remove_line_marker(coord);
             let atom = Atom::new(contents).expect("shape glyph is one cell");
             self.canvas
@@ -76,8 +86,16 @@ impl Editor {
     pub(crate) fn shape_preview_canvas(&self) -> Option<LayerStack> {
         let preview = self.shape_preview?;
         let face = self.write_face();
+        let style = self.toolbar.shape_line_style();
+        let corner_style = shape_corner_style(self.toolbar.shape_kind());
         let mut canvas = self.canvas.clone();
         for (coord, contents) in self.shape_cells(preview) {
+            let contents = merged_shape_contents(
+                canvas.active_cell(coord).map(|data| data.atom.contents()),
+                &contents,
+                style,
+                corner_style,
+            );
             let atom = Atom::new(contents).expect("shape glyph is one cell");
             canvas
                 .set_at(coord, atom, &face)
@@ -97,6 +115,24 @@ impl Editor {
             ShapeKind::Rect => rectangle_cells(left, right, top, bottom, style, false, fill),
             ShapeKind::RoundedRect => rectangle_cells(left, right, top, bottom, style, true, fill),
         }
+    }
+}
+
+fn merged_shape_contents(
+    existing: Option<&str>,
+    incoming: &str,
+    style: LineStyle,
+    corner_style: CornerStyle,
+) -> String {
+    existing
+        .and_then(|existing| merge_line_glyphs(existing, incoming, style, corner_style))
+        .map_or_else(|| incoming.to_owned(), |glyph| glyph.to_string())
+}
+
+fn shape_corner_style(kind: ShapeKind) -> CornerStyle {
+    match kind {
+        ShapeKind::Rect => CornerStyle::Sharp,
+        ShapeKind::RoundedRect => CornerStyle::Smooth,
     }
 }
 

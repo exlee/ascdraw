@@ -220,6 +220,40 @@ fn shape_preview_follows_movement_and_commits_only_on_confirmation() {
 }
 
 #[test]
+fn overlapping_shape_borders_merge_their_connections() {
+    let mut state = state();
+    state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
+
+    state.toggle_shape_preview();
+    for _ in 0..4 {
+        state.move_cursor(Direction::Right);
+    }
+    for _ in 0..2 {
+        state.move_cursor(Direction::Down);
+    }
+    state.confirm_shape();
+
+    state.move_to(Coord { line: 1, column: 2 });
+    state.toggle_shape_preview();
+    for _ in 0..4 {
+        state.move_cursor(Direction::Right);
+    }
+    for _ in 0..2 {
+        state.move_cursor(Direction::Down);
+    }
+
+    let preview_canvas = state.shape_preview_canvas().expect("preview is active");
+    let preview =
+        crate::test_support::dense_layer(&preview_canvas.layers()[preview_canvas.active_index()]);
+    assert_eq!(contents(&preview[1]), "│ ┌─┼─┐");
+    assert_eq!(contents(&preview[2]), "└─┼─┘ │");
+
+    state.confirm_shape();
+    assert_eq!(state.cell_contents(Coord { line: 1, column: 4 }), Some("┼"));
+    assert_eq!(state.cell_contents(Coord { line: 2, column: 2 }), Some("┼"));
+}
+
+#[test]
 fn shape_space_draws_one_cell_outside_a_selected_region() {
     let mut state = state();
     state.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Shapes));
