@@ -119,6 +119,7 @@ pub struct EditorWindow {
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_toolbar_hotspot: Option<usize>,
     mouse_drag: Option<MouseDrag>,
+    pan_drag: Option<PanDrag>,
     last_line_click: Option<(Instant, Coord)>,
     scroll_pan: ScrollPan,
     wheel_zoom_remainder: f64,
@@ -300,6 +301,13 @@ enum MouseDragOverride {
     Control,
     Line,
     Space,
+}
+
+/// Right-button grab pan. `anchor` is the last pointer position the viewport was
+/// synced to, and is dropped while the pointer is outside the window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PanDrag {
+    anchor: Option<(f64, f64)>,
 }
 
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
@@ -1262,6 +1270,56 @@ impl EditorWindow {
         self.scroll_pan = ScrollPan::default();
     }
 
+    pub fn begin_pan_drag(&mut self) {
+        self.cancel_scroll_pan();
+        self.pan_drag = Some(PanDrag {
+            anchor: self.mouse_position,
+        });
+    }
+
+    pub fn continue_pan_drag(&mut self) -> bool {
+        let Some(drag) = self.pan_drag else {
+            return false;
+        };
+        let Some(pointer) = self.mouse_position else {
+            return false;
+        };
+        // Without an anchor (pointer just re-entered the window) resume from here
+        // instead of jerking the canvas by the distance travelled outside.
+        let Some(anchor) = drag.anchor else {
+            self.pan_drag = Some(PanDrag {
+                anchor: Some(pointer),
+            });
+            return false;
+        };
+        let delta = pan_drag_delta(anchor, pointer);
+        if delta == (0, 0) {
+            return false;
+        }
+        self.pan_drag = Some(PanDrag {
+            anchor: Some((anchor.0 + delta.0 as f64, anchor.1 + delta.1 as f64)),
+        });
+        let changed = pan_viewport_by_pixels(&mut self.viewport, delta);
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
+    pub fn pan_drag_active(&self) -> bool {
+        self.pan_drag.is_some()
+    }
+
+    pub fn release_pan_drag_anchor(&mut self) {
+        if self.pan_drag.is_some() {
+            self.pan_drag = Some(PanDrag { anchor: None });
+        }
+    }
+
+    pub fn finish_pan_drag(&mut self) {
+        self.pan_drag = None;
+    }
+
     pub fn zoom_from_pinch(&mut self, delta: f64, phase: TouchPhase) -> bool {
         self.cancel_scroll_pan();
         self.wheel_zoom_remainder = 0.0;
@@ -1692,6 +1750,15 @@ fn consume_scroll_axis(pending: &mut f64, requested: i64, applied: i64) {
     }
 }
 
+/// Whole-pixel viewport shift that keeps the grabbed canvas point under the pointer.
+/// The fractional remainder stays in the drag anchor so slow drags still accumulate.
+fn pan_drag_delta(last: (f64, f64), current: (f64, f64)) -> (i64, i64) {
+    (
+        (current.0 - last.0).trunc() as i64,
+        (current.1 - last.1).trunc() as i64,
+    )
+}
+
 fn pan_viewport_by_pixels(viewport: &mut ViewportOffset, delta: (i64, i64)) -> bool {
     let candidate = ViewportOffset {
         x: viewport.x.saturating_add(delta.0),
@@ -1926,6 +1993,7 @@ pub fn create_editor_window(
         mouse_toolbar_position: None,
         mouse_toolbar_hotspot: None,
         mouse_drag: None,
+        pan_drag: None,
         last_line_click: None,
         scroll_pan: ScrollPan::default(),
         wheel_zoom_remainder: 0.0,
@@ -2596,6 +2664,25 @@ mod tests {
         assert_eq!(viewport, ViewportOffset { x: 5, y: 7 });
         assert!(pan_viewport_by_pixels(&mut viewport, (-80, 0)));
         assert_eq!(viewport, ViewportOffset { x: -75, y: 7 });
+    }
+
+    #[test]
+    fn pan_drag_follows_the_pointer_and_keeps_sub_pixel_residuals() {
+        let mut viewport = ViewportOffset::default();
+        let mut anchor = (100.0, 200.0);
+
+        for pointer in [(100.6, 200.0), (101.2, 200.0), (101.8, 200.0)] {
+            let delta = pan_drag_delta(anchor, pointer);
+            anchor = (anchor.0 + delta.0 as f64, anchor.1 + delta.1 as f64);
+            pan_viewport_by_pixels(&mut viewport, delta);
+        }
+        assert_eq!(viewport, ViewportOffset { x: 1, y: 0 });
+
+        // Dragging back up-left moves the canvas with the pointer, not against it.
+        let delta = pan_drag_delta(anchor, (95.0, 188.0));
+        assert_eq!(delta, (-6, -12));
+        assert!(pan_viewport_by_pixels(&mut viewport, delta));
+        assert_eq!(viewport, ViewportOffset { x: -5, y: -12 });
     }
 
     #[test]

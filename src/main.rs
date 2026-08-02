@@ -385,6 +385,7 @@ fn try_main() -> Result<ExitCode> {
                             }
                         }
                         WindowEvent::Focused(false) => {
+                            editor.finish_pan_drag();
                             editor.finish_mouse_drag();
                             editor.state.end_stroke();
                             editor.finish_history_transaction();
@@ -676,11 +677,16 @@ fn try_main() -> Result<ExitCode> {
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             editor.mouse_position = Some((position.x, position.y));
+                            let panning = editor.pan_drag_active();
+                            editor.continue_pan_drag();
                             refresh_mouse_cell(editor, &config);
-                            editor.continue_mouse_drag();
-                            editor.continue_passive_line_preview();
+                            if !panning {
+                                editor.continue_mouse_drag();
+                                editor.continue_passive_line_preview();
+                            }
                         }
                         WindowEvent::CursorLeft { .. } => {
+                            editor.release_pan_drag_anchor();
                             editor.mouse_position = None;
                             editor.mouse_toolbar_position = None;
                             editor.mouse_cell = None;
@@ -763,6 +769,16 @@ fn try_main() -> Result<ExitCode> {
                             button: MouseButton::Left,
                             ..
                         } => editor.finish_mouse_drag(),
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Right,
+                            ..
+                        } => editor.begin_pan_drag(),
+                        WindowEvent::MouseInput {
+                            state: ElementState::Released,
+                            button: MouseButton::Right,
+                            ..
+                        } => editor.finish_pan_drag(),
                         WindowEvent::ScaleFactorChanged { .. } => {
                             if let Err(error) = editor
                                 .surface
