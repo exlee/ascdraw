@@ -431,8 +431,8 @@ const EXPORT_OPTIONS: [&[(&str, ExportAction)]; 5] = [
         ("JSON", ExportAction::SaveJson),
     ],
     &[
-        ("TXT", ExportAction::LoadTxt),
-        ("JSON", ExportAction::LoadJson),
+        ("File", ExportAction::Load),
+        ("Scrch", ExportAction::LoadScratchpad),
     ],
     &[
         ("TXT", ExportAction::ImportTxt),
@@ -713,7 +713,13 @@ impl ToolbarState {
     }
 
     fn queue_export(&mut self, action: ExportAction) {
-        self.pending_export_action = Some(action);
+        // Reopening the scratchpad is a document switch, not an export, so it
+        // rides the same path as the history menu's scratchpad entry.
+        if action == ExportAction::LoadScratchpad {
+            self.pending_document_target = Some(DocumentTarget::Scratchpad);
+        } else {
+            self.pending_export_action = Some(action);
+        }
         self.keep_export_active(action);
     }
 
@@ -1916,6 +1922,28 @@ mod tests {
             toolbar.take_document_target(),
             Some(DocumentTarget::Scratchpad)
         );
+    }
+
+    #[test]
+    fn load_menu_offers_one_file_entry_and_a_scratchpad_shortcut() {
+        assert_eq!(
+            EXPORT_OPTIONS[2],
+            &[
+                ("File", ExportAction::Load),
+                ("Scrch", ExportAction::LoadScratchpad),
+            ]
+        );
+
+        let mut toolbar = ToolbarState::default();
+        press(&mut toolbar, "0");
+        press(&mut toolbar, "4");
+        press(&mut toolbar, "2");
+        assert_eq!(
+            toolbar.take_document_target(),
+            Some(DocumentTarget::Scratchpad)
+        );
+        assert_eq!(toolbar.take_export_action(), None);
+        assert!(toolbar.export_menu_open());
     }
 
     #[test]
@@ -3313,7 +3341,7 @@ mod tests {
         for (keys, expected) in [
             (&["0", "2", "2"][..], ExportAction::ClipboardPng),
             (&["0", "3", "2"][..], ExportAction::SavePng),
-            (&["0", "4", "1"][..], ExportAction::LoadTxt),
+            (&["0", "4", "1"][..], ExportAction::Load),
             (&["0", "9"][..], ExportAction::Clear),
         ] {
             let mut toolbar = ToolbarState::default();
@@ -3342,13 +3370,16 @@ mod tests {
     fn every_export_action_stays_in_its_category_after_take_and_can_repeat() {
         for (category, options) in EXPORT_OPTIONS.iter().enumerate() {
             for (_, action) in *options {
+                // The scratchpad entry switches documents instead of exporting.
+                let queued = (*action != ExportAction::LoadScratchpad).then_some(*action);
                 let mut toolbar = ToolbarState::default();
                 assert!(toolbar.apply_action(ToolbarAction::ToggleExportMenu));
                 assert!(toolbar.apply_action(ToolbarAction::RunExport(*action)));
                 let durable = toolbar.durable_selections();
 
                 for _ in 0..2 {
-                    assert_eq!(toolbar.take_export_action(), Some(*action));
+                    toolbar.take_document_target();
+                    assert_eq!(toolbar.take_export_action(), queued);
                     assert_eq!(toolbar.take_export_action(), None);
                     assert!(toolbar.export_menu_open());
                     assert_eq!(toolbar.active_export_category, Some(category));

@@ -1521,7 +1521,7 @@ mod tests {
             self.save.take()
         }
 
-        fn choose_open_path(&mut self, _kind: export::FileKind) -> Option<std::path::PathBuf> {
+        fn choose_open_path(&mut self, _kinds: &[export::FileKind]) -> Option<std::path::PathBuf> {
             self.open.take()
         }
 
@@ -3463,14 +3463,9 @@ mod tests {
                 export::ExportAction::SavePng,
                 PendingShortcut::ExportOption(1),
             ),
-            (
-                export::ExportAction::LoadTxt,
-                PendingShortcut::ExportOption(2),
-            ),
-            (
-                export::ExportAction::LoadJson,
-                PendingShortcut::ExportOption(2),
-            ),
+            // LoadScratchpad is a document switch, not an export, so it is covered
+            // by the toolbar tests instead.
+            (export::ExportAction::Load, PendingShortcut::ExportOption(2)),
             (
                 export::ExportAction::ImportTxt,
                 PendingShortcut::ExportOption(3),
@@ -3593,12 +3588,10 @@ mod tests {
 
         let mut target = Editor::new(&config.theme, "target");
         assert!(target.apply_toolbar_action(ToolbarAction::SelectMain(MainMode::Utilities)));
-        assert!(
-            target.apply_toolbar_action(ToolbarAction::RunExport(export::ExportAction::LoadJson,))
-        );
+        assert!(target.apply_toolbar_action(ToolbarAction::RunExport(export::ExportAction::Load,)));
         assert_eq!(
             target.toolbar.take_export_action(),
-            Some(export::ExportAction::LoadJson)
+            Some(export::ExportAction::Load)
         );
         let mut target_viewport = layout::ViewportOffset::default();
         let mut load = ClipboardPlatform {
@@ -3607,7 +3600,7 @@ mod tests {
         };
         assert_eq!(
             perform_export_action(
-                export::ExportAction::LoadJson,
+                export::ExportAction::Load,
                 &mut target,
                 &mut target_viewport,
                 layout::VisibleCanvasCells {

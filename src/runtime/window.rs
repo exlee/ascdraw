@@ -2252,7 +2252,7 @@ mod tests {
             unreachable!("Clear does not open a save dialog")
         }
 
-        fn choose_open_path(&mut self, _: FileKind) -> Option<PathBuf> {
+        fn choose_open_path(&mut self, _: &[FileKind]) -> Option<PathBuf> {
             unreachable!("Clear does not open a load dialog")
         }
     }

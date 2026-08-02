@@ -30,8 +30,8 @@ pub enum ExportAction {
     SaveTxt,
     SaveJson,
     SavePng,
-    LoadTxt,
-    LoadJson,
+    Load,
+    LoadScratchpad,
     ImportTxt,
     ImportJson,
     Clear,
@@ -52,7 +52,7 @@ pub trait ExportPlatform {
     fn set_clipboard_text(&mut self, text: &str) -> Result<()>;
     fn clipboard_text(&mut self) -> Result<String>;
     fn choose_save_path(&mut self, kind: FileKind) -> Option<PathBuf>;
-    fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf>;
+    fn choose_open_path(&mut self, kinds: &[FileKind]) -> Option<PathBuf>;
     fn document_metrics(&self) -> ((f32, f32), i32) {
         ((1.0, 1.0), 0)
     }
@@ -141,10 +141,17 @@ impl ExportPlatform for NativeExportPlatform<'_> {
             .save_file()
     }
 
-    fn choose_open_path(&mut self, kind: FileKind) -> Option<PathBuf> {
-        let (name, extension) = file_kind_details(kind);
+    fn choose_open_path(&mut self, kinds: &[FileKind]) -> Option<PathBuf> {
+        let extensions: Vec<&str> = kinds
+            .iter()
+            .map(|kind| file_kind_details(*kind).1)
+            .collect();
+        let name = match kinds {
+            [kind] => file_kind_details(*kind).0,
+            _ => "Document",
+        };
         rfd::FileDialog::new()
-            .add_filter(name, &[extension])
+            .add_filter(name, &extensions)
             .pick_file()
     }
 
@@ -308,50 +315,17 @@ pub fn perform(
                 .with_context(|| format!("failed to write {}", path.display()))?;
             Ok(ExportOutcome::Unchanged)
         }
-        ExportAction::LoadTxt => {
-            let Some(path) = platform.choose_open_path(FileKind::Txt) else {
+        ExportAction::Load => {
+            let Some(path) = platform.choose_open_path(&[FileKind::Txt, FileKind::Json]) else {
                 return Ok(ExportOutcome::Cancelled);
             };
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            state.replace_canvas(canvas_from_text(&text)?);
-            Ok(ExportOutcome::DocumentLoaded {
-                path,
-                format: FileKind::Txt,
-            })
+            load_document(path, state, viewport)
         }
-        ExportAction::LoadJson => {
-            let Some(path) = platform.choose_open_path(FileKind::Json) else {
-                return Ok(ExportOutcome::Cancelled);
-            };
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            match project_from_json(&contents)? {
-                LoadedJson::Native(document) => {
-                    let zoom = restore_native_document(state, viewport, *document);
-                    return Ok(ExportOutcome::ProjectLoaded { path, zoom });
-                }
-                LoadedJson::Project(project) => {
-                    let mut staged = state.clone();
-                    staged.restore_project(
-                        project.canvas,
-                        project.cursor,
-                        project.selection,
-                        &project.menu_selections,
-                    )?;
-                    *state = staged;
-                    *viewport = project.viewport;
-                    return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
-                }
-                LoadedJson::Legacy(lines) => state.replace_canvas(canvas_from_dense_lines(lines)?),
-            }
-            Ok(ExportOutcome::DocumentLoaded {
-                path,
-                format: FileKind::Json,
-            })
-        }
+        // The scratchpad is reopened as a document session by the caller, so there
+        // is nothing to load here.
+        ExportAction::LoadScratchpad => Ok(ExportOutcome::Unchanged),
         ExportAction::ImportTxt => {
-            let Some(path) = platform.choose_open_path(FileKind::Txt) else {
+            let Some(path) = platform.choose_open_path(&[FileKind::Txt]) else {
                 return Ok(ExportOutcome::Cancelled);
             };
             let text = fs::read_to_string(&path)
@@ -365,7 +339,7 @@ pub fn perform(
             })
         }
         ExportAction::ImportJson => {
-            let Some(path) = platform.choose_open_path(FileKind::Json) else {
+            let Some(path) = platform.choose_open_path(&[FileKind::Json]) else {
                 return Ok(ExportOutcome::Cancelled);
             };
             let contents = fs::read_to_string(&path)
@@ -384,6 +358,55 @@ pub fn perform(
             Ok(ExportOutcome::CanvasCleared)
         }
     }
+}
+
+/// Loads a document by content instead of by extension: every JSON shape we know
+/// is tried first, and anything that is not JSON at all is read as plain text.
+/// A file that *is* JSON but malformed stays an error rather than silently
+/// becoming a canvas full of raw JSON.
+fn load_document(
+    path: PathBuf,
+    state: &mut Editor,
+    viewport: &mut ViewportOffset,
+) -> Result<ExportOutcome> {
+    let contents =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    if !looks_like_json_document(&contents) {
+        state.replace_canvas(canvas_from_text(&contents)?);
+        return Ok(ExportOutcome::DocumentLoaded {
+            path,
+            format: FileKind::Txt,
+        });
+    }
+    match project_from_json(&contents)? {
+        LoadedJson::Native(document) => {
+            let zoom = restore_native_document(state, viewport, *document);
+            return Ok(ExportOutcome::ProjectLoaded { path, zoom });
+        }
+        LoadedJson::Project(project) => {
+            let mut staged = state.clone();
+            staged.restore_project(
+                project.canvas,
+                project.cursor,
+                project.selection,
+                &project.menu_selections,
+            )?;
+            *state = staged;
+            *viewport = project.viewport;
+            return Ok(ExportOutcome::ProjectLoaded { path, zoom: 0 });
+        }
+        LoadedJson::Legacy(lines) => state.replace_canvas(canvas_from_dense_lines(lines)?),
+    }
+    Ok(ExportOutcome::DocumentLoaded {
+        path,
+        format: FileKind::Json,
+    })
+}
+
+/// Every document format we write is a JSON object, so a bare scalar like a
+/// drawing that happens to read as `42` stays plain text.
+fn looks_like_json_document(contents: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(contents).is_ok_and(|value| value.is_object())
 }
 
 fn text_export(state: &Editor, visible_canvas: VisibleCanvasCells) -> String {
@@ -1073,7 +1096,7 @@ mod tests {
         fn choose_save_path(&mut self, _kind: FileKind) -> Option<PathBuf> {
             self.save.take()
         }
-        fn choose_open_path(&mut self, _kind: FileKind) -> Option<PathBuf> {
+        fn choose_open_path(&mut self, _kinds: &[FileKind]) -> Option<PathBuf> {
             self.open.take()
         }
         fn document_metrics(&self) -> ((f32, f32), i32) {
@@ -1782,7 +1805,7 @@ mod tests {
         let before = state.lines_for_test();
         let mut platform = MockPlatform::default();
         assert_eq!(
-            perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::Load, &mut state, &mut platform).unwrap(),
             ExportOutcome::Cancelled
         );
         assert_eq!(state.lines_for_test(), before);
@@ -1997,7 +2020,7 @@ mod tests {
         };
 
         assert_eq!(
-            perform_action(ExportAction::LoadTxt, &mut state, &mut platform).unwrap(),
+            perform_action(ExportAction::Load, &mut state, &mut platform).unwrap(),
             ExportOutcome::DocumentLoaded {
                 path: path.clone(),
                 format: FileKind::Txt,
@@ -2009,6 +2032,82 @@ mod tests {
         assert_eq!(state.cursor_mode, CursorMode::Shapes);
         assert_eq!(state.selected_text(), "n");
         assert_eq!(state.toolbar.durable_selections(), menu_selections);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_reads_json_projects_saved_under_a_txt_extension() {
+        let path = temp_path("txt");
+        let mut source = state_with_selection();
+        source.set_lines_for_test(vec![row_atoms("saved")]);
+        save_native_json(&path, &source, ViewportOffset::default()).unwrap();
+
+        let mut state = Editor::new(&ThemeConfig::default(), "target");
+        let mut viewport = ViewportOffset::default();
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        assert_eq!(
+            perform(
+                ExportAction::Load,
+                &mut state,
+                &mut viewport,
+                VisibleCanvasCells {
+                    origin: (0, 0),
+                    columns: 80,
+                    rows: 24,
+                },
+                &mut platform,
+            )
+            .unwrap(),
+            ExportOutcome::ProjectLoaded {
+                path: path.clone(),
+                zoom: 0,
+            }
+        );
+        assert_eq!(contents(&state.lines_for_test()[0]), "saved");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_reads_plain_text_saved_under_a_json_extension() {
+        let path = temp_path("json");
+        fs::write(&path, "not json\n  at all").unwrap();
+        let mut state = state_with_selection();
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+
+        assert_eq!(
+            perform_action(ExportAction::Load, &mut state, &mut platform).unwrap(),
+            ExportOutcome::DocumentLoaded {
+                path: path.clone(),
+                format: FileKind::Txt,
+            }
+        );
+        assert_eq!(contents(&state.lines_for_test()[0]), "not json");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_keeps_bare_json_scalars_as_drawings_but_reports_broken_json_objects() {
+        assert!(!looks_like_json_document("42"));
+        assert!(!looks_like_json_document("\"just text\""));
+        assert!(!looks_like_json_document("+---+\n|   |\n+---+"));
+        assert!(looks_like_json_document("{\"version\": 1}"));
+
+        let path = temp_path("json");
+        fs::write(&path, "{\"format\": \"ascdraw\", \"version\": 999}").unwrap();
+        let mut state = state_with_selection();
+        let before = state.lines_for_test();
+        let mut platform = MockPlatform {
+            open: Some(path.clone()),
+            ..MockPlatform::default()
+        };
+        assert!(perform_action(ExportAction::Load, &mut state, &mut platform).is_err());
+        assert_eq!(state.lines_for_test(), before);
         let _ = fs::remove_file(path);
     }
 
@@ -2046,7 +2145,7 @@ mod tests {
         };
         assert_eq!(
             perform(
-                ExportAction::LoadJson,
+                ExportAction::Load,
                 &mut target,
                 &mut target_viewport,
                 VisibleCanvasCells {
@@ -2147,7 +2246,7 @@ mod tests {
             ..MockPlatform::default()
         };
         let error = perform(
-            ExportAction::LoadJson,
+            ExportAction::Load,
             &mut target,
             &mut viewport,
             VisibleCanvasCells {
@@ -2183,7 +2282,7 @@ mod tests {
             ..MockPlatform::default()
         };
         let error = perform(
-            ExportAction::LoadJson,
+            ExportAction::Load,
             &mut target,
             &mut viewport,
             VisibleCanvasCells {

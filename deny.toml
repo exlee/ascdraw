@@ -1,0 +1,38 @@
+# Crate ban list for this project.
+#
+# Bans only: licenses and advisories are not configured here, so run
+#   cargo deny check bans
+# rather than `cargo deny check all`.
+#
+# Mirrors the machine-wide list in ~/.config/cargo-deny/deny.toml, which can be
+# applied to any project with `cargo deny-global check bans`.
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+highlight = "all"
+
+# ---------------------------------------------------------------------------
+# crates.io supply-chain incident, 2026-08-20
+#
+# Publish/removal window (UTC):
+#   append-only-vec 0.1.9   07:37:49 -> 09:25:24   (107 min online)
+#   arrayref        0.3.10  07:15:00 -> 08:41:40   ( 86 min online)
+#   internment      0.8.7   07:34:07 -> 09:04:11   ( 90 min online)
+#
+# Exact-pinned so a future fixed release on the same minor line still resolves.
+# ---------------------------------------------------------------------------
+deny = [
+    # --- compromised versions of otherwise legitimate crates ---
+    { crate = "append-only-vec:=0.1.9", reason = "malicious release, crates.io incident 2026-08-20; use 0.1.8 or a later clean release" },
+    { crate = "arrayref:=0.3.10", reason = "malicious release, crates.io incident 2026-08-20; use 0.3.9 or a later clean release" },
+    { crate = "internment:=0.8.7", reason = "malicious release, crates.io incident 2026-08-20; use 0.8.6 or a later clean release" },
+
+    # --- impostor / typosquat crates: no legitimate version exists ---
+    { crate = "proc-macro1", reason = "typosquat of proc-macro2, crates.io incident 2026-08-20" },
+    { crate = "proc-macro-en", reason = "impostor crate, crates.io incident 2026-08-20" },
+    { crate = "aovine", reason = "impostor crate, crates.io incident 2026-08-20" },
+    { crate = "arone", reason = "impostor crate, crates.io incident 2026-08-20" },
+    { crate = "aronenao", reason = "impostor crate, crates.io incident 2026-08-20" },
+    { crate = "tinymember", reason = "impostor crate, crates.io incident 2026-08-20" },
+]
