@@ -1286,8 +1286,8 @@ pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bo
             true
         }
         EditCommand::ClearAndBack => {
-            state.clear_selection();
             state.move_cursor(model::Direction::Left);
+            state.clear_selection();
             true
         }
         EditCommand::ToggleTextEntry => {
@@ -2032,6 +2032,35 @@ mod tests {
             Coord {
                 line: 0,
                 column: -1,
+            }
+        );
+    }
+
+    #[test]
+    fn replace_backspace_clears_the_cell_it_lands_on() {
+        let config = AppConfig::default();
+        let mut state = Editor::new(&config.theme, "test");
+        state.cursor_mode = CursorMode::Replace;
+        state.insert("abc");
+        let cursor = state.grid.cursor_pos;
+
+        assert_eq!(
+            handle_editor_key(
+                &mut state,
+                &Key::Named(NamedKey::Backspace),
+                None,
+                false,
+                ModifiersState::empty(),
+            ),
+            Some(true)
+        );
+
+        assert_eq!(line_contents(&state.lines_for_test()[0]), "ab");
+        assert_eq!(
+            state.grid.cursor_pos,
+            Coord {
+                line: cursor.line,
+                column: cursor.column - 1,
             }
         );
     }
