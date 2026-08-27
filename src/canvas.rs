@@ -12,7 +12,10 @@ use crate::selection::SelectionBounds;
 
 mod history;
 pub use history::HistoryCanvasDelta;
-use history::{record_cell_before, record_layer_before, record_row_before};
+use history::{
+    record_cell_before, record_layer_before, record_layer_destinations, record_row_before,
+    record_row_destinations,
+};
 
 #[derive(Debug, Clone)]
 pub struct Rasterized {
@@ -249,6 +252,7 @@ impl LayerMap {
                 .context("insert exceeds signed canvas range")?;
             self.set_at(target, y, atom, &face)?;
         }
+        record_row_destinations(self, y);
         Ok(())
     }
 
@@ -275,6 +279,7 @@ impl LayerMap {
                 self.rows.insert(y, shifted);
             }
         }
+        record_row_destinations(self, y);
         Ok(())
     }
 
@@ -313,6 +318,7 @@ impl LayerMap {
         if !remainder.is_empty() {
             self.rows.insert(next_y, remainder);
         }
+        record_layer_destinations(self);
         Ok(())
     }
 
@@ -334,6 +340,7 @@ impl LayerMap {
                 })
                 .collect();
         }
+        record_layer_destinations(self);
         Ok(())
     }
 
@@ -353,6 +360,7 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
+        record_layer_destinations(self);
         Ok(())
     }
 
@@ -378,6 +386,7 @@ impl LayerMap {
                     self.rows.insert(y, shifted);
                 }
             }
+            record_row_destinations(self, y);
         }
         Ok(())
     }
@@ -410,6 +419,7 @@ impl LayerMap {
                     self.rows.insert(y, shifted);
                 }
             }
+            record_row_destinations(self, y);
         }
         Ok(())
     }
@@ -431,6 +441,7 @@ impl LayerMap {
                 )
             })
             .collect();
+        record_layer_destinations(self);
         Ok(())
     }
 
@@ -451,6 +462,7 @@ impl LayerMap {
                 (target, row)
             })
             .collect();
+        record_layer_destinations(self);
         Ok(())
     }
 
@@ -478,6 +490,7 @@ impl LayerMap {
             .into_iter()
             .map(|(row_y, row)| (if row_y > next_y { row_y - 1 } else { row_y }, row))
             .collect();
+        record_layer_destinations(self);
         Ok(true)
     }
 

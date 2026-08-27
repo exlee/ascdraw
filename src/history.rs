@@ -260,6 +260,49 @@ mod tests {
     }
 
     #[test]
+    fn undoing_an_insert_that_shifted_a_row_leaves_no_trailing_copies() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        editor.insert("upsell");
+        editor.move_to(Coord { line: 0, column: 0 });
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), |editor| {
+                editor.insert("x");
+            });
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before, after, delta));
+
+        restore(&mut editor, history.undo().unwrap());
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "upsell"
+        );
+    }
+
+    #[test]
+    fn undoing_a_newline_removes_the_row_it_split_off() {
+        let mut editor = Editor::new(&AppConfig::default().theme, "test");
+        editor.insert("upsell");
+        editor.move_to(Coord { line: 0, column: 2 });
+        let (before, after, delta) =
+            captured_edit(&mut editor, ViewportOffset::default(), Editor::newline);
+        let mut history = EditHistory::default();
+        assert!(history.record_change(before, after, delta));
+
+        restore(&mut editor, history.undo().unwrap());
+        assert_eq!(editor.lines_for_test().len(), 1);
+        assert_eq!(
+            editor.lines_for_test()[0]
+                .iter()
+                .map(|atom| atom.contents.as_str())
+                .collect::<String>(),
+            "upsell"
+        );
+    }
+
+    #[test]
     fn history_limit_discards_oldest_sparse_change() {
         let mut editor = Editor::new(&AppConfig::default().theme, "test");
         let mut history = EditHistory::default();

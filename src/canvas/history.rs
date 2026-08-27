@@ -74,6 +74,28 @@ pub(super) fn record_row_before(layer: &LayerMap, line: i16) {
     }
 }
 
+/// Marks the cells a shifted row now occupies, so cells moved onto previously
+/// empty coordinates are cleared again on undo. Coordinates already captured
+/// keep their recorded value; the rest were empty before the shift.
+pub(super) fn record_row_destinations(layer: &LayerMap, line: i16) {
+    let Some(row) = layer.rows.get(&line) else {
+        return;
+    };
+    for &column in row.keys() {
+        record_cell_before(layer.id, line, column, None);
+    }
+}
+
+/// Layer-wide counterpart of [`record_row_destinations`], for edits that move
+/// cells between rows.
+pub(super) fn record_layer_destinations(layer: &LayerMap) {
+    for (&line, row) in &layer.rows {
+        for &column in row.keys() {
+            record_cell_before(layer.id, line, column, None);
+        }
+    }
+}
+
 impl HistoryCanvasDelta {
     pub fn is_empty(&self) -> bool {
         self.before == self.after && self.cells.is_empty()
