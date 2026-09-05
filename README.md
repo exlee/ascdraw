@@ -37,6 +37,9 @@ Install from a checkout instead:
 cargo install --path . --locked
 ```
 
+The Linux nightly is built on Ubuntu 22.04, so it needs glibc 2.35 or newer. On an older
+distribution, build from source.
+
 ## Use it
 
 ascdraw opens in **Stamp** mode. Numbered menus show their own keys; this table covers the less

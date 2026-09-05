@@ -21,8 +21,12 @@ jobs:
         include:
           - os: macos-latest
             artifact_name: ascdraw-macos
-          - os: ubuntu-latest
+          # Pinned to the oldest supported runner: glibc is backwards
+          # compatible only, so the binary must link against the lowest
+          # version we intend to run on.
+          - os: ubuntu-22.04
             artifact_name: ascdraw-linux
+            max_glibc: "2.35"
 
     steps:
       - name: Check out source
@@ -50,6 +54,12 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+      - name: Check glibc requirement
+        if: runner.os == 'Linux'
+        env:
+          MAX_GLIBC: ${{ matrix.max_glibc }}
+        run: ruby scripts/check_glibc_version.rb target/release/ascdraw "$MAX_GLIBC"
 
       - name: Stage binary
         run: |
