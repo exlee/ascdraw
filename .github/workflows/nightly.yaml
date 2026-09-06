@@ -49,8 +49,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Keyed on the runner image: the default key covers OS and architecture
+      # only, so both matrix legs would share one cache and a target/ built on
+      # a newer image would carry proc-macro shared objects this one cannot load.
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
       - name: Build release binary
         run: cargo build --release --locked
