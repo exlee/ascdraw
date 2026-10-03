@@ -61,6 +61,7 @@ task :icon => [ICON_OUTPUT]
 desc "Run the tests for the helper scripts"
 task :script_tests do
   sh "ruby scripts/check_glibc_version_test.rb"
+  sh "ruby scripts/nightly_changes_test.rb"
 end
 
 file ICON_OUTPUT => [ICON_SOURCE] do

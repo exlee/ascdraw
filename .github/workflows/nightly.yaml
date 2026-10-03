@@ -12,8 +12,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check-changes:
+    name: Check for changes since last nightly
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Compare with latest nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ruby scripts/nightly_changes.rb "${{ github.event_name }}" "${{ github.sha }}"
+
   build-binary:
     name: Build ${{ matrix.artifact_name }}
+    needs: check-changes
+    if: needs.check-changes.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -80,6 +98,8 @@ jobs:
 
   build-macos-dmg:
     name: Build macOS DMG
+    needs: check-changes
+    if: needs.check-changes.outputs.build == 'true'
     runs-on: macos-latest
 
     steps:
@@ -159,6 +179,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release-meta.outputs.tag }}
+          # Tag the built commit, not whatever the branch moved to meanwhile;
+          # the next run compares against this tag.
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.release-meta.outputs.name }}
           prerelease: true
           generate_release_notes: true
