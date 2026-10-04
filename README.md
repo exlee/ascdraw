@@ -20,7 +20,10 @@ might think in a keyboard-first editor.
 - **2026-10-04** — Added morphable Objects: reusable rectangles that stretch, anchor, and keep
   local edits per copy.
 
-[![Morphable Objects demo](https://img.youtube.com/vi/N6sbp77WV3w/hqdefault.jpg)](https://youtu.be/N6sbp77WV3w)
+
+
+https://github.com/user-attachments/assets/3801a981-62af-4cea-b5ed-957570d7f71e
+
 
 ![Stamp inventory and large outlined text](assets/screen-1.png)
 
