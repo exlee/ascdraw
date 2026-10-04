@@ -7,6 +7,7 @@ pub enum MainMode {
     Line,
     Shapes,
     Utilities,
+    Objects,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,7 +26,13 @@ pub enum UtilityKind {
 }
 
 impl MainMode {
-    pub const ALL: [Self; 4] = [Self::Stamp, Self::Line, Self::Shapes, Self::Utilities];
+    pub const ALL: [Self; 5] = [
+        Self::Stamp,
+        Self::Line,
+        Self::Shapes,
+        Self::Utilities,
+        Self::Objects,
+    ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -33,6 +40,7 @@ impl MainMode {
             Self::Stamp => "Stamp",
             Self::Shapes => "Shape",
             Self::Utilities => "Utils",
+            Self::Objects => "Objects",
         }
     }
 
@@ -42,6 +50,7 @@ impl MainMode {
             Self::Stamp => Tooltip::Stamp,
             Self::Shapes => Tooltip::Shapes,
             Self::Utilities => Tooltip::UtilitiesPush,
+            Self::Objects => Tooltip::Objects,
         }
     }
 }
@@ -56,6 +65,9 @@ pub enum Tooltip {
     UtilitiesPush,
     UtilitiesPull,
     UtilitiesView,
+    Objects,
+    ObjectDefine,
+    ObjectEdit,
     SelectionMoveLift,
     LinePreview,
     ShapePreview,
@@ -93,6 +105,9 @@ impl Tooltip {
             Self::UtilitiesPush => "Push: Ctrl-direction inserts a blank row or column",
             Self::UtilitiesPull => "Pull: Ctrl-direction pulls",
             Self::UtilitiesView => "View: directions pan; Space centers",
+            Self::Objects => "Objects: Space places a copy of the last defined object",
+            Self::ObjectDefine => "DfnEdt: edits change every copy; Esc exits",
+            Self::ObjectEdit => "Edt: edits change this copy only; Esc exits",
             Self::SelectionMoveLift => {
                 "Selection move: Alt-direction repositions; direction confirms and moves; Space/Enter confirms"
             }

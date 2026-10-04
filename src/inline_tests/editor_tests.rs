@@ -123,6 +123,8 @@ fn blank_atom() -> StyledAtom {
 mod editing_and_lines;
 #[path = "editor_tests/layers_and_canvas.rs"]
 mod layers_and_canvas;
+#[path = "editor_tests/objects.rs"]
+mod objects;
 #[path = "editor_tests/tools_and_moves.rs"]
 mod tools_and_moves;
 

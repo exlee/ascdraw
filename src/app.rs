@@ -122,6 +122,7 @@ pub enum CursorMode {
     Stamp,
     Shapes,
     Utilities,
+    Objects,
     Navigation,
 }
 
@@ -142,6 +143,8 @@ pub struct ThemeConfig {
     pub cursor_drawing: Face,
     pub cursor_block: Face,
     pub tooltip: Face,
+    pub object_outline: Face,
+    pub object_anchor: Face,
 }
 
 impl Default for ThemeConfig {
@@ -403,6 +406,8 @@ mod tests {
             "cursor-drawing",
             "cursor-block",
             "tooltip",
+            "object-outline",
+            "object-anchor",
         ] {
             assert!(value.get(name).is_some(), "missing literal face {name}");
         }
@@ -416,6 +421,8 @@ mod tests {
             &theme.cursor_drawing,
             &theme.cursor_block,
             &theme.tooltip,
+            &theme.object_outline,
+            &theme.object_anchor,
         ] {
             for color in [&face.fg, &face.bg, &face.underline] {
                 assert!(

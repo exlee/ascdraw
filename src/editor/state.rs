@@ -37,6 +37,7 @@ impl Editor {
             CursorMode::Stamp => EditorState::StampMode,
             CursorMode::Shapes => EditorState::ShapeMode,
             CursorMode::Utilities => EditorState::UtilityMode,
+            CursorMode::Objects => EditorState::ObjectMode,
             CursorMode::Navigation => EditorState::NavigationMode,
         }
     }
@@ -66,11 +67,14 @@ impl Editor {
                 self.collapse_selection();
                 true
             }
+            // With nothing transient left, Escape leaves DfnEdt or Edt from
+            // any mode.
             EditorState::LineMode
             | EditorState::StampMode
             | EditorState::ShapeMode
             | EditorState::UtilityMode
-            | EditorState::NavigationMode => false,
+            | EditorState::NavigationMode
+            | EditorState::ObjectMode => self.exit_object_session(),
         }
     }
 }

@@ -6,12 +6,20 @@ fn default_color() -> String {
     "default".to_string()
 }
 
+fn is_default_color(color: &str) -> bool {
+    color == "default"
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 pub struct Face {
+    #[serde(skip_serializing_if = "is_default_color")]
     pub fg: String,
+    #[serde(skip_serializing_if = "is_default_color")]
     pub bg: String,
+    #[serde(skip_serializing_if = "is_default_color")]
     pub underline: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attributes: Vec<String>,
 }
 

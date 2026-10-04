@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::canvas::{LayerMap, LayerStack};
 use crate::layout::ViewportOffset;
 use crate::model::{Atom, Coord, Face, LayerId};
+use crate::objects::ObjectStore;
 use crate::toolbar::DurableMenuSelections;
 
 const DOCUMENT_VERSION: u32 = 4;
@@ -39,6 +40,7 @@ pub struct Document {
     pub canvas: LayerStack,
     pub menu_selections: Option<DurableMenuSelections>,
     pub position: Option<CanvasPosition>,
+    pub objects: ObjectStore,
     needs_migration: bool,
 }
 
@@ -62,6 +64,9 @@ struct SparseDocument {
     menu_selections: Option<DurableMenuSelections>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     position: Option<CanvasPosition>,
+    /// Object store whose cells name faces by `face_id`, like layer cells.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    objects: serde_json::Value,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -71,14 +76,52 @@ struct SparseLayer {
     cells: Vec<SparseCell>,
 }
 
+/// One saved cell. `p` is `[column, line]` and `v` the atom; version 4
+/// documents saved before that wrote `line`, `column` and `atom`, which are
+/// still read.
 #[derive(Deserialize, Serialize)]
+#[serde(try_from = "RawSparseCell")]
 struct SparseCell {
-    line: i16,
-    column: i16,
+    p: [i16; 2],
+    v: String,
+    #[serde(skip_serializing_if = "is_zero")]
     face_id: u32,
-    atom: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     line_data: Option<crate::canvas::LineData>,
+}
+
+#[derive(Deserialize)]
+struct RawSparseCell {
+    #[serde(default)]
+    p: Option<[i16; 2]>,
+    #[serde(default)]
+    line: Option<i16>,
+    #[serde(default)]
+    column: Option<i16>,
+    #[serde(alias = "atom")]
+    v: String,
+    #[serde(default)]
+    face_id: u32,
+    #[serde(default)]
+    line_data: Option<crate::canvas::LineData>,
+}
+
+impl TryFrom<RawSparseCell> for SparseCell {
+    type Error = String;
+
+    fn try_from(raw: RawSparseCell) -> std::result::Result<Self, String> {
+        let p = match (raw.p, raw.column, raw.line) {
+            (Some(p), _, _) => p,
+            (None, Some(column), Some(line)) => [column, line],
+            _ => return Err("cell has no position".to_owned()),
+        };
+        Ok(Self {
+            p,
+            v: raw.v,
+            face_id: raw.face_id,
+            line_data: raw.line_data,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -120,6 +163,7 @@ impl Document {
             canvas,
             menu_selections,
             position,
+            objects: ObjectStore::default(),
             needs_migration: true,
         }
     }
@@ -184,22 +228,92 @@ fn sparse_document(sparse: SparseDocument) -> Result<Document> {
     for layer in sparse.layers {
         let mut map = LayerMap::new(layer.id, layer.visible);
         for cell in layer.cells {
-            let face = sparse
-                .faces
-                .get(usize::try_from(cell.face_id).context("face ID exceeds platform range")?)
-                .with_context(|| format!("invalid face ID {}", cell.face_id))?;
-            let atom = Atom::new(cell.atom)?;
-            map.set_at_untracked(cell.column, cell.line, atom, face)?;
-            map.set_line_data(cell.column, cell.line, cell.line_data);
+            let face = face_by_id(&sparse.faces, cell.face_id)?;
+            let [column, line] = cell.p;
+            let atom = Atom::new(cell.v)?;
+            map.set_at_untracked(column, line, atom, face)?;
+            map.set_line_data(column, line, cell.line_data);
         }
         layers.push(map);
     }
+    let mut objects = sparse.objects;
+    for_each_object_cell(&mut objects, |cell| {
+        if cell.contains_key("face") {
+            return Ok(());
+        }
+        let face_id = match cell.remove("face_id") {
+            Some(value) => serde_json::from_value(value).context("invalid object face ID")?,
+            None if sparse.faces.is_empty() => return Ok(()),
+            None => 0,
+        };
+        let face = face_by_id(&sparse.faces, face_id)?;
+        cell.insert("face".to_owned(), serde_json::to_value(face)?);
+        Ok(())
+    })?;
+    let objects = if objects.is_null() {
+        ObjectStore::default()
+    } else {
+        serde_json::from_value(objects).context("failed to parse objects")?
+    };
     Ok(Document {
         canvas: LayerStack::with_active(layers, sparse.active_layer, true)?,
         menu_selections: sparse.menu_selections,
         position: sparse.position,
+        objects,
         needs_migration: false,
     })
+}
+
+fn face_by_id(faces: &[Face], face_id: u32) -> Result<&Face> {
+    faces
+        .get(usize::try_from(face_id).context("face ID exceeds platform range")?)
+        .with_context(|| format!("invalid face ID {face_id}"))
+}
+
+/// Calls `visit` with every saved object cell: definition cells and instance
+/// overlays.
+fn for_each_object_cell(
+    objects: &mut serde_json::Value,
+    mut visit: impl FnMut(&mut serde_json::Map<String, serde_json::Value>) -> Result<()>,
+) -> Result<()> {
+    for (list, key) in [("definitions", "cells"), ("instances", "overlay")] {
+        let Some(entries) = objects
+            .get_mut(list)
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for entry in entries {
+            let Some(cells) = entry.get_mut(key).and_then(serde_json::Value::as_array_mut) else {
+                continue;
+            };
+            for cell in cells {
+                if let Some(cell) = cell.as_object_mut() {
+                    visit(cell)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Faces in first-use order, so each one is saved once.
+#[derive(Default)]
+struct FaceTable {
+    faces: Vec<Face>,
+    ids: HashMap<Face, u32>,
+}
+
+impl FaceTable {
+    fn id(&mut self, face: &Face) -> Result<u32> {
+        if let Some(&face_id) = self.ids.get(face) {
+            return Ok(face_id);
+        }
+        let face_id = u32::try_from(self.faces.len()).context("too many document faces")?;
+        self.faces.push(face.clone());
+        self.ids.insert(face.clone(), face_id);
+        Ok(face_id)
+    }
 }
 
 fn legacy_sparse_document(sparse: LegacySparseDocument) -> Result<Document> {
@@ -223,6 +337,7 @@ fn legacy_sparse_document(sparse: LegacySparseDocument) -> Result<Document> {
         canvas: LayerStack::with_active(layers, sparse.active_layer, true)?,
         menu_selections: sparse.menu_selections,
         position: sparse.position,
+        objects: ObjectStore::default(),
         needs_migration: true,
     })
 }
@@ -230,6 +345,7 @@ fn legacy_sparse_document(sparse: LegacySparseDocument) -> Result<Document> {
 pub fn save(
     path: &Path,
     canvas: &LayerStack,
+    objects: &ObjectStore,
     menu_selections: &DurableMenuSelections,
     position: CanvasPosition,
     cell_size: (f32, f32),
@@ -238,12 +354,13 @@ pub fn save(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let contents = contents(canvas, menu_selections, position, cell_size)?;
+    let contents = contents(canvas, objects, menu_selections, position, cell_size)?;
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn contents(
     canvas: &LayerStack,
+    objects: &ObjectStore,
     menu_selections: &DurableMenuSelections,
     mut position: CanvasPosition,
     cell_size: (f32, f32),
@@ -252,31 +369,34 @@ pub fn contents(
         .bounds()
         .map_or((0, 0), |bounds| (bounds.min_x, bounds.min_y));
     position.cursor = shifted_coord(position.cursor, origin_x, origin_y);
+    let mut objects = objects.clone();
+    objects.session = None;
+    for instance in &mut objects.instances {
+        instance.origin = shifted_coord(instance.origin, origin_x, origin_y);
+        let mut painted = crate::objects::Cells::default();
+        for (coord, cell) in instance.painted.iter() {
+            painted.insert(shifted_coord(coord, origin_x, origin_y), cell.clone());
+        }
+        instance.painted = painted;
+    }
     position
         .viewport
         .translate_canvas(-i64::from(origin_x), -i64::from(origin_y), cell_size);
 
-    let mut faces = Vec::new();
-    let mut face_ids = HashMap::new();
+    let mut faces = FaceTable::default();
     let mut layers = Vec::with_capacity(canvas.layers().len());
     for layer in canvas.layers() {
         let mut cells = Vec::new();
         for (&line, row) in layer.rows() {
             for (&column, data) in row {
-                let face = data.face.as_ref();
-                let face_id = if let Some(&face_id) = face_ids.get(face) {
-                    face_id
-                } else {
-                    let face_id = u32::try_from(faces.len()).context("too many document faces")?;
-                    faces.push(face.clone());
-                    face_ids.insert(face.clone(), face_id);
-                    face_id
-                };
+                let face_id = faces.id(data.face.as_ref())?;
                 cells.push(SparseCell {
-                    line: normalized_key(line, origin_y)?,
-                    column: normalized_key(column, origin_x)?,
+                    p: [
+                        normalized_key(column, origin_x)?,
+                        normalized_key(line, origin_y)?,
+                    ],
+                    v: data.atom.contents().to_owned(),
                     face_id,
-                    atom: data.atom.contents().to_owned(),
                     line_data: data.line.clone(),
                 });
             }
@@ -287,15 +407,85 @@ pub fn contents(
             cells,
         });
     }
-    serde_json::to_string_pretty(&SparseDocument {
+    let objects = if objects.is_empty() {
+        serde_json::Value::Null
+    } else {
+        let mut value = serde_json::to_value(&objects).context("failed to serialize objects")?;
+        for_each_object_cell(&mut value, |cell| {
+            let face = match cell.remove("face") {
+                Some(face) => serde_json::from_value(face).context("invalid object face")?,
+                None => Face::default(),
+            };
+            let face_id = faces.id(&face)?;
+            if face_id != 0 {
+                cell.insert("face_id".to_owned(), face_id.into());
+            }
+            Ok(())
+        })?;
+        value
+    };
+    let document = serde_json::to_value(SparseDocument {
         version: DOCUMENT_VERSION,
-        faces,
+        faces: faces.faces,
         layers,
         active_layer: canvas.active_id(),
         menu_selections: Some(menu_selections.clone()),
         position: Some(position),
+        objects,
     })
-    .context("failed to serialize sparse document")
+    .context("failed to serialize sparse document")?;
+    let mut out = String::new();
+    write_json(&mut out, &document, 0);
+    Ok(out)
+}
+
+/// Widest container, indentation included, written on one line.
+const INLINE_JSON_WIDTH: usize = 100;
+
+/// Pretty JSON that keeps short containers, such as cells, on one line.
+fn write_json(out: &mut String, value: &serde_json::Value, indent: usize) {
+    let compact = value.to_string();
+    if indent + compact.len() <= INLINE_JSON_WIDTH {
+        out.push_str(&compact);
+        return;
+    }
+    let newline = |out: &mut String, indent: usize| {
+        out.push('\n');
+        out.extend(std::iter::repeat_n(' ', indent));
+    };
+    match value {
+        serde_json::Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                newline(out, indent + 2);
+                write_json(out, item, indent + 2);
+            }
+            newline(out, indent);
+            out.push(']');
+        }
+        serde_json::Value::Object(map) => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                newline(out, indent + 2);
+                out.push_str(&serde_json::Value::from(key.as_str()).to_string());
+                out.push_str(": ");
+                write_json(out, item, indent + 2);
+            }
+            newline(out, indent);
+            out.push('}');
+        }
+        _ => out.push_str(&compact),
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 fn normalized_key(value: i16, origin: i16) -> Result<i16> {

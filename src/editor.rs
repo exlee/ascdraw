@@ -21,6 +21,8 @@ mod lifecycle;
 mod line_preview;
 mod line_tool;
 mod move_tool;
+mod object_layer;
+mod object_tool;
 mod routing;
 mod shape_tool;
 mod state;
@@ -30,6 +32,7 @@ pub(super) use grid::adjacent_coord;
 use line_preview::LinePreview;
 use line_tool::ActiveStroke;
 use move_tool::MoveLift;
+pub use object_tool::{AnchorSegment, HandleSide};
 
 #[derive(Debug, Clone)]
 pub struct GridState {
@@ -56,6 +59,18 @@ pub struct Editor {
     toolbar_document_changed: bool,
     toolbar_viewport_stable: bool,
     transient_tip: Option<(String, std::time::Instant)>,
+    objects: crate::objects::ObjectStore,
+    /// Cells written by object materialization since the last sync, so the
+    /// sync does not mistake them for user edits.
+    object_writes: std::collections::BTreeSet<(LayerId, i16, i16)>,
+    /// The copy Cmd-C took and the text it put on the system clipboard.
+    object_clipboard: Option<(crate::objects::Instance, String)>,
+    /// The last stretch: copy, direction, whether it expanded, and the cursor
+    /// after it. A repeat from that cursor keeps the same choice.
+    stretch_latch: Option<(crate::objects::InstanceId, Direction, bool, Coord)>,
+    /// An Alt gesture in progress: whether it erases (else moves a copy)
+    /// and the cursor after its last step.
+    alt_gesture: Option<(bool, Coord)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -81,6 +96,16 @@ pub struct HistoryEditorState {
     cursor_pos: Coord,
     selection: CanvasSelection,
     active_stroke: Option<ActiveStroke>,
+    objects: crate::objects::ObjectStore,
+}
+
+impl HistoryEditorState {
+    /// Whether object definitions or instances differ; the open session
+    /// alone is not a document change.
+    pub fn objects_differ(&self, other: &Self) -> bool {
+        self.objects.definitions != other.objects.definitions
+            || self.objects.instances != other.objects.instances
+    }
 }
 
 impl PartialEq for EditSnapshot {
@@ -151,7 +176,12 @@ impl Editor {
         match self.cursor_mode {
             CursorMode::Text => Tooltip::Text,
             CursorMode::Replace => Tooltip::Replace,
-            _ => self.toolbar.tooltip(),
+            CursorMode::Objects => self.toolbar.tooltip(),
+            _ => match self.object_session() {
+                Some(crate::objects::Session::Define(_)) => Tooltip::ObjectDefine,
+                Some(crate::objects::Session::Edit(_)) => Tooltip::ObjectEdit,
+                None => self.toolbar.tooltip(),
+            },
         }
     }
 
@@ -216,6 +246,9 @@ impl Editor {
             return false;
         }
         self.apply_pending_layer_action();
+        if self.apply_pending_object_command() {
+            self.toolbar_document_changed = true;
+        }
         if matches!(key, Key::Named(NamedKey::Escape)) && !export_was_open {
             self.collapse_selection();
         }
@@ -262,6 +295,10 @@ impl Editor {
         }
         self.canvas.set_enabled(self.toolbar.multi_layer_mode());
         self.apply_pending_layer_action();
+        if matches!(action, ToolbarAction::Object(_)) {
+            self.toolbar_document_changed = self.apply_pending_object_command();
+            return true;
+        }
         if self.toolbar.dark_mode() != dark_was_enabled {
             reverse_theme_colors(&mut self.theme);
             self.sync_theme_faces();
@@ -405,6 +442,7 @@ impl Editor {
             MainMode::Stamp => CursorMode::Stamp,
             MainMode::Shapes => CursorMode::Shapes,
             MainMode::Utilities => CursorMode::Utilities,
+            MainMode::Objects => CursorMode::Objects,
         };
     }
 
@@ -690,6 +728,7 @@ impl Editor {
         replacement.set_enabled(self.toolbar.multi_layer_mode());
         self.canvas.record_history_replacement(&replacement);
         self.canvas = replacement;
+        self.restore_objects(crate::objects::ObjectStore::default());
         self.toolbar.sync_layer_count(self.canvas.layers().len());
         self.grid.cursor_pos = Coord::default();
         self.active_stroke = None;
@@ -728,6 +767,7 @@ impl Editor {
         self.commit_canvas();
         let cursor = self.grid.cursor_pos;
         self.canvas.clear_contents();
+        self.restore_objects(crate::objects::ObjectStore::default());
 
         self.grid.cursor_pos = cursor;
         self.active_stroke = None;

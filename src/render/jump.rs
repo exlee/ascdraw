@@ -27,7 +27,11 @@ pub(super) fn render_jump_overlay(
     .fg;
     let cursor_color = if matches!(
         state.cursor_mode,
-        CursorMode::MoveDraw | CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities
+        CursorMode::MoveDraw
+            | CursorMode::Stamp
+            | CursorMode::Shapes
+            | CursorMode::Utilities
+            | CursorMode::Objects
     ) {
         resolve_derived_face(
             &state.grid.default_face,

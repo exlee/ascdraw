@@ -31,6 +31,8 @@ pub enum EditCommand {
     InsertTab,
     ConfirmOrTextEntry,
     ConfirmOrReplace,
+    PlaceObject,
+    StretchObject(Direction),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +300,7 @@ fn tool_direction_command(direction: Direction, mode: CursorMode) -> EditCommand
         CursorMode::Stamp => EditCommand::DrawStamp(direction),
         CursorMode::Utilities => EditCommand::ApplyUtility(direction),
         CursorMode::Shapes => EditCommand::Move(direction),
+        CursorMode::Objects => EditCommand::StretchObject(direction),
         _ => EditCommand::Move(direction),
     }
 }
@@ -424,6 +427,10 @@ fn edit_command_for_key(
 
     if mode == CursorMode::Utilities {
         return None;
+    }
+
+    if mode == CursorMode::Objects {
+        return is_space_key(key).then_some(EditCommand::PlaceObject);
     }
 
     match key {

@@ -208,6 +208,9 @@ impl ExportPlatform for NativeExportPlatform<'_> {
 }
 
 pub fn copy_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<()> {
+    if let Some(text) = state.copy_object() {
+        return platform.set_clipboard_text(&text);
+    }
     let text = selected_visible_text(state);
     platform.set_clipboard_text(&text)?;
     state.select_custom_stamp(&text);
@@ -223,6 +226,9 @@ pub fn cut_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> 
 
 pub fn paste_selection(state: &mut Editor, platform: &mut impl ExportPlatform) -> Result<bool> {
     let text = platform.clipboard_text()?;
+    if state.paste_object(&text) {
+        return Ok(true);
+    }
     Ok(state.paste_text(&text))
 }
 
@@ -282,6 +288,7 @@ pub fn perform(
             document::save(
                 &path,
                 state.canvas(),
+                state.objects(),
                 &state.toolbar.durable_selections(),
                 CanvasPosition {
                     cursor: state.grid.cursor_pos,
@@ -728,6 +735,7 @@ fn restore_native_document(
         state.restore_menu_selections(&selections);
     }
     state.restore_canvas(document.canvas);
+    state.restore_objects(document.objects);
     let position = document.position.unwrap_or(CanvasPosition {
         cursor: crate::model::Coord::default(),
         viewport: ViewportOffset::default(),
@@ -1036,6 +1044,7 @@ mod tests {
         document::save(
             path,
             state.canvas(),
+            state.objects(),
             &state.toolbar.durable_selections(),
             CanvasPosition {
                 cursor: state.grid.cursor_pos,
@@ -1060,6 +1069,29 @@ mod tests {
         state.replace_canvas(canvas_from_text("\n  ab\n\n   c").unwrap());
 
         assert_eq!(plain_text(&state), "ab\n\n c");
+    }
+
+    #[test]
+    fn copy_on_an_object_keeps_the_stamp_and_paste_places_a_copy() {
+        let mut state = Editor::new(&ThemeConfig::default(), "test");
+        state.insert("ab");
+        state
+            .selection
+            .select(Coord::default(), Coord { line: 0, column: 1 });
+        state.apply_toolbar_action(ToolbarAction::Object(crate::toolbar::ObjectCommand::Define));
+        state.exit_object_session();
+        state.grid.cursor_pos = Coord::default();
+        state.selection.collapse(Coord::default());
+        let stamp = state.toolbar.stamp().to_owned();
+        let mut platform = MockPlatform::default();
+        copy_selection(&mut state, &mut platform).unwrap();
+        assert_eq!(platform.clipboard.as_deref(), Some("ab"));
+        assert_eq!(state.toolbar.stamp(), stamp);
+
+        state.grid.cursor_pos = Coord { line: 2, column: 0 };
+        state.selection.collapse(state.grid.cursor_pos);
+        assert!(paste_selection(&mut state, &mut platform).unwrap());
+        assert_eq!(state.objects().instances.len(), 2);
     }
 
     #[derive(Default)]
@@ -1457,6 +1489,7 @@ mod tests {
         let saved = fs::read_to_string(&path).unwrap();
         let expected = document::contents(
             state.canvas(),
+            state.objects(),
             &state.toolbar.durable_selections(),
             CanvasPosition {
                 cursor: state.grid.cursor_pos,

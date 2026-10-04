@@ -14,6 +14,7 @@ impl Editor {
         self.toolbar.sync_layer_count(canvas.layers().len());
         self.canvas.record_history_replacement(&canvas);
         self.canvas = canvas;
+        self.restore_objects(crate::objects::ObjectStore::default());
     }
 
     pub fn restore_canvas_position(&mut self, cursor: Coord) {

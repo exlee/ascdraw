@@ -146,6 +146,13 @@ impl Editor {
             apply_sparse_move(map, source_origin, &destinations, layer);
             changed |= *map != before;
         });
+        let layers = lift.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+        self.move_lifted_objects(
+            lift.source_bounds,
+            lift.origin,
+            &lift.clone_origins,
+            &layers,
+        );
         changed
     }
 

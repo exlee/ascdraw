@@ -474,7 +474,7 @@ mod tests {
         toolbar.apply_action(ToolbarAction::Toggle(ToggleKind::MultiLayerMode));
         assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('8'));
         press(&mut toolbar, &layers, "1");
-        press(&mut toolbar, &layers, "5");
+        press(&mut toolbar, &layers, "6");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         press(&mut toolbar, &layers, "8");

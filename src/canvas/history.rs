@@ -150,6 +150,41 @@ impl LayerStack {
         });
     }
 
+    /// Cells the active capture has seen change so far, without ending it.
+    pub fn captured_changes(&self) -> Vec<(LayerId, i16, i16)> {
+        HISTORY_CAPTURE.with(|capture| {
+            let capture = capture.borrow();
+            let Some(capture) = capture.as_ref() else {
+                return Vec::new();
+            };
+            capture
+                .cells
+                .iter()
+                .filter(|((layer, line, column), before)| {
+                    let after = self
+                        .layers
+                        .iter()
+                        .find(|candidate| candidate.id == *layer)
+                        .and_then(|layer| layer.get(*line, *column));
+                    before.as_ref() != after
+                })
+                .map(|(key, _)| *key)
+                .collect()
+        })
+    }
+
+    /// Every cell the active capture has seen written, changed or not; a
+    /// space typed on an empty cell writes without changing anything.
+    pub fn captured_writes(&self) -> Vec<(LayerId, i16, i16)> {
+        HISTORY_CAPTURE.with(|capture| {
+            capture
+                .borrow()
+                .as_ref()
+                .map(|capture| capture.cells.keys().copied().collect())
+                .unwrap_or_default()
+        })
+    }
+
     pub fn cancel_history_capture() {
         HISTORY_CAPTURE.with(|capture| {
             capture.borrow_mut().take();

@@ -11,6 +11,7 @@ mod custom_stamp;
 mod layers;
 mod menu_layout;
 mod modes;
+mod objects;
 mod panels;
 mod selections;
 mod toggles;
@@ -18,6 +19,7 @@ use crate::model::ColorId;
 pub use custom_stamp::toolbar_bottom_border_spans;
 pub use layers::LayerOperation;
 pub use modes::{MainMode, ShapeKind, Tooltip, UtilityKind};
+pub use objects::{ObjectCommand, ObjectMenuState};
 pub use selections::DurableMenuSelections;
 pub use toggles::ToggleKind;
 
@@ -335,6 +337,8 @@ pub enum PendingShortcut {
     Layer(LayerId),
     Colors,
     ColorGroup(usize),
+    ObjectAnchor,
+    ObjectEdit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,6 +369,8 @@ pub struct ToolbarState {
     recent_documents: Vec<PathBuf>,
     pending_document_target: Option<DocumentTarget>,
     document_history_enabled: bool,
+    pending_object_command: Option<ObjectCommand>,
+    object_menu: ObjectMenuState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,6 +408,7 @@ pub enum ToolbarAction {
     RunExport(ExportAction),
     SelectRecentDocument(usize),
     SelectScratchpad,
+    Object(ObjectCommand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,7 +520,12 @@ impl ToolbarState {
         if !self.export_open
             && !matches!(
                 self.shortcut_prefix,
-                Some(PendingShortcut::Category(_) | PendingShortcut::Option { .. })
+                Some(
+                    PendingShortcut::Category(_)
+                        | PendingShortcut::Option { .. }
+                        | PendingShortcut::ObjectAnchor
+                        | PendingShortcut::ObjectEdit
+                )
             )
             && digit == LAYERS_DIGIT
             && self.multi_layer_mode()
@@ -524,7 +536,12 @@ impl ToolbarState {
         if !self.export_open
             && !matches!(
                 self.shortcut_prefix,
-                Some(PendingShortcut::Category(_) | PendingShortcut::Option { .. })
+                Some(
+                    PendingShortcut::Category(_)
+                        | PendingShortcut::Option { .. }
+                        | PendingShortcut::ObjectAnchor
+                        | PendingShortcut::ObjectEdit
+                )
             )
             && digit == COLORS_DIGIT
             && self.multi_color_mode()
@@ -540,6 +557,8 @@ impl ToolbarState {
                     self.select_export_mode_digit(digit);
                 } else if digit == 1 {
                     self.shortcut_prefix = Some(PendingShortcut::Mode);
+                } else if self.main_mode == MainMode::Objects {
+                    self.handle_object_digit(digit);
                 } else if self.main_mode == MainMode::Utilities
                     && let Some(option) = digit
                         .checked_sub(2)
@@ -644,6 +663,8 @@ impl ToolbarState {
                     .filter(|group| *group < 2)
                     .map(PendingShortcut::ColorGroup);
             }
+            Some(PendingShortcut::ObjectAnchor) => self.handle_object_anchor_digit(digit),
+            Some(PendingShortcut::ObjectEdit) => self.handle_object_edit_digit(digit),
             Some(PendingShortcut::ColorGroup(group)) => {
                 if let Some(index) = digit.checked_sub(1).filter(|index| *index < 8) {
                     self.select_color(ColorId((group * 8 + index) as u8));
@@ -851,6 +872,8 @@ impl ToolbarState {
             4 + usize::from(self.document_history_enabled) * 2
         } else if self.main_mode == MainMode::Utilities {
             1
+        } else if self.main_mode == MainMode::Objects {
+            objects::OBJECT_MENU_ROWS
         } else {
             menu_layout::hierarchical_menu_row_count(self, box_width)
         }
@@ -894,6 +917,8 @@ impl ToolbarState {
                     self.export_menu_spans(row)
                 } else if self.main_mode == MainMode::Utilities {
                     self.utilities_menu_spans(row)
+                } else if self.main_mode == MainMode::Objects {
+                    self.objects_menu_spans(row)
                 } else {
                     self.menu_spans(row, box_width)
                 }
@@ -1329,6 +1354,7 @@ impl ToolbarState {
                     MainMode::Stamp => STAMP_OPTIONS.get(submenu),
                     MainMode::Shapes => SHAPE_OPTIONS.get(submenu),
                     MainMode::Utilities => UTILITY_OPTIONS.get(submenu),
+                    MainMode::Objects => None,
                 }
                 .map(|options| options.len());
                 if option_count.is_none_or(|count| option >= count) {
@@ -1342,6 +1368,7 @@ impl ToolbarState {
                     }
                     MainMode::Shapes => self.shape_selected.get_mut(submenu),
                     MainMode::Utilities => (submenu == 0).then_some(&mut self.utility_selected),
+                    MainMode::Objects => None,
                 };
                 let Some(selected) = selected else {
                     return false;
@@ -1419,6 +1446,11 @@ impl ToolbarState {
                 self.pending_document_target = Some(DocumentTarget::Scratchpad);
                 true
             }
+            ToolbarAction::Object(command) => {
+                self.close_export_menu();
+                self.pending_object_command = Some(command);
+                true
+            }
         }
     }
 
@@ -1457,7 +1489,7 @@ impl ToolbarState {
                 exclusive_submenu: None,
                 page_lengths: &[],
             }),
-            MainMode::Utilities => None,
+            MainMode::Utilities | MainMode::Objects => None,
         }
     }
 }
@@ -2090,8 +2122,8 @@ mod tests {
         press(&mut toolbar, "3");
         assert_eq!(toolbar.main_mode(), MainMode::Shapes);
 
-        assert_eq!(row(&toolbar, 0), "Mode: 1     2    3     4");
-        assert_eq!(row(&toolbar, 1), "   1. Stamp Line Shape Utils");
+        assert_eq!(row(&toolbar, 0), "Mode: 1     2    3     4     5");
+        assert_eq!(row(&toolbar, 1), "   1. Stamp Line Shape Utils Objects");
         assert!(row(&toolbar, 2).is_empty());
         assert_eq!(
             toolbar
@@ -3318,6 +3350,8 @@ mod tests {
                     submenu: 0,
                     option: 2,
                 },
+                // Objects has commands, not durable tool choices.
+                MainMode::Objects => continue,
             };
             assert!(toolbar.apply_action(action));
             let durable = toolbar.durable_selections();

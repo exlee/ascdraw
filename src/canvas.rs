@@ -710,6 +710,10 @@ impl LayerStack {
         Ok(())
     }
 
+    pub(crate) fn layer_mut(&mut self, index: usize) -> &mut LayerMap {
+        &mut self.layers[index]
+    }
+
     pub(crate) fn active_layer_mut(&mut self) -> &mut LayerMap {
         &mut self.layers[self.active]
     }

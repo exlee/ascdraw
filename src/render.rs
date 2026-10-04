@@ -38,6 +38,7 @@ mod jump;
 #[cfg(target_os = "macos")]
 mod metal;
 mod minimap;
+mod objects;
 mod raster_cache;
 mod window_surface;
 pub use export_png::{CanvasImage, render_canvas_image, render_canvas_layers_image};
@@ -337,6 +338,7 @@ fn render_canvas(
         false,
     );
     canvas.translate((viewport.x as f32, viewport.y as f32));
+    objects::render_object_overlay(canvas, state, metrics, layout.grid_top);
     render_canvas_selection(canvas, state, metrics, layout.grid_top);
     jump::render_jump_overlay(canvas, state, metrics, layout.grid_top);
     if grid_cursor_is_visible(state) {
@@ -1419,7 +1421,11 @@ fn grid_cursor_is_visible(state: &Editor) -> bool {
 fn is_drawing_mode(mode: CursorMode) -> bool {
     matches!(
         mode,
-        CursorMode::MoveDraw | CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities
+        CursorMode::MoveDraw
+            | CursorMode::Stamp
+            | CursorMode::Shapes
+            | CursorMode::Utilities
+            | CursorMode::Objects
     )
 }
 
@@ -1640,7 +1646,7 @@ fn cursor_shape_for_mode(config: &CursorShapeConfig, mode: CursorMode) -> Cursor
         CursorMode::MoveDraw => config.move_draw.unwrap_or(CursorShape::Block),
         CursorMode::Insert => config.insert.unwrap_or(CursorShape::Block),
         CursorMode::Replace => config.replace.unwrap_or(CursorShape::Block),
-        CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities => {
+        CursorMode::Stamp | CursorMode::Shapes | CursorMode::Utilities | CursorMode::Objects => {
             config.move_draw.unwrap_or(CursorShape::Block)
         }
         CursorMode::Text | CursorMode::Navigation => config.insert.unwrap_or(CursorShape::Block),

@@ -6,6 +6,7 @@ impl Editor {
             cursor_pos: self.grid.cursor_pos,
             selection: self.selection,
             active_stroke: self.active_stroke.clone(),
+            objects: self.objects.clone(),
         }
     }
 
@@ -25,6 +26,8 @@ impl Editor {
         self.grid.cursor_pos = state.cursor_pos;
         self.selection = state.selection;
         self.active_stroke = state.active_stroke;
+        self.objects = state.objects;
+        self.object_writes.clear();
         self.line_preview = None;
         self.shape_preview = None;
         self.move_lift = None;
@@ -108,6 +111,11 @@ impl Editor {
             toolbar_document_changed: false,
             toolbar_viewport_stable: false,
             transient_tip: None,
+            objects: crate::objects::ObjectStore::default(),
+            object_writes: std::collections::BTreeSet::new(),
+            object_clipboard: None,
+            stretch_latch: None,
+            alt_gesture: None,
         }
     }
 

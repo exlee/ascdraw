@@ -116,11 +116,13 @@ pub struct EditorWindow {
     pub ordered_modifiers: OrderedModifierTracker,
     pub mouse_position: Option<(f64, f64)>,
     pub mouse_cell: Option<(i64, i64)>,
+    pointer_icon: winit::window::CursorIcon,
     pub mouse_toolbar_position: Option<(usize, usize, usize)>,
     mouse_toolbar_hotspot: Option<usize>,
     mouse_drag: Option<MouseDrag>,
     pan_drag: Option<PanDrag>,
     last_line_click: Option<(Instant, Coord)>,
+    last_object_click: Option<(Instant, crate::objects::InstanceId)>,
     scroll_pan: ScrollPan,
     wheel_zoom_remainder: f64,
     #[cfg(debug_assertions)]
@@ -301,6 +303,7 @@ enum MouseDragOverride {
     Control,
     Line,
     Space,
+    ObjectHandle(crate::objects::InstanceId, crate::editor::HandleSide),
 }
 
 /// Right-button grab pan. `anchor` is the last pointer position the viewport was
@@ -463,8 +466,50 @@ impl EditorWindow {
         self.window.id()
     }
 
+    /// Shows a resize pointer over a copy edge in Objects mode, and while
+    /// dragging one.
+    pub fn refresh_pointer_icon(&mut self) {
+        let dragged = match self
+            .mouse_drag
+            .as_ref()
+            .and_then(|drag| drag.input_override)
+        {
+            Some(MouseDragOverride::ObjectHandle(_, side)) => Some(side),
+            _ => None,
+        };
+        let side = dragged.or_else(|| {
+            let (line, column) = self.mouse_cell?;
+            let coord = self.state.resolve_pointer_coord(line, column);
+            self.state.object_handle_at(coord).map(|(_, side)| side)
+        });
+        let icon = match side.map(|side| (side.moves_left(), side.moves_top())) {
+            Some((Some(_), None)) => winit::window::CursorIcon::EwResize,
+            Some((None, Some(_))) => winit::window::CursorIcon::NsResize,
+            Some((Some(left), Some(top))) if left == top => winit::window::CursorIcon::NwseResize,
+            Some((Some(_), Some(_))) => winit::window::CursorIcon::NeswResize,
+            _ => winit::window::CursorIcon::Default,
+        };
+        if self.pointer_icon != icon {
+            self.pointer_icon = icon;
+            self.window.set_cursor(icon);
+        }
+    }
+
     pub fn begin_mouse_drag(&mut self, pointer: (i64, i64)) {
         self.state.cancel_jump();
+        self.state.end_alt_gesture();
+        if self.modifiers == ModifiersState::CONTROL {
+            let target = self.state.resolve_pointer_coord(pointer.0, pointer.1);
+            let checkpoint = self.begin_state_change();
+            if self.state.dissolve_object_at(target) {
+                if self.finish_state_change(checkpoint, true) {
+                    self.mark_document_dirty();
+                }
+                self.request_redraw();
+                return;
+            }
+            self.discard_state_change(checkpoint);
+        }
         let input_override = if self.modifiers == ModifiersState::empty() {
             match (self.state.toolbar.main_mode(), self.state.cursor_mode) {
                 (crate::toolbar::MainMode::Line, crate::app::CursorMode::MoveDraw) => {
@@ -479,12 +524,40 @@ impl EditorWindow {
         } else {
             None
         };
-        let mut checkpoint = self.begin_state_change();
         let target = self.state.resolve_pointer_coord(pointer.0, pointer.1);
+        let now = Instant::now();
+        let clicked = self
+            .state
+            .object_at(target)
+            .filter(|_| self.modifiers == ModifiersState::empty());
+        let previous = self.last_object_click.take();
+        if let Some(id) = clicked
+            && previous.is_some_and(|(at, last)| {
+                last == id && now.saturating_duration_since(at) <= DOUBLE_CLICK_INTERVAL
+            })
+        {
+            let checkpoint = self.begin_state_change();
+            let opened = self.state.open_local_edit_at(target);
+            if self.finish_state_change(checkpoint, opened) {
+                self.mark_document_dirty();
+            }
+            self.request_redraw();
+            return;
+        }
+        self.last_object_click = clicked.map(|id| (now, id));
+        let input_override = self
+            .state
+            .object_handle_at(target)
+            .filter(|_| self.modifiers == ModifiersState::empty())
+            .map(|(id, side)| MouseDragOverride::ObjectHandle(id, side))
+            .or(input_override);
+        let mut checkpoint = self.begin_state_change();
         let mut line_preview_was_active = false;
         let mut confirmed_move = false;
         let extending_selection = self.modifiers.shift_key();
-        if input_override == Some(MouseDragOverride::Line) {
+        if matches!(input_override, Some(MouseDragOverride::ObjectHandle(..))) {
+            // Grabbing a handle leaves the cursor where it is.
+        } else if input_override == Some(MouseDragOverride::Line) {
             let moves_cursor =
                 !self.state.has_line_preview() && self.state.grid.cursor_pos != target;
             let origin = if moves_cursor {
@@ -521,6 +594,7 @@ impl EditorWindow {
                 self.request_redraw();
             }
         }
+        self.state.sync_objects();
         self.pause_state_change(&mut checkpoint);
         self.mouse_drag = Some(MouseDrag {
             checkpoint,
@@ -565,9 +639,19 @@ impl EditorWindow {
             }
             drag.active = true;
         }
+        if let Some(MouseDragOverride::ObjectHandle(id, side)) = drag.input_override {
+            drag.document_changed |= self.state.drag_object_handle(id, side, target);
+            drag.last_pointer = target;
+            self.state.sync_objects();
+            self.pause_state_change(&mut drag.checkpoint);
+            self.mouse_drag = Some(drag);
+            self.request_redraw();
+            return;
+        }
         if drag.input_override == Some(MouseDragOverride::Line) {
             continue_line_mouse_state(&mut self.state, target);
             drag.last_pointer = target;
+            self.state.sync_objects();
             self.pause_state_change(&mut drag.checkpoint);
             self.mouse_drag = Some(drag);
             self.request_redraw();
@@ -576,7 +660,9 @@ impl EditorWindow {
         let (modifiers, space_held) = match drag.input_override {
             Some(MouseDragOverride::Control) => (ModifiersState::CONTROL, false),
             Some(MouseDragOverride::Space) => (ModifiersState::empty(), true),
-            Some(MouseDragOverride::Line) => unreachable!("line drags return above"),
+            Some(MouseDragOverride::Line | MouseDragOverride::ObjectHandle(..)) => {
+                unreachable!("line and handle drags return above")
+            }
             None => (self.modifiers, false),
         };
         while drag.last_pointer.column != target.column {
@@ -619,6 +705,9 @@ impl EditorWindow {
                 _ => unreachable!(),
             };
         }
+        // Each drag step folds its edits into objects before the capture
+        // pauses, so no part of a stroke escapes the object rules.
+        self.state.sync_objects();
         self.pause_state_change(&mut drag.checkpoint);
         self.mouse_drag = Some(drag);
         self.request_redraw();
@@ -894,6 +983,8 @@ impl EditorWindow {
     }
 
     pub fn render(&mut self, config: &AppConfig) -> Result<FrameTiming> {
+        self.state.sync_object_menu();
+        self.refresh_pointer_icon();
         let toolbar_hotspot_hovered = self.toolbar_hotspot_hovered();
         self.surface.render(
             &self.window,
@@ -1071,6 +1162,8 @@ impl EditorWindow {
         group: Option<HistoryGroup>,
         viewport_policy: StateChangeViewportPolicy,
     ) -> bool {
+        self.state.sync_objects();
+        self.state.sync_object_menu();
         self.state
             .commit_canvas_mutations()
             .expect("editor cells remain valid at history boundaries");
@@ -1472,6 +1565,7 @@ impl EditorWindow {
             Some(FileKind::Png) => unreachable!("PNG cannot be a document session"),
             None => document::contents(
                 self.state.canvas(),
+                self.state.objects(),
                 &self.state.toolbar.durable_selections(),
                 position,
                 cell_size,
@@ -1528,6 +1622,7 @@ impl EditorWindow {
         }
         self.state.commit_canvas_mutations()?;
         let native_canvas = self.state.canvas().clone();
+        let native_objects = self.state.objects().clone();
         let position = self.canvas_position();
         self.document_dirty |= position != self.saved_canvas_position;
         let path = self
@@ -1561,6 +1656,7 @@ impl EditorWindow {
                 None => document::save(
                     path,
                     &native_canvas,
+                    &native_objects,
                     &self.state.toolbar.durable_selections(),
                     position,
                     cell_size,
@@ -1612,6 +1708,7 @@ impl EditorWindow {
                 state.restore_menu_selections(&selections);
             }
             state.restore_canvas(document.canvas);
+            state.restore_objects(document.objects);
             if let Some(position) = document.position {
                 state.restore_canvas_position(position.cursor);
                 self.renderer.restore_zoom(position.zoom);
@@ -1963,6 +2060,7 @@ pub fn create_editor_window(
                     state.restore_menu_selections(&menu_selections);
                 }
                 state.restore_canvas(document.canvas);
+                state.restore_objects(document.objects);
                 if let Some(position) = document.position {
                     state.restore_canvas_position(position.cursor);
                     renderer.restore_zoom(position.zoom);
@@ -1990,11 +2088,13 @@ pub fn create_editor_window(
         ordered_modifiers: OrderedModifierTracker::default(),
         mouse_position: None,
         mouse_cell: Some((0, 0)),
+        pointer_icon: winit::window::CursorIcon::Default,
         mouse_toolbar_position: None,
         mouse_toolbar_hotspot: None,
         mouse_drag: None,
         pan_drag: None,
         last_line_click: None,
+        last_object_click: None,
         scroll_pan: ScrollPan::default(),
         wheel_zoom_remainder: 0.0,
         #[cfg(debug_assertions)]

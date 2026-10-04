@@ -314,6 +314,7 @@ fn main_mode_name(mode: MainMode) -> &'static str {
         MainMode::Stamp => "stamp",
         MainMode::Shapes => "shapes",
         MainMode::Utilities => "utilities",
+        MainMode::Objects => "objects",
     }
 }
 
@@ -323,6 +324,7 @@ fn parse_main_mode(value: &str) -> Option<MainMode> {
         "stamp" => Some(MainMode::Stamp),
         "shapes" => Some(MainMode::Shapes),
         "utilities" => Some(MainMode::Utilities),
+        "objects" => Some(MainMode::Objects),
         // Legacy auxiliary surfaces are normalized to the default drawing mode.
         "layers" | "colors" => Some(MainMode::Stamp),
         _ => None,

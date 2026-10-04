@@ -143,6 +143,30 @@ pub fn is_line_glyph(glyph: &str) -> bool {
     connections_for_glyph(glyph).is_some_and(|connections| connections != 0)
 }
 
+pub fn glyph_connects(glyph: &str, direction: Direction) -> bool {
+    connections_for_glyph(glyph).is_some_and(|connections| connections & connection(direction) != 0)
+}
+
+/// A line glyph in the style of `like` connecting exactly `directions`.
+pub fn glyph_with_directions(like: &str, directions: &[Direction]) -> Option<char> {
+    let connections = directions.iter().fold(0, |connections, direction| {
+        connections | connection(*direction)
+    });
+    (connections != 0).then(|| {
+        glyph_for_connections(
+            connections,
+            style_for_glyph(like),
+            corner_style_for_glyph(like),
+        )
+    })
+}
+
+/// The straight segment that lengthens `glyph` in its own line style.
+pub fn straight_glyph_like(glyph: &str, horizontal: bool) -> char {
+    let connections = if horizontal { RIGHT_LEFT } else { UP_DOWN };
+    glyph_for_connections(connections, style_for_glyph(glyph), CornerStyle::Smooth)
+}
+
 pub fn line_ending_glyph(
     ending: LineEnding,
     connected_direction: Direction,

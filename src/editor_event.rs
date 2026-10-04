@@ -22,6 +22,7 @@ pub enum EditorState {
     StampMode,
     ShapeMode,
     UtilityMode,
+    ObjectMode,
     NavigationMode,
 }
 

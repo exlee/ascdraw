@@ -22,3 +22,9 @@ attributes = ["reverse"]
 
 [tooltip]
 fg = "#808080"
+
+[object-outline]
+fg = "#c0c0c0"
+
+[object-anchor]
+fg = "#00b7c7"

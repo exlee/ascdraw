@@ -66,7 +66,8 @@ impl Editor {
         let face = self.write_face();
         let style = self.toolbar.shape_line_style();
         let corner_style = shape_corner_style(self.toolbar.shape_kind());
-        for (coord, contents) in self.shape_cells(preview) {
+        let cells = self.shape_cells(preview);
+        for (coord, contents) in cells.clone() {
             let contents = merged_shape_contents(
                 self.canvas
                     .active_cell(coord)
@@ -81,6 +82,7 @@ impl Editor {
                 .set_at(coord, atom, &face)
                 .expect("shape glyphs occupy one sparse cell");
         }
+        self.define_shape_object(&cells, &face);
     }
 
     pub(crate) fn shape_preview_canvas(&self) -> Option<LayerStack> {

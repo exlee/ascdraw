@@ -55,7 +55,7 @@ impl EditHistory {
         canvas: HistoryCanvasDelta,
     ) -> bool {
         self.finish_transaction();
-        if canvas.is_empty() {
+        if canvas.is_empty() && !previous.edit.objects_differ(&current.edit) {
             return false;
         }
         push_bounded(
@@ -84,7 +84,7 @@ impl EditHistory {
         {
             self.finish_transaction();
         }
-        if canvas.is_empty() {
+        if canvas.is_empty() && !previous.edit.objects_differ(&current.edit) {
             return false;
         }
         if let Some(pending) = self.pending.as_mut() {
@@ -107,7 +107,13 @@ impl EditHistory {
         let Some(pending) = self.pending.take() else {
             return false;
         };
-        if pending.change.canvas.is_empty() {
+        if pending.change.canvas.is_empty()
+            && !pending
+                .change
+                .before
+                .edit
+                .objects_differ(&pending.change.after.edit)
+        {
             return false;
         }
         push_bounded(&mut self.undo, pending.change);

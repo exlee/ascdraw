@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(toolbar.available_modes(), MainMode::ALL);
         assert!(text(toolbar.toolbar_spans(MAIN_LABEL_ROW)).contains('9'));
         press(&mut toolbar, "1");
-        press(&mut toolbar, "5");
+        press(&mut toolbar, "6");
         assert_eq!(toolbar.main_mode(), MainMode::Stamp);
 
         press(&mut toolbar, "9");

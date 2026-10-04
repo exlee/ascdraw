@@ -30,6 +30,7 @@ mod legacy_loader;
 #[cfg(target_os = "macos")]
 mod macos;
 mod model;
+mod objects;
 mod perf;
 mod render;
 mod runtime;
@@ -918,6 +919,7 @@ fn refresh_mouse_cell(editor: &mut EditorWindow, config: &app::AppConfig) {
             layout::content_top_padding(scale_factor, config.transparent_menubar),
         );
         editor.set_mouse_toolbar_hotspot(hotspot);
+        editor.refresh_pointer_icon();
     }
 }
 
@@ -1094,7 +1096,20 @@ fn dispatch_editor_event(
 ) -> Option<bool> {
     let current_state = state.state();
     if matches!(key_type, KeyType::CancelKey(_)) {
-        return state.cancel_current_state().then_some(false);
+        // Leaving a DfnEdt session rewrites the copy it showed.
+        let leaves_object_session = state.object_session().is_some()
+            && matches!(
+                current_state,
+                EditorState::LineMode
+                    | EditorState::StampMode
+                    | EditorState::ShapeMode
+                    | EditorState::UtilityMode
+                    | EditorState::NavigationMode
+                    | EditorState::ObjectMode
+            );
+        return state
+            .cancel_current_state()
+            .then_some(leaves_object_session);
     }
     let input = key_type.input();
     if current_state == EditorState::JumpMode {
@@ -1268,6 +1283,9 @@ pub(crate) fn handle_cursor_direction(
 }
 
 pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bool {
+    if !matches!(command, EditCommand::Erase(_)) {
+        state.end_alt_gesture();
+    }
     match command {
         EditCommand::Move(direction) => state.move_cursor(direction),
         EditCommand::Draw(direction) => {
@@ -1280,14 +1298,22 @@ pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bo
         }
         EditCommand::ApplyUtility(direction) => state.apply_utility(direction),
         EditCommand::ExtendSelection(direction) => state.extend_selection(direction),
-        EditCommand::Erase(direction) => state.erase(direction),
+        EditCommand::Erase(direction) => state.alt_step(direction),
         EditCommand::Clear => {
-            state.clear_selection();
+            // An anchor goes first; the next Backspace clears the cell.
+            if !state.remove_object()
+                && !state.revert_local_copy()
+                && !state.remove_anchor_at_cursor()
+            {
+                state.clear_selection();
+            }
             true
         }
         EditCommand::ClearAndBack => {
             state.move_cursor(model::Direction::Left);
-            state.clear_selection();
+            if !state.revert_local_copy() {
+                state.clear_selection();
+            }
             true
         }
         EditCommand::ToggleTextEntry => {
@@ -1350,6 +1376,14 @@ pub(crate) fn apply_edit_command(state: &mut Editor, command: EditCommand) -> bo
         EditCommand::InsertTab => {
             state.insert("    ");
             true
+        }
+        EditCommand::PlaceObject => state.place_object(),
+        EditCommand::StretchObject(direction) => {
+            if state.cursor_on_object() {
+                state.stretch_object(direction)
+            } else {
+                state.move_cursor(direction)
+            }
         }
     }
 }
