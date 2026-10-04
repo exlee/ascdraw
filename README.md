@@ -15,6 +15,13 @@ rectangular editing, layers, and TXT/JSON/PNG export. It is usable today, but it
 document format are still evolving. The canvas renders at 120+ FPS, which matters more than you
 might think in a keyboard-first editor.
 
+## Changelog
+
+- **2026-10-04** — Added morphable Objects: reusable rectangles that stretch, anchor, and keep
+  local edits per copy.
+
+[![Morphable Objects demo](https://img.youtube.com/vi/N6sbp77WV3w/hqdefault.jpg)](https://youtu.be/N6sbp77WV3w)
+
 ![Stamp inventory and large outlined text](assets/screen-1.png)
 
 ![Connected-line planning diagram](assets/screen-2.png)
