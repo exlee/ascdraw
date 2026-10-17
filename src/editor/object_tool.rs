@@ -638,13 +638,10 @@ impl Editor {
         true
     }
 
-    /// Backspace in Objects outside DfnEdt and Edt: removes the copy under the
+    /// Backspace outside DfnEdt, Edt and text entry: removes the copy under the
     /// cursor and keeps its definition. Returns whether a copy was removed.
     pub fn remove_object(&mut self) -> bool {
-        if self.cursor_mode != CursorMode::Objects
-            || self.objects.session.is_some()
-            || !self.selection.is_collapsed()
-        {
+        if self.objects.session.is_some() || !self.selection.is_collapsed() {
             return false;
         }
         let Some(id) = self.cursor_instance() else {

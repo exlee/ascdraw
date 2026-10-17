@@ -1006,3 +1006,29 @@ fn an_alt_gesture_started_on_a_copy_only_moves_it() {
     assert_eq!(state.objects().instances[0].origin, at(0, 3));
     assert_eq!(sparse_row_contents(&state, 0), "   aZc");
 }
+
+#[test]
+fn backspace_removes_a_lone_copy_in_every_drawing_mode() {
+    for mode in [
+        CursorMode::MoveDraw,
+        CursorMode::Stamp,
+        CursorMode::Shapes,
+        CursorMode::Utilities,
+        CursorMode::Objects,
+    ] {
+        let mut state = defined(&["ab"]);
+        command(&mut state, ObjectCommand::DefineEdit);
+        place_copy(&mut state, at(2, 0));
+        state.cursor_mode = mode;
+        put_cursor(&mut state, at(2, 1));
+        edit(&mut state, |state| {
+            assert!(crate::apply_edit_command(
+                state,
+                crate::input::EditCommand::Clear
+            ));
+        });
+        assert_eq!(state.objects().instances.len(), 1, "{mode:?}");
+        assert_eq!(sparse_row_contents(&state, 2), "", "{mode:?}");
+        assert_eq!(sparse_row_contents(&state, 0), "ab", "{mode:?}");
+    }
+}
