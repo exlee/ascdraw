@@ -29,16 +29,20 @@ module WorkspaceFixture
   end
 end
 
+desc "Remove the installed Ascdraw.app from /Applications"
 task :clean_app do
   sh "rm -fr /Applications/Ascdraw.app 2>/dev/null || true"
 end
 
+desc "Copy the bundled Ascdraw.app into /Applications"
 task :install_copy => [:clean_app] do
   sh "cp -pr ./target/release/bundle/osx/Ascdraw.app /Applications"
 end
 
+desc "Build, bundle, install, and register Ascdraw.app"
 task :install => [:clean_app, :bundle, :install_copy, :register]
 
+desc "Build the macOS app bundle"
 task :bundle => [ICON_OUTPUT, :build_release] do
   sh "cargo bundle --release --format osx"
 end
@@ -48,14 +52,17 @@ task :build_release do
   sh "cargo build --release --bins --locked"
 end
 
+desc "Register /Applications/Ascdraw.app with LaunchServices"
 task :register => [:unregister_target] do
   sh "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Ascdraw.app"
 end
 
+desc "Unregister the target/ app bundle from LaunchServices"
 task :unregister_target do
   sh "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u target/release/bundle/osx/Ascdraw.app 2>/dev/null || true"
 end
 
+desc "Generate the macOS .icns icon from assets/ascdraw.png"
 task :icon => [ICON_OUTPUT]
 
 desc "Run the tests for the helper scripts"
