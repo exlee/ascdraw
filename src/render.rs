@@ -744,6 +744,14 @@ fn queue_atlas_raster(
     grid_top: f32,
     metrics: &CellMetrics,
 ) {
+    // Rasters hold pixels, so they land on whole device pixels at 1:1. A
+    // fractional origin or texture edge resamples glyphs and drops the partial
+    // last row or column (descenders) depending on the cell's position.
+    let cell = snapped_cell_rect(column, row, grid_top, metrics);
+    let texture = Rect::from_wh(
+        raster.cell_width.ceil().min(raster.image.width() as f32),
+        raster.cell_height.ceil().min(raster.image.height() as f32),
+    );
     let batch = batches
         .entry(raster.image.unique_id())
         .or_insert_with(|| AtlasBatch {
@@ -751,17 +759,10 @@ fn queue_atlas_raster(
             transforms: Vec::new(),
             textures: Vec::new(),
         });
-    batch.transforms.push(RSXform::new(
-        1.0,
-        0.0,
-        (
-            PADDING as f32 + f32::from(column) * metrics.cell_width,
-            grid_top + f32::from(row) * metrics.cell_height,
-        ),
-    ));
     batch
-        .textures
-        .push(Rect::from_wh(raster.cell_width, raster.cell_height));
+        .transforms
+        .push(RSXform::new(1.0, 0.0, (cell.left, cell.top)));
+    batch.textures.push(texture);
 }
 
 fn draw_atlas_batches(canvas: &Canvas, batches: HashMap<u32, AtlasBatch>) {
@@ -787,13 +788,36 @@ fn draw_cell_raster(
     grid_top: f32,
     metrics: &CellMetrics,
 ) {
+    let cell = snapped_cell_rect(column, row, grid_top, metrics);
+    if raster.cell_width == metrics.cell_width && raster.cell_height == metrics.cell_height {
+        // Current-metrics rasters are copied 1:1 onto whole pixels. Scaling the
+        // fractional cell size onto the snapped cell resampled every glyph by a
+        // per-cell factor and dropped or doubled pixel rows.
+        let overflow = raster.overflow.round();
+        let source = Rect::from_wh(
+            (cell.width() + overflow * 2.0).min(raster.image.width() as f32),
+            (cell.height() + overflow * 2.0).min(raster.image.height() as f32),
+        );
+        let destination = Rect::from_xywh(
+            cell.left - overflow,
+            cell.top - overflow,
+            source.width(),
+            source.height(),
+        );
+        canvas.draw_image_rect(
+            &raster.image,
+            Some((&source, skia_safe::canvas::SrcRectConstraint::Strict)),
+            destination,
+            &Paint::default(),
+        );
+        return;
+    }
     let source = Rect::from_xywh(
         0.0,
         0.0,
         raster.cell_width + raster.overflow * 2.0,
         raster.cell_height + raster.overflow * 2.0,
     );
-    let cell = snapped_cell_rect(column, row, grid_top, metrics);
     let overflow_x = raster.overflow * cell.width() / raster.cell_width;
     let overflow_y = raster.overflow * cell.height() / raster.cell_height;
     let destination = Rect::new(
@@ -887,6 +911,27 @@ fn cached_atom_image_for_key(
     let mut surface = surfaces::raster_n32_premul((image_width, image_height))?;
     let image_canvas = surface.canvas();
     image_canvas.clear(skia_safe::Color::TRANSPARENT);
+    let plain_blank = contents.bytes().all(|byte| byte == b' ')
+        && key.resolved_face.bg == key.root_face.bg
+        && key.resolved_face.underline_style.is_none()
+        && !key.resolved_face.strikethrough;
+    if key.paints_background && !plain_blank {
+        // The snapped cell can be one pixel larger than the fractional cell;
+        // fill to whole pixels so a 1:1 copy has no transparent seam.
+        let mut background = Paint::default();
+        background
+            .set_anti_alias(false)
+            .set_color(key.resolved_face.bg.to_color());
+        image_canvas.draw_rect(
+            Rect::from_xywh(
+                overflow,
+                overflow,
+                (metrics.cell_width * width as f32).ceil(),
+                metrics.cell_height.ceil(),
+            ),
+            &background,
+        );
+    }
     image_canvas.save();
     image_canvas.translate((overflow - PADDING as f32, 0.0));
     render_line_at(
@@ -2250,6 +2295,10 @@ pub fn resize_surface(
 #[cfg(test)]
 #[path = "inline_tests/render_raster_prefill_tests.rs"]
 mod raster_prefill_tests;
+
+#[cfg(test)]
+#[path = "inline_tests/render_raster_placement_tests.rs"]
+mod raster_placement_tests;
 
 #[cfg(test)]
 mod tests {
