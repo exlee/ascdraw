@@ -178,13 +178,33 @@ fn inner_screen_offsets(viewport_cells: usize) -> (i64, i64) {
     (outer_margin.saturating_add(1).min(end), end)
 }
 
+fn full_screen_offsets(viewport_cells: usize) -> (i64, i64) {
+    (
+        0,
+        i64::try_from(viewport_cells.max(1) - 1).unwrap_or(i64::MAX),
+    )
+}
+
 pub fn content_intersects_inner_screen(
     origin: (i64, i64),
     viewport: (usize, usize),
     content: &[Coord],
 ) -> bool {
-    let horizontal = inner_screen_offsets(viewport.0);
-    let vertical = inner_screen_offsets(viewport.1);
+    content_intersects_screen_region(
+        origin,
+        (
+            inner_screen_offsets(viewport.0),
+            inner_screen_offsets(viewport.1),
+        ),
+        content,
+    )
+}
+
+fn content_intersects_screen_region(
+    origin: (i64, i64),
+    (horizontal, vertical): ((i64, i64), (i64, i64)),
+    content: &[Coord],
+) -> bool {
     content.iter().any(|coord| {
         let x = i64::from(coord.column).saturating_sub(origin.0);
         let y = i64::from(coord.line).saturating_sub(origin.1);
@@ -212,6 +232,27 @@ pub fn constrained_origin(
     viewport: (usize, usize),
     content: &[Coord],
 ) -> Option<(i64, i64)> {
+    constrained_origin_within(
+        desired,
+        cursor,
+        viewport,
+        content,
+        (
+            inner_screen_offsets(viewport.0),
+            inner_screen_offsets(viewport.1),
+        ),
+    )
+}
+
+/// Same as `constrained_origin`, but the content cell must land inside the
+/// given per-axis screen region instead of the inner screen.
+fn constrained_origin_within(
+    desired: (i64, i64),
+    cursor: Coord,
+    viewport: (usize, usize),
+    content: &[Coord],
+    (horizontal, vertical): ((i64, i64), (i64, i64)),
+) -> Option<(i64, i64)> {
     let cursor_x = i64::from(cursor.column);
     let cursor_y = i64::from(cursor.line);
     let cursor_ranges = (
@@ -233,8 +274,6 @@ pub fn constrained_origin(
         ));
     }
 
-    let horizontal = inner_screen_offsets(viewport.0);
-    let vertical = inner_screen_offsets(viewport.1);
     content
         .iter()
         .filter_map(|coord| {
@@ -262,7 +301,7 @@ pub fn constrained_origin(
         .map(|(_, origin)| origin)
         .filter(|origin| {
             cursor_is_visible(*origin, cursor, viewport)
-                && content_intersects_inner_screen(*origin, viewport, content)
+                && content_intersects_screen_region(*origin, (horizontal, vertical), content)
         })
 }
 
@@ -288,6 +327,31 @@ pub fn navigation_origin(
         cursor_origin(current.0, cursor.column, viewport.0),
         cursor_origin(current.1, cursor.line, viewport.1),
     );
+    if !content.is_empty() && !content_intersects_inner_screen(current, viewport, content) {
+        // Content already sits outside the inner screen (for example after a
+        // free scroll pan). Only an axis the cursor scrolls enforces the inner
+        // screen, so the other axis keeps its position.
+        let region = |current: i64, desired: i64, cells: usize| {
+            if current == desired {
+                full_screen_offsets(cells)
+            } else {
+                inner_screen_offsets(cells)
+            }
+        };
+        let relaxed = constrained_origin_within(
+            desired,
+            cursor,
+            viewport,
+            content,
+            (
+                region(current.0, desired.0, viewport.0),
+                region(current.1, desired.1, viewport.1),
+            ),
+        );
+        if relaxed.is_some() {
+            return relaxed;
+        }
+    }
     constrained_origin(desired, cursor, viewport, content)
 }
 
@@ -792,6 +856,42 @@ mod tests {
         assert_eq!(origin, (-1, -1));
         assert!(cursor_is_visible(origin, cursor, (10, 10)));
         assert!(content_intersects_inner_screen(origin, (10, 10), &content));
+    }
+
+    #[test]
+    fn horizontal_navigation_keeps_vertical_origin_for_content_on_the_top_edge() {
+        let content: Vec<Coord> = (0..5).map(|column| Coord { line: 0, column }).collect();
+        let viewport = (10, 10);
+        let current = (0, 0);
+        assert!(!content_intersects_inner_screen(
+            current, viewport, &content
+        ));
+
+        let left = Coord {
+            line: 0,
+            column: -1,
+        };
+        assert_eq!(
+            navigation_origin(current, left, viewport, &content),
+            Some((-1, 0))
+        );
+
+        let inside = Coord { line: 0, column: 3 };
+        assert_eq!(
+            navigation_origin(current, inside, viewport, &content),
+            Some(current)
+        );
+    }
+
+    #[test]
+    fn edge_content_still_rejects_scrolling_away_from_it() {
+        let content = [Coord { line: 0, column: 0 }];
+        let viewport = (10, 10);
+        let cursor = Coord {
+            line: 0,
+            column: 10,
+        };
+        assert_eq!(navigation_origin((0, 0), cursor, viewport, &content), None);
     }
 
     #[test]
