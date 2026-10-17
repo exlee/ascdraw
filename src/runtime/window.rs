@@ -2118,6 +2118,9 @@ pub fn create_editor_window(
         export_success_deadline: None,
         autosave_in_flight: None,
     };
+    if document_session.is_stdin() {
+        editor.apply_view_command(ViewCommand::Center);
+    }
     editor.ensure_cursor_in_viewport();
     editor.saved_canvas_position = editor.canvas_position();
     editor.request_redraw();
@@ -2985,6 +2988,51 @@ mod tests {
         assert_eq!(content_state.grid.cursor_pos, cursor);
         assert_eq!(content_state.selection, selection);
         assert_eq!(content_state.lines_for_test(), lines);
+    }
+
+    #[test]
+    fn stdin_opening_centers_text_and_keeps_the_cursor_visible() {
+        let cell_size = (8.0, 12.0);
+        let mut state = Editor::new(&AppConfig::default().theme, "stdin".to_owned());
+        state.replace_canvas(canvas_from_text("abcd\nefgh\n").unwrap());
+        let content = state.content_cells();
+        let cursor = state.grid.cursor_pos;
+        let viewport_cells = (20, 10);
+        let mut viewport = ViewportOffset::default();
+
+        assert!(center_viewport(
+            &mut viewport,
+            cell_size,
+            viewport_cells,
+            &content
+        ));
+        let (opened_cursor, origin) = normalized_cursor_and_origin(
+            viewport.origin(cell_size),
+            cursor,
+            viewport_cells,
+            &content,
+        );
+        assert_eq!(opened_cursor, cursor);
+        let (min, max) = content_bounds(&content).unwrap();
+        let left = i64::from(min.column) - origin.0;
+        let right =
+            i64::try_from(viewport_cells.0).unwrap() - 1 - (i64::from(max.column) - origin.0);
+        let top = i64::from(min.line) - origin.1;
+        let bottom =
+            i64::try_from(viewport_cells.1).unwrap() - 1 - (i64::from(max.line) - origin.1);
+        assert!(left.abs_diff(right) <= 1);
+        assert!(top.abs_diff(bottom) <= 1);
+
+        let short_viewport = (20, 1);
+        let mut viewport = ViewportOffset::default();
+        center_viewport(&mut viewport, cell_size, short_viewport, &content);
+        let (opened_cursor, origin) = normalized_cursor_and_origin(
+            viewport.origin(cell_size),
+            cursor,
+            short_viewport,
+            &content,
+        );
+        assert!(cursor_is_visible(origin, opened_cursor, short_viewport));
     }
 
     fn assert_toolbar_transition_is_anchored(
