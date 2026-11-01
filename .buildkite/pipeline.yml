@@ -3,7 +3,7 @@
 # Pipeline settings in Buildkite:
 # - Pipeline schedule with cron "17 3 * * *" on the default branch.
 # - Buildkite secret GH_TOKEN: GitHub token with contents:write on the repository.
-# - Buildkite hosted agent queues: "linux-medium", "linux-2204" (Ubuntu 22.04, glibc 2.35), "macos-medium".
+# - Buildkite hosted agent queues: "linux-medium", "linux-2204", "macos-medium".
 #
 # A scheduled build runs only when the commit differs from the latest nightly
 # release. Any other build source (UI, API) always builds.
