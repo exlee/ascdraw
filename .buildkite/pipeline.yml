@@ -12,6 +12,4 @@ steps:
     key: check-changes
     agents:
       queue: linux-medium
-    command: |
-      export GH_TOKEN="$$(buildkite-agent secret get GH_TOKEN)"
-      ruby scripts/nightly_changes.rb "$$BUILDKITE_SOURCE" "$$BUILDKITE_COMMIT" .buildkite/nightly.yml
+    command: .buildkite/scripts/check_changes.sh

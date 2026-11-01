@@ -3,6 +3,8 @@
 # repository from the checkout's origin remote.
 set -euo pipefail
 
+.buildkite/scripts/setup_gh.sh
+
 GH_TOKEN="$(buildkite-agent secret get GH_TOKEN)"
 export GH_TOKEN
 
