@@ -22,8 +22,10 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   done
   if (( ${#missing[@]} > 0 )); then
     echo "--- :linux: Installing build dependencies: ${missing[*]}"
-    sudo apt-get update
-    sudo apt-get install -y "${missing[@]}"
+    sudo=()
+    (( EUID == 0 )) || sudo=(sudo)
+    "${sudo[@]}" apt-get update
+    "${sudo[@]}" apt-get install -y "${missing[@]}"
   fi
 fi
 
