@@ -1,0 +1,17 @@
+# Nightly pipeline.
+#
+# Pipeline settings in Buildkite:
+# - Pipeline schedule with cron "17 3 * * *" on the default branch.
+# - Buildkite secret GH_TOKEN: GitHub token with contents:write on the repository.
+# - Agent queues: "linux" (any Linux), "linux-ubuntu-22-04" (glibc 2.35), "macos".
+#
+# A scheduled build runs only when the commit differs from the latest nightly
+# release. Any other build source (UI, API) always builds.
+steps:
+  - label: ":mag: Check for changes since last nightly"
+    key: check-changes
+    agents:
+      queue: linux
+    command: |
+      export GH_TOKEN="$$(buildkite-agent secret get GH_TOKEN)"
+      ruby scripts/nightly_changes.rb "$$BUILDKITE_SOURCE" "$$BUILDKITE_COMMIT" .buildkite/nightly.yml

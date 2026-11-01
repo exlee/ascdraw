@@ -34,18 +34,22 @@ class NightlyChangesTest < Minitest::Test
   end
 
   def test_schedule_skips_unchanged_commit
-    refute NightlyChanges.should_build?(event: "schedule", head_sha: "abc", last_sha: "abc")
+    refute NightlyChanges.should_build?(source: "schedule", head_sha: "abc", last_sha: "abc")
   end
 
   def test_schedule_builds_changed_commit
-    assert NightlyChanges.should_build?(event: "schedule", head_sha: "def", last_sha: "abc")
+    assert NightlyChanges.should_build?(source: "schedule", head_sha: "def", last_sha: "abc")
   end
 
   def test_schedule_builds_without_previous_nightly
-    assert NightlyChanges.should_build?(event: "schedule", head_sha: "abc", last_sha: nil)
+    assert NightlyChanges.should_build?(source: "schedule", head_sha: "abc", last_sha: nil)
   end
 
   def test_manual_run_always_builds
-    assert NightlyChanges.should_build?(event: "workflow_dispatch", head_sha: "abc", last_sha: "abc")
+    assert NightlyChanges.should_build?(source: "ui", head_sha: "abc", last_sha: "abc")
+  end
+
+  def test_api_run_always_builds
+    assert NightlyChanges.should_build?(source: "api", head_sha: "abc", last_sha: "abc")
   end
 end
